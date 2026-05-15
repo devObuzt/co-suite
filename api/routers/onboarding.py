@@ -9,6 +9,7 @@ from ..core.security import get_current_user
 from ..models.user import User
 from ..models.suite import Suite, SuiteStatus
 from ..services.brand_ai import extract_brand_from_sources, suggest_brand_identity
+from ..services.strategy_generator import generate_strategy as _generate_strategy
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +27,10 @@ class ExtractBrandRequest(BaseModel):
 class SaveBrandRequest(BaseModel):
     suite_id: str
     brand: dict
+
+
+class GenerateStrategyRequest(BaseModel):
+    suite_id: str
 
 
 @router.post("/extract-brand")
@@ -83,3 +88,39 @@ async def save_brand(
     suite.status = SuiteStatus.active
     await db.commit()
     return {"ok": True, "suite_id": suite.id}
+
+
+@router.post("/generate-strategy")
+async def generate_strategy_endpoint(
+    data: GenerateStrategyRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == data.suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+
+    brand = suite.brand or {}
+    required = ["services", "target_audience", "how_they_help", "unique_value", "esp"]
+    missing = [f for f in required if not brand.get(f)]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required brand fields: {', '.join(missing)}"
+        )
+
+    try:
+        strategy = await _generate_strategy(brand)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Strategy generation failed for suite %s", data.suite_id)
+        err_str = str(e).lower()
+        if "529" in str(e) or "overloaded" in err_str:
+            raise HTTPException(status_code=503, detail="The AI service is temporarily busy. Please try again in a few seconds.")
+        raise HTTPException(status_code=500, detail="Strategy generation failed. Please try again.")
+
+    suite.strategy = strategy
+    await db.commit()
+    return {"strategy": strategy}
