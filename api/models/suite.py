@@ -32,6 +32,9 @@ class Suite(Base):
     brand: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     # e.g. {"logo_url": "...", "colors": {"primary": "#..."}, "description": "...", "services": [...], "tagline": "..."}
 
+    # Marketing strategy (JSON — populated after onboarding completes)
+    strategy: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
     # Settings
     ai_generation_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_publish_enabled: Mapped[bool] = mapped_column(Boolean, default=False)

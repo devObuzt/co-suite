@@ -2,6 +2,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from .core.config import settings
 from .core.database import engine, Base
 from .routers import auth, suites, onboarding
@@ -30,6 +31,10 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 async def startup():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add strategy column to existing suites tables (idempotent)
+        await conn.execute(text(
+            "ALTER TABLE suites ADD COLUMN IF NOT EXISTS strategy JSON"
+        ))
 
 
 app.include_router(auth.router, prefix="/api/v1")
