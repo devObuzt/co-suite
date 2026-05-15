@@ -12,6 +12,8 @@ from .multi_scraper import search_business
 
 log = logging.getLogger(__name__)
 
+_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -22,7 +24,9 @@ def _parse_json(raw: str) -> dict:
         try:
             return json.loads(m.group())
         except json.JSONDecodeError:
-            pass
+            log.warning("_parse_json: failed to decode JSON from model output: %.200s", raw)
+    else:
+        log.warning("_parse_json: no JSON object found in model output: %.200s", raw)
     return {}
 
 
@@ -199,12 +203,13 @@ async def generate_strategy(brand: dict) -> dict:
     is_ar = _is_arabic(brand)
     prompt = _build_strategy_prompt(brand, competitor_snippets, is_ar)
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    response = await client.messages.create(
+    response = await _client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
+    if not response.content:
+        raise ValueError("Anthropic returned an empty response content list")
     raw = response.content[0].text
     data = _parse_json(raw)
 
