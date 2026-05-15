@@ -1,0 +1,85 @@
+import logging
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from pydantic import BaseModel
+from typing import Optional
+from ..core.database import get_db
+from ..core.security import get_current_user
+from ..models.user import User
+from ..models.suite import Suite, SuiteStatus
+from ..services.brand_ai import extract_brand_from_sources, suggest_brand_identity
+
+log = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/onboarding", tags=["onboarding"])
+
+
+class ExtractBrandRequest(BaseModel):
+    suite_id: str
+    urls: list[str] = []           # multiple links — website, IG, FB, TikTok, etc.
+    business_name: Optional[str] = None
+    industry: Optional[str] = None
+    description: Optional[str] = None
+
+
+class SaveBrandRequest(BaseModel):
+    suite_id: str
+    brand: dict
+
+
+@router.post("/extract-brand")
+async def extract_brand(
+    data: ExtractBrandRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == data.suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+
+    # Filter empty strings
+    urls = [u.strip() for u in data.urls if u.strip()]
+
+    try:
+        if urls:
+            brand = await extract_brand_from_sources(urls, data.business_name)
+        elif data.business_name and data.industry:
+            brand = await suggest_brand_identity(
+                data.business_name,
+                data.industry,
+                data.description or "",
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide at least one URL, or a business name + industry"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Brand extraction failed")
+        err_str = str(e).lower()
+        if "529" in str(e) or "overloaded" in err_str:
+            raise HTTPException(status_code=503, detail="The AI service is temporarily busy. Please try again in a few seconds.")
+        raise HTTPException(status_code=500, detail="Brand research failed. Please try again.")
+
+    return {"brand": brand}
+
+
+@router.post("/save-brand")
+async def save_brand(
+    data: SaveBrandRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == data.suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+
+    suite.brand = data.brand
+    suite.status = SuiteStatus.active
+    await db.commit()
+    return {"ok": True, "suite_id": suite.id}

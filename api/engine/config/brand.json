@@ -1,0 +1,161 @@
+{
+  "name": "Connec",
+  "name_ar": "كونِك",
+  "name_phonetic_en": "KOH-nik (rhymes with 'comic' or 'tonic')",
+  "name_phonetic_ar": "كونِك — يُلفظ KON-ik وليس KON-ek",
+  "pronunciation_rules": [
+    "When pronouncing 'Connec' in any language, the correct pronunciation is 'KOH-nik' or 'KON-ik' — the second syllable rhymes with 'tick' or 'comic', NOT with 'wreck' or 'tech'.",
+    "Arabic phonetic spelling: كونِك (kāf-wāw-nūn-kāf with kasra on nūn).",
+    "Common WRONG pronunciations to avoid: 'KON-eck', 'kuh-NECK', 'CON-ec'."
+  ],
+  "tagline_ar": "وكالة لتطوير المصالح",
+  "tagline_en": "Agency for growing businesses",
+  "description_ar": "وكالة كونيك بتقدم حلول كاملة بمجالات: التصميم والبراندينج، التصوير وتحرير الفيديوهات، التسويق والإعلانات، وتطوير المواقع والتطبيقات والأنظمة.",
+  "colors": {
+    "primary_dark": "#333333",
+    "white": "#FFFFFF",
+    "yellow": "#FFD800",
+    "pink": "#FA0483",
+    "cyan": "#A0FEFA",
+    "green": "#218C03"
+  },
+  "divisions": {
+    "design": {
+      "name_ar": "التصميم والبراندينج",
+      "name_en": "Design & Branding",
+      "color": "#FFD800",
+      "color_name": "yellow",
+      "topics": [
+        "هوية بصرية",
+        "لوغو",
+        "كروت شخصية",
+        "Brand guidelines",
+        "تصميم سوشال ميديا",
+        "بروشورات ومطبوعات",
+        "تصميم منيو",
+        "بيكاجينج"
+      ]
+    },
+    "marketing": {
+      "name_ar": "التسويق والإعلانات",
+      "name_en": "Marketing & Advertising",
+      "color": "#FA0483",
+      "color_name": "pink",
+      "topics": [
+        "حملات إعلانية",
+        "إدارة سوشال ميديا",
+        "SEO",
+        "Google Ads",
+        "Meta Ads",
+        "TikTok Ads",
+        "Content strategy",
+        "Email marketing"
+      ]
+    },
+    "development": {
+      "name_ar": "تطوير المواقع والتطبيقات",
+      "name_en": "Web & App Development",
+      "color": "#A0FEFA",
+      "color_name": "cyan",
+      "topics": [
+        "موقع ويب",
+        "متجر إلكتروني",
+        "تطبيق موبايل",
+        "نظام إدارة",
+        "ERP",
+        "CRM",
+        "أتمتة (Automation)",
+        "ذكاء اصطناعي للمصالح"
+      ]
+    },
+    "media": {
+      "name_ar": "التصوير وتحرير الفيديوهات",
+      "name_en": "Photo & Video",
+      "color": "#333333",
+      "color_name": "dark",
+      "topics": [
+        "تصوير منتجات",
+        "تصوير شركات",
+        "ريلز",
+        "إعلانات فيديو",
+        "تصوير جوي",
+        "موشن جرافيك"
+      ]
+    },
+    "academy": {
+      "name_ar": "أكاديمية كونيك",
+      "name_en": "coAcademy",
+      "color": "#218C03",
+      "color_name": "green",
+      "topics": [
+        "كورس تصميم",
+        "كورس تسويق",
+        "كورس برمجة",
+        "ورشة عمل",
+        "نصائح تعليمية",
+        "Career advice"
+      ]
+    }
+  },
+  "audience": {
+    "primary": "عرب الـ 48 (Arab citizens of Israel / 1948 Palestinians)",
+    "location": "أراضي 48 — حيفا، الناصرة، أم الفحم، النقب، المثلث، الجليل",
+    "dialect": "Palestinian Arabic — specifically the 1948 Palestinian dialect with mild Hebrew loanwords occasionally used naturally (e.g., 'بسيدر', 'مزل طوب' situational)",
+    "voice_notes": "Use natural Palestinian dialect from the '48 region. Avoid heavy MSA (Modern Standard Arabic). Use everyday expressions: 'كيف الحال', 'شو الأخبار', 'يلا', 'بدنا', 'منيح', 'هلأ', 'كتير'.",
+    "audio_dialect_directive": "Arabic voiceover MUST be in Palestinian dialect with the accent of 1948 Palestinians (Arab citizens of Israel). NOT Egyptian, NOT Gulf, NOT MSA. The accent has a softer Levantine sound with occasional Hebrew code-switching common in this community."
+  },
+  "tone": {
+    "language": "Palestinian Arabic (1948 dialect), friendly professional",
+    "personality": "Smart, confident, modern, slightly playful but always professional. Speaks like a knowledgeable friend, not a corporate robot.",
+    "avoid": [
+      "كلمات معقدة بدون داعي",
+      "إملاء فصحى ثقيلة",
+      "وعود مبالغ فيها",
+      "كلمات تجارية مبتذلة",
+      "emojis كتيرة (واحد أو اثنين حد أقصى)"
+    ],
+    "use": [
+      "جمل قصيرة وواضحة",
+      "أمثلة عملية",
+      "أرقام وحقائق",
+      "سؤال للمتابع كل فترة",
+      "Call-to-action واحد واضح"
+    ]
+  },
+  "goals": {
+    "awareness": "بناء الوعي بالعلامة التجارية وخدماتها — محتوى تعليمي/إلهامي يعرّف الناس على كونيك بدون بيع مباشر.",
+    "engagement": "تفاعل عالي — أسئلة، استطلاعات، محتوى ممتع، carousel معلوماتي.",
+    "trust": "بناء الثقة — case studies, before/after, testimonials, مشاريع سابقة, أرقام إنجازات.",
+    "sales": "تحفيز للشراء — عروض، باكدجات، CTA واضح، أمثلة ROI."
+  },
+  "assets": {
+    "logos_dir": "assets/logos",
+    "robot_path": "assets/robot/connec robot.png",
+    "icons_dir": "assets/icons",
+    "logo_variants": {
+      "yellow_dot": "connec_logo_yellow.png",
+      "pink_dot": "connec_logo_pink.png",
+      "cyan_dot": "connec_logo_cyan.png",
+      "green_dot": "connec_logo_green.png",
+      "dark_wordmark": "connec_logo_dark.png",
+      "white_wordmark": "connec_logo_white.png"
+    }
+  },
+  "cta_options": [
+    "تواصل معنا اليوم 💬",
+    "احجز استشارة مجانية",
+    "DM لنا",
+    "زور موقعنا",
+    "تابعنا للمزيد",
+    "شو رأيك؟ خبرنا بالتعليقات"
+  ],
+  "hashtags_core": [
+    "#كونيك",
+    "#Connec",
+    "#تصميم",
+    "#براندينج",
+    "#تسويق",
+    "#تطوير_مواقع",
+    "#تطبيقات"
+  ]
+}

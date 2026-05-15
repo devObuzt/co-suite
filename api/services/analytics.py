@@ -1,0 +1,201 @@
+"""Fetch analytics from Facebook Page and Instagram Business via Graph API."""
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+import httpx
+
+log = logging.getLogger(__name__)
+GRAPH = "https://graph.facebook.com/v22.0"
+
+
+async def _get(path: str, params: dict) -> dict:
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.get(f"{GRAPH}/{path}", params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+
+# ── Facebook Page ─────────────────────────────────────────────────────────────
+
+async def fetch_fb_page_summary(page_id: str, token: str) -> dict:
+    """Basic page info: name, fan count."""
+    try:
+        data = await _get(page_id, {
+            "fields": "name,fan_count,followers_count",
+            "access_token": token,
+        })
+        return {
+            "name": data.get("name"),
+            "fans": data.get("fan_count", 0),
+            "followers": data.get("followers_count", 0),
+        }
+    except Exception as e:
+        log.warning("FB page summary failed: %s", e)
+        return {}
+
+
+async def fetch_fb_insights(page_id: str, token: str, days: int = 28) -> dict:
+    """Reach, impressions, engaged users over the last `days` days."""
+    until = datetime.now(timezone.utc)
+    since = until - timedelta(days=days)
+
+    metrics = [
+        "page_impressions",
+        "page_reach",
+        "page_engaged_users",
+        "page_fan_adds",
+    ]
+    try:
+        data = await _get(f"{page_id}/insights", {
+            "metric": ",".join(metrics),
+            "period": "day",
+            "since": int(since.timestamp()),
+            "until": int(until.timestamp()),
+            "access_token": token,
+        })
+        result: dict = {}
+        for item in data.get("data", []):
+            name = item["name"]
+            values = [{"date": v["end_time"][:10], "value": v["value"]}
+                      for v in item.get("values", [])]
+            result[name] = values
+        return result
+    except Exception as e:
+        log.warning("FB insights failed: %s", e)
+        return {}
+
+
+async def fetch_fb_recent_posts(page_id: str, token: str, limit: int = 10) -> list[dict]:
+    """Recent posts with like/comment/share counts."""
+    try:
+        data = await _get(f"{page_id}/posts", {
+            "fields": "id,message,created_time,full_picture,likes.summary(true),comments.summary(true),shares",
+            "limit": limit,
+            "access_token": token,
+        })
+        posts = []
+        for p in data.get("data", []):
+            posts.append({
+                "id": p["id"],
+                "message": (p.get("message") or "")[:120],
+                "created_time": p.get("created_time"),
+                "image": p.get("full_picture"),
+                "likes": p.get("likes", {}).get("summary", {}).get("total_count", 0),
+                "comments": p.get("comments", {}).get("summary", {}).get("total_count", 0),
+                "shares": p.get("shares", {}).get("count", 0),
+            })
+        return posts
+    except Exception as e:
+        log.warning("FB posts failed: %s", e)
+        return []
+
+
+# ── Instagram ─────────────────────────────────────────────────────────────────
+
+async def fetch_ig_summary(ig_user_id: str, token: str) -> dict:
+    """Follower count, media count, profile views."""
+    try:
+        data = await _get(ig_user_id, {
+            "fields": "username,followers_count,media_count,profile_picture_url",
+            "access_token": token,
+        })
+        return {
+            "username": data.get("username"),
+            "followers": data.get("followers_count", 0),
+            "media_count": data.get("media_count", 0),
+            "profile_picture": data.get("profile_picture_url"),
+        }
+    except Exception as e:
+        log.warning("IG summary failed: %s", e)
+        return {}
+
+
+async def fetch_ig_insights(ig_user_id: str, token: str, days: int = 28) -> dict:
+    """Reach, impressions over the last `days` days."""
+    until = datetime.now(timezone.utc)
+    since = until - timedelta(days=days)
+
+    try:
+        data = await _get(f"{ig_user_id}/insights", {
+            "metric": "impressions,reach,profile_views,follower_count",
+            "period": "day",
+            "since": int(since.timestamp()),
+            "until": int(until.timestamp()),
+            "access_token": token,
+        })
+        result: dict = {}
+        for item in data.get("data", []):
+            name = item["name"]
+            values = [{"date": v["end_time"][:10], "value": v["value"]}
+                      for v in item.get("values", [])]
+            result[name] = values
+        return result
+    except Exception as e:
+        log.warning("IG insights failed: %s", e)
+        return {}
+
+
+async def fetch_ig_recent_media(ig_user_id: str, token: str, limit: int = 9) -> list[dict]:
+    """Recent IG posts with engagement."""
+    try:
+        data = await _get(f"{ig_user_id}/media", {
+            "fields": "id,caption,media_type,timestamp,like_count,comments_count,media_url,thumbnail_url,permalink",
+            "limit": limit,
+            "access_token": token,
+        })
+        return [
+            {
+                "id": m["id"],
+                "caption": (m.get("caption") or "")[:120],
+                "media_type": m.get("media_type"),
+                "timestamp": m.get("timestamp"),
+                "likes": m.get("like_count", 0),
+                "comments": m.get("comments_count", 0),
+                "image": m.get("media_url") or m.get("thumbnail_url"),
+                "url": m.get("permalink"),
+            }
+            for m in data.get("data", [])
+        ]
+    except Exception as e:
+        log.warning("IG media failed: %s", e)
+        return []
+
+
+# ── Aggregator ────────────────────────────────────────────────────────────────
+
+async def fetch_suite_analytics(connections: dict, days: int = 28) -> dict:
+    """Top-level: gather all analytics for a suite from its connections."""
+    result: dict = {"facebook": {}, "instagram": {}, "days": days}
+
+    fb = connections.get("facebook", {})
+    ig = connections.get("instagram", {})
+
+    page_id = fb.get("page_id")
+    page_token = fb.get("page_access_token")
+    ig_user_id = ig.get("ig_user_id")
+    # Instagram uses the page token too
+    ig_token = ig.get("page_access_token") or page_token
+
+    if page_id and page_token:
+        summary, insights, posts = await _gather(
+            fetch_fb_page_summary(page_id, page_token),
+            fetch_fb_insights(page_id, page_token, days),
+            fetch_fb_recent_posts(page_id, page_token),
+        )
+        result["facebook"] = {**summary, "insights": insights, "recent_posts": posts}
+
+    if ig_user_id and ig_token:
+        summary, insights, media = await _gather(
+            fetch_ig_summary(ig_user_id, ig_token),
+            fetch_ig_insights(ig_user_id, ig_token, days),
+            fetch_ig_recent_media(ig_user_id, ig_token),
+        )
+        result["instagram"] = {**summary, "insights": insights, "recent_media": media}
+
+    return result
+
+
+async def _gather(*coros):
+    import asyncio
+    return await asyncio.gather(*coros)
