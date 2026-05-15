@@ -28,8 +28,8 @@ STATIC_DIR = Path(__file__).parent.parent / "static" / "posts"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _build_brand_summary(brand: dict) -> str:
-    """Build Claude-friendly brand summary from a suite's brand dict."""
+def _build_brand_summary(brand: dict, strategy: Optional[dict] = None) -> str:
+    """Build Claude-friendly brand summary from a suite's brand + strategy dicts."""
     name = brand.get("name") or brand.get("tagline", "Business")
     desc = brand.get("description") or brand.get("tagline", "")
     industry = brand.get("industry", "")
@@ -41,7 +41,7 @@ def _build_brand_summary(brand: dict) -> str:
 
     services_str = ", ".join(services[:8]) if services else "general services"
 
-    return (
+    summary = (
         f"Business name: {name}\n"
         f"Industry: {industry}\n"
         f"Description: {desc}\n"
@@ -51,6 +51,20 @@ def _build_brand_summary(brand: dict) -> str:
         f"Primary brand color: {primary_color}"
     )
 
+    if strategy:
+        plan = strategy.get("marketing_plan") or {}
+        audience_data = plan.get("audience") or {}
+        summary += (
+            f"\n\nMARKETING STRATEGY CONTEXT:"
+            f"\nMarketing message: {strategy.get('marketing_message', '')}"
+            f"\nCore audience problem: {audience_data.get('problem', '')}"
+            f"\nUSP: {brand.get('unique_value', '')}"
+            f"\nESP: {brand.get('esp', '')}"
+            f"\nContent themes: {', '.join(plan.get('content_themes') or [])}"
+        )
+
+    return summary
+
 
 def _strip_json_fences(text: str) -> str:
     text = text.strip()
@@ -58,7 +72,7 @@ def _strip_json_fences(text: str) -> str:
     return m.group(1) if m else text
 
 
-def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None = None) -> list[dict]:
+def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None = None, strategy: Optional[dict] = None) -> list[dict]:
     """Call Claude to generate post ideas for a given brand."""
     image_count = max(1, count - 1)
     carousel_count = min(1, count - image_count)
@@ -70,7 +84,7 @@ def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None
     )
 
     system = _PROMPTS["idea_generator_system"].format(
-        brand_summary=_build_brand_summary(brand)
+        brand_summary=_build_brand_summary(brand, strategy)
     )
     # Append character directive so Claude writes correct video_prompt descriptions
     system += (
@@ -151,6 +165,7 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
         return []
 
     brand = suite.brand
+    strategy = suite.strategy
     post_ids = []
 
     # Get recent topics to avoid repetition
@@ -172,7 +187,7 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
         return []
 
     log.info("Generating %d ideas for suite %s…", count, suite_id)
-    ideas = _generate_ideas(brand, count=count, recent_topics=recent_topics)
+    ideas = _generate_ideas(brand, count=count, recent_topics=recent_topics, strategy=strategy)
 
     # Record LLM cost
     await record_usage(suite_id, "llm_idea_gen", COSTS["llm_idea_gen"] * count, db)
