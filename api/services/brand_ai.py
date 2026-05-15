@@ -148,6 +148,8 @@ Extract and return ONLY a valid JSON object with this exact structure:
   }},
   "competitors": ["2-4 known competitors in the same market"],
   "unique_value": "what makes this business different from competitors",
+  "how_they_help": "the specific outcome or problem this business solves for clients (1-2 sentences)",
+  "esp": "the emotional benefit the client feels after working with this business (1 sentence, e.g. 'they feel confident and in control')",
   "marketing_channels": ["channels they're active on based on evidence"],
   "content_themes": ["3-5 themes/topics this brand should post about"],
   "contact": {{
@@ -169,6 +171,8 @@ Rules:
 - top_hashtags: include the hashtags they actually use — these help with future content generation.
 - missing_info: be honest — list things like "logo file", "brand colors", "product catalog" if they weren't found.
 - If Instagram captions are in Arabic, extract language/dialect used (e.g. "Palestinian Arabic", "Gulf Arabic", "MSA").
+- how_they_help: infer from website copy, service descriptions, and social captions — what problem does this solve?
+- esp: the emotional feeling the client gets — infer from testimonials, tone, and brand voice.
 - Return ONLY the JSON object, no explanation."""
 
 
