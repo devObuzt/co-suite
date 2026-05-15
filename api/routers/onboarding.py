@@ -103,7 +103,7 @@ async def generate_strategy_endpoint(
 
     brand = suite.brand or {}
     required = ["services", "target_audience", "how_they_help", "unique_value", "esp"]
-    missing = [f for f in required if not brand.get(f)]
+    missing = [f for f in required if f not in brand or brand[f] is None or brand[f] == "" or brand[f] == []]
     if missing:
         raise HTTPException(
             status_code=400,
