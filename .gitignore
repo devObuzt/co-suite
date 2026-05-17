@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Env files
+.env
+api/.env
+*.env.local
+
+# Logs
+*.log
+/tmp/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Railway / build
+.claude/worktrees/
+
+# Web (separate git repo — tracked separately)

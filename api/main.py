@@ -13,9 +13,12 @@ from .routers import analytics
 
 app = FastAPI(title=settings.app_name, docs_url="/docs" if settings.debug else None)
 
+_origins = [o.strip() for o in settings.frontend_url.split(",") if o.strip()]
+_origins += ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
