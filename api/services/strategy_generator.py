@@ -17,6 +17,32 @@ _client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _extract_json_object(text: str) -> str | None:
+    """Extract the first complete JSON object using brace-balanced matching."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth, in_string, escape = 0, False, False
+    for i, c in enumerate(text[start:], start):
+        if escape:
+            escape = False
+            continue
+        if c == "\\" and in_string:
+            escape = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if not in_string:
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+    return None
+
+
 def _parse_json(raw: str) -> dict:
     raw = raw.strip()
     # Strip markdown code fences if present
@@ -24,16 +50,16 @@ def _parse_json(raw: str) -> dict:
         raw = re.sub(r"^```(?:json)?\s*\n?", "", raw)
         raw = re.sub(r"\n?```\s*$", "", raw)
         raw = raw.strip()
-    # Try direct parse first
+    # Try direct parse first (clean JSON response)
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
-    # Fallback: extract first JSON object from mixed text
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    if m:
+    # Fallback: extract first balanced JSON object from mixed text
+    candidate = _extract_json_object(raw)
+    if candidate:
         try:
-            return json.loads(m.group())
+            return json.loads(candidate)
         except json.JSONDecodeError:
             log.warning("_parse_json: could not parse JSON from model output: %.200s", raw)
     else:
