@@ -19,14 +19,25 @@ _client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 def _parse_json(raw: str) -> dict:
     raw = raw.strip()
+    # Strip markdown code fences if present
+    if "```" in raw:
+        raw = re.sub(r"^```(?:json)?\s*\n?", "", raw)
+        raw = re.sub(r"\n?```\s*$", "", raw)
+        raw = raw.strip()
+    # Try direct parse first
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    # Fallback: extract first JSON object from mixed text
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     if m:
         try:
             return json.loads(m.group())
         except json.JSONDecodeError:
-            log.warning("_parse_json: failed to decode JSON from model output: %.200s", raw)
+            log.warning("_parse_json: could not parse JSON from model output: %.200s", raw)
     else:
-        log.warning("_parse_json: no JSON object found in model output: %.200s", raw)
+        log.warning("_parse_json: no JSON found in model output: %.200s", raw)
     return {}
 
 

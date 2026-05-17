@@ -1,5 +1,6 @@
 """AI-powered brand extraction from multiple sources."""
 import json
+import logging
 import re
 from typing import Optional
 
@@ -8,15 +9,30 @@ import anthropic
 from ..core.config import settings
 from .multi_scraper import gather_all_sources
 
+log = logging.getLogger(__name__)
+
 
 def _parse_json(raw: str) -> dict:
     raw = raw.strip()
+    # Strip markdown code fences if present
+    if "```" in raw:
+        raw = re.sub(r"^```(?:json)?\s*\n?", "", raw)
+        raw = re.sub(r"\n?```\s*$", "", raw)
+        raw = raw.strip()
+    # Try direct parse first
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    # Fallback: extract first JSON object from mixed text
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     if m:
         try:
             return json.loads(m.group())
         except json.JSONDecodeError:
-            pass
+            log.warning("_parse_json: could not parse JSON from model output: %.200s", raw)
+    else:
+        log.warning("_parse_json: no JSON found in model output: %.200s", raw)
     return {}
 
 
