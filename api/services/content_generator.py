@@ -72,7 +72,7 @@ def _strip_json_fences(text: str) -> str:
     return m.group(1) if m else text
 
 
-def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None = None, strategy: Optional[dict] = None) -> list[dict]:
+def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None = None, strategy: Optional[dict] = None, language: str = "ar") -> list[dict]:
     """Call Claude to generate post ideas for a given brand."""
     image_count = max(1, count - 1)
     carousel_count = min(1, count - image_count)
@@ -94,6 +94,22 @@ def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None
         "Olive to light-tan skin, dark hair, dark eyes. Mediterranean-European (Italian/Greek/Spanish) "
         "is acceptable variation. NEVER East Asian, South Asian, or Nordic/Scandinavian."
     )
+    lang_labels = {
+        "ar": "Arabic (natural, professional — not heavy formal)",
+        "he": "Hebrew",
+        "en": "English",
+        "fr": "French",
+        "es": "Spanish",
+        "tr": "Turkish",
+    }
+    lang_label = lang_labels.get(language, language)
+    if language != "ar":
+        system += (
+            f"\n\n--- LANGUAGE RULE ---\n"
+            f"Generate ALL captions, hooks, hashtags, and visible text in {lang_label}. "
+            f"The language of every caption must be {lang_label} only. "
+            f"Do NOT use Arabic unless the language is Arabic."
+        )
     user = _PROMPTS["idea_generator_user"].format(
         count=count,
         image_count=image_count,
@@ -187,7 +203,17 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
         return []
 
     log.info("Generating %d ideas for suite %s…", count, suite_id)
-    ideas = _generate_ideas(brand, count=count, recent_topics=recent_topics, strategy=strategy)
+    audience_languages = brand.get("audience_languages") or ["ar"]
+    if not audience_languages:
+        audience_languages = ["ar"]
+
+    all_ideas = []
+    for lang_code in audience_languages:
+        lang_ideas = _generate_ideas(brand, count=count, recent_topics=recent_topics, strategy=strategy, language=lang_code)
+        for idea in lang_ideas:
+            idea["content_language"] = lang_code
+        all_ideas.extend(lang_ideas)
+    ideas = all_ideas
 
     # Record LLM cost
     await record_usage(suite_id, "llm_idea_gen", COSTS["llm_idea_gen"] * count, db)
