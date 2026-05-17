@@ -32,17 +32,20 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 @app.on_event("startup")
 async def startup():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    # Run DDL migrations separately so a failure doesn't crash startup
+    import logging
+    log = logging.getLogger(__name__)
     try:
         async with engine.begin() as conn:
-            await conn.execute(text(
-                "ALTER TABLE suites ADD COLUMN IF NOT EXISTS strategy JSON"
-            ))
+            await conn.run_sync(Base.metadata.create_all)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(
+                    "ALTER TABLE suites ADD COLUMN IF NOT EXISTS strategy JSON"
+                ))
+        except Exception as e:
+            log.warning("strategy column migration skipped: %s", e)
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning("strategy column migration skipped: %s", e)
+        log.error("Database startup failed (check DATABASE_URL env var): %s", e)
 
 
 app.include_router(auth.router, prefix="/api/v1")
