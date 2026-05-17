@@ -19,6 +19,7 @@ _origins += ["http://localhost:3000", "http://localhost:3001", "http://localhost
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
+    allow_origin_regex=r"https://.*\.up\.railway\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
