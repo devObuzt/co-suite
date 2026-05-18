@@ -260,6 +260,7 @@ async def generate_brand_assets_endpoint(
 
     brand = dict(suite.brand) if suite.brand else {}
     brand["logo_style"] = data.logo_style
+    brand["user_language"] = data.user_language
     try:
         generated = await suggest_brand_assets(brand, data.generate, user_language=data.user_language)
     except Exception as e:

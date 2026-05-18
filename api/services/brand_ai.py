@@ -342,50 +342,106 @@ async def suggest_brand_assets(brand: dict, generate: list[str], user_language: 
             from ..core.config import settings as _settings
             import boto3 as _boto3
             import uuid as _uuid
+            from pathlib import Path as _Path
+            from PIL import Image as _PILImage, ImageDraw as _ImageDraw, ImageFont as _IFont
+            import io as _io
 
-            logo_style = brand.get("logo_style", "icon_only")  # icon_only | with_name | initials
+            _FONTS_DIR = _Path(__file__).parent.parent / "fonts"
+            _FONT_FOR_LANG = {
+                "ar": "Cairo-Regular.ttf",
+                "he": "NotoSansHebrew-Regular.ttf",
+            }
+            _DEFAULT_FONT = "Inter-Regular.ttf"
 
-            if logo_style == "with_name":
-                style_rule = (
-                    f"The logo MUST contain ONLY the business name '{brand.get('name', '')}' "
-                    "in clean modern typography. No icons, no abstract shapes, text only. "
-                    "Elegant font, centered."
-                )
-            elif logo_style == "initials":
-                name = brand.get("name", "B")
-                initials = "".join(w[0].upper() for w in name.split()[:2]) or name[0].upper()
-                style_rule = (
-                    f"The logo MUST contain ONLY the initials '{initials}' as a bold geometric monogram. "
-                    "No other text, no tagline, no slogan. Just the letters in a clean shape."
-                )
-            else:  # icon_only (default)
-                style_rule = (
-                    "CRITICAL: NO TEXT, NO WORDS, NO LETTERS, NO SLOGANS, NO TAGLINES anywhere in the image. "
-                    "ONLY a pure abstract icon, symbol, or geometric mark. Zero text. "
-                    "If you include any text you have failed the task."
-                )
+            logo_style = brand.get("logo_style", "icon_only")
+            biz_name = brand.get("name", "")
+            industry = brand.get("industry", "")
+            tone = brand.get("tone", "professional")
+            primary_color = (brand.get("colors") or {}).get("primary", "#4f46e5")
 
-            logo_prompt = (
-                f"Professional logo design for {brand.get('name', 'a business')}, "
-                f"{brand.get('industry', '')} company. "
-                f"Style: {brand.get('tone', 'professional')} and modern. "
-                f"Primary color hint: {(brand.get('colors') or {}).get('primary', '#4f46e5')}. "
-                f"White or transparent background. High contrast. {style_rule}"
+            # Always ask Imagen for a pure abstract icon — never ask it to render text.
+            # Describe positively what we want (style, mood, shape) so Imagen stays
+            # focused on iconography and doesn't drift towards letterforms.
+            icon_prompt = (
+                f"Minimalist flat vector icon mark for a {industry} brand. "
+                f"Pure abstract geometric symbol, completely text-free iconographic mark. "
+                f"Style: {tone}, modern, clean, professional. "
+                f"Dominant color: {primary_color}. Solid white background. "
+                f"In the style of Airbnb, Spotify, Dropbox or Apple — a single clean abstract icon, "
+                f"no letterforms, no typography, no words, no characters of any kind anywhere."
             )
-            png_bytes = _generate_image(logo_prompt, "1:1")
-            if png_bytes and _settings.r2_account_id and _settings.r2_bucket_name:
-                s3 = _boto3.client(
-                    "s3",
-                    endpoint_url=f"https://{_settings.r2_account_id}.r2.cloudflarestorage.com",
-                    aws_access_key_id=_settings.r2_access_key_id,
-                    aws_secret_access_key=_settings.r2_secret_access_key,
-                )
-                key = f"logos/{_uuid.uuid4()}.png"
-                s3.put_object(Bucket=_settings.r2_bucket_name, Key=key, Body=png_bytes, ContentType="image/png")
-                logo_url = f"{_settings.r2_public_url}/{key}"
-                result["logo_url"] = logo_url
-                result["logo_source"] = "ai-generated"
-                result["brand_generated"] = {"logo_url": logo_url, "logo_prompt": logo_prompt, "logo_style": logo_style}
+            png_bytes = _generate_image(icon_prompt, "1:1")
+
+            if not png_bytes:
+                log.warning("Imagen returned no bytes for logo")
+            else:
+                # For with_name / initials: overlay text using Pillow + bundled fonts.
+                # This guarantees correct rendering for Arabic, Hebrew, and any script —
+                # Imagen cannot reliably render non-Latin text.
+                if logo_style in ("with_name", "initials") and biz_name:
+                    user_lang = brand.get("user_language", "en")
+                    font_file = _FONT_FOR_LANG.get(user_lang, _DEFAULT_FONT)
+                    font_path = _FONTS_DIR / font_file
+
+                    if logo_style == "initials":
+                        words = biz_name.split()
+                        text = "".join(w[0] for w in words[:2]) if len(words) > 1 else biz_name[:2]
+                    else:
+                        text = biz_name
+
+                    if font_path.exists() and text:
+                        img = _PILImage.open(_io.BytesIO(png_bytes)).convert("RGBA")
+                        w, h = img.size
+
+                        # Expand canvas downward to hold the text
+                        text_zone_h = int(h * 0.28)
+                        canvas = _PILImage.new("RGBA", (w, h + text_zone_h), (255, 255, 255, 255))
+                        canvas.paste(img, (0, 0))
+                        draw = _ImageDraw.Draw(canvas)
+
+                        # Auto-size font to fit within 85% of icon width
+                        font_size = 56
+                        for _ in range(12):
+                            font = _IFont.truetype(str(font_path), font_size)
+                            bbox = draw.textbbox((0, 0), text, font=font)
+                            if (bbox[2] - bbox[0]) <= w * 0.85:
+                                break
+                            font_size = int(font_size * 0.82)
+
+                        font = _IFont.truetype(str(font_path), font_size)
+                        bbox = draw.textbbox((0, 0), text, font=font)
+                        text_w = bbox[2] - bbox[0]
+                        text_h = bbox[3] - bbox[1]
+                        x = (w - text_w) // 2
+                        y = h + (text_zone_h - text_h) // 2
+
+                        try:
+                            r = int(primary_color[1:3], 16)
+                            g = int(primary_color[3:5], 16)
+                            b = int(primary_color[5:7], 16)
+                        except Exception:
+                            r, g, b = 79, 70, 229
+
+                        draw.text((x, y), text, font=font, fill=(r, g, b, 255))
+                        out = _io.BytesIO()
+                        canvas.convert("RGB").save(out, format="PNG")
+                        png_bytes = out.getvalue()
+                    else:
+                        log.warning("Font %s not found — skipping text overlay", font_path)
+
+                if _settings.r2_account_id and _settings.r2_bucket_name:
+                    s3 = _boto3.client(
+                        "s3",
+                        endpoint_url=f"https://{_settings.r2_account_id}.r2.cloudflarestorage.com",
+                        aws_access_key_id=_settings.r2_access_key_id,
+                        aws_secret_access_key=_settings.r2_secret_access_key,
+                    )
+                    key = f"logos/{_uuid.uuid4()}.png"
+                    s3.put_object(Bucket=_settings.r2_bucket_name, Key=key, Body=png_bytes, ContentType="image/png")
+                    logo_url = f"{_settings.r2_public_url}/{key}"
+                    result["logo_url"] = logo_url
+                    result["logo_source"] = "ai-generated"
+                    result["brand_generated"] = {"logo_url": logo_url, "logo_style": logo_style}
         except Exception as e:
             log.warning("Logo generation failed: %s", e)
 
