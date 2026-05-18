@@ -50,6 +50,22 @@ class GenerateBrandAssetsRequest(BaseModel):
     user_language: str = "en"
 
 
+TRANSLATE_LANG_NAMES = {
+    "ar": "Arabic (natural Palestinian dialect)",
+    "he": "Hebrew",
+    "fr": "French",
+    "es": "Spanish",
+    "tr": "Turkish",
+}
+
+
+class TranslateBrandFieldsRequest(BaseModel):
+    unique_value: str = ""
+    esp: str = ""
+    how_they_help: str = ""
+    target_language: str = "en"
+
+
 @router.post("/extract-brand")
 async def extract_brand(
     data: ExtractBrandRequest,
@@ -271,3 +287,49 @@ async def generate_brand_assets_endpoint(
     suite.brand = brand
     await db.commit()
     return {"brand": brand, "generated": generated}
+
+
+@router.post("/translate-brand-fields")
+async def translate_brand_fields(data: TranslateBrandFieldsRequest):
+    """Translate USP/ESP/how_they_help from English to the user's preferred language."""
+    if not data.target_language or data.target_language == "en":
+        return {
+            "unique_value": data.unique_value,
+            "esp": data.esp,
+            "how_they_help": data.how_they_help,
+        }
+
+    lang_name = TRANSLATE_LANG_NAMES.get(data.target_language, data.target_language)
+    prompt = (
+        f"Translate these marketing phrases to {lang_name}. "
+        "Keep them natural and professional. "
+        "Return ONLY valid JSON with these exact keys, no explanation:\n\n"
+        "{\n"
+        f'  "unique_value": "{data.unique_value}",\n'
+        f'  "esp": "{data.esp}",\n'
+        f'  "how_they_help": "{data.how_they_help}"\n'
+        "}\n\n"
+        f"Translate the VALUES (not the keys) to {lang_name}. If a value is empty, keep it empty."
+    )
+
+    try:
+        from ..core.ai_client import call_claude
+        from ..services.brand_ai import _parse_json
+        raw = await call_claude(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        result = _parse_json(raw)
+        return {
+            "unique_value": result.get("unique_value") or data.unique_value,
+            "esp": result.get("esp") or data.esp,
+            "how_they_help": result.get("how_they_help") or data.how_they_help,
+        }
+    except Exception as e:
+        log.warning("Brand field translation failed: %s", e)
+        return {
+            "unique_value": data.unique_value,
+            "esp": data.esp,
+            "how_they_help": data.how_they_help,
+        }
