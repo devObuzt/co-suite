@@ -116,14 +116,30 @@ async def generate_strategy_endpoint(
     if not suite or suite.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Suite not found")
 
-    brand = suite.brand or {}
-    required = ["services", "target_audience", "how_they_help", "unique_value", "esp"]
-    missing = [f for f in required if f not in brand or brand[f] is None or brand[f] == "" or brand[f] == []]
-    if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Missing required brand fields: {', '.join(missing)}"
-        )
+    brand = dict(suite.brand or {})
+
+    # Auto-derive target_audience from structured audience_location if missing
+    if not brand.get("target_audience"):
+        loc = brand.get("audience_location") or {}
+        countries = loc.get("countries") or []
+        cities = loc.get("cities") or []
+        interests = brand.get("audience_interests") or []
+        parts = [", ".join(countries + cities)] if (countries or cities) else []
+        if interests:
+            parts.append("interested in: " + ", ".join(interests))
+        brand["target_audience"] = ". ".join(parts) or "General audience"
+
+    # Auto-derive how_they_help from usp_points if missing
+    if not brand.get("how_they_help") and brand.get("usp_points"):
+        brand["how_they_help"] = brand["usp_points"][0]
+
+    # Auto-derive unique_value from usp_points if missing
+    if not brand.get("unique_value") and brand.get("usp_points"):
+        brand["unique_value"] = ". ".join(brand["usp_points"])
+
+    # Auto-derive esp from esp_points if missing
+    if not brand.get("esp") and brand.get("esp_points"):
+        brand["esp"] = ". ".join(brand["esp_points"])
 
     try:
         strategy = await _generate_strategy(brand)
