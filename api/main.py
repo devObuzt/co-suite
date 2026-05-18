@@ -61,3 +61,19 @@ app.include_router(analytics.router, prefix="/api/v1")
 @app.get("/health")
 async def health():
     return {"status": "ok", "app": settings.app_name}
+
+
+@app.get("/debug-ai")
+async def debug_ai():
+    """Temporary: test Claude API connectivity and return the actual error."""
+    import anthropic as _anthropic
+    try:
+        client = _anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        msg = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=10,
+            messages=[{"role": "user", "content": "Say OK"}],
+        )
+        return {"status": "ok", "response": msg.content[0].text}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "type": type(e).__name__}
