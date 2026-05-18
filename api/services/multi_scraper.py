@@ -344,6 +344,76 @@ async def search_business(business_name: str, location: str = "") -> str:
     return "\n".join(snippets[:6])
 
 
+async def search_market_content(keyword: str, location: str, strategy: dict) -> list[dict]:
+    """Search for competitor content and trending social posts in the market."""
+    results = []
+
+    def _classify(url: str) -> str:
+        u = url.lower()
+        if "instagram.com" in u:
+            return "instagram"
+        if "tiktok.com" in u:
+            return "tiktok"
+        if "facebook.com" in u or "fb.com" in u:
+            return "facebook"
+        return "web"
+
+    async def _search(query: str) -> list[dict]:
+        items = []
+        try:
+            search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+            async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=10) as client:
+                resp = await client.get(search_url)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for el in soup.select(".result__body")[:4]:
+                title_el = el.select_one(".result__title a")
+                snippet_el = el.select_one(".result__snippet")
+                if not title_el:
+                    continue
+                url = title_el.get("href", "") or ""
+                title = title_el.get_text(strip=True)
+                snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+                if url and title:
+                    items.append({
+                        "title": title,
+                        "url": url,
+                        "snippet": snippet,
+                        "platform": _classify(url),
+                    })
+        except Exception as e:
+            log.warning("Market search failed for '%s': %s", query, e)
+        return items
+
+    # Search for Instagram content in the niche + location
+    if keyword:
+        q1 = f"site:instagram.com {keyword} {location}".strip()
+        results.extend(await _search(q1))
+
+    # Search for known competitors from strategy
+    competitors = (strategy.get("marketing_plan") or {}).get("competitors") or []
+    for comp in competitors[:3]:
+        name = comp.get("name", "")
+        if name:
+            results.extend(await _search(f"{name} instagram {location}".strip()))
+
+    # General social content search in the market
+    if keyword and location:
+        q3 = f"instagram tiktok {keyword} {location} trending"
+        results.extend(await _search(q3))
+
+    # Deduplicate by URL and cap at 10
+    seen: set[str] = set()
+    unique = []
+    for r in results:
+        if r["url"] not in seen:
+            seen.add(r["url"])
+            unique.append(r)
+        if len(unique) >= 10:
+            break
+
+    return unique
+
+
 # ── Main aggregator ────────────────────────────────────────────────────────────
 
 async def gather_all_sources(

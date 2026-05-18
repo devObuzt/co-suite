@@ -8,6 +8,7 @@ from ..core.database import get_db
 from ..core.security import get_current_user
 from ..models.user import User
 from ..models.suite import Suite, SuiteMember, SuiteStatus, MemberRole
+from ..services.multi_scraper import search_market_content
 
 router = APIRouter(prefix="/suites", tags=["suites"])
 
@@ -104,3 +105,28 @@ async def update_brand(
         suite.status = SuiteStatus.active
     await db.commit()
     return {"ok": True}
+
+
+@router.get("/{suite_id}/market-research")
+async def market_research(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Search for competitor content and trending social posts in the market."""
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+
+    brand = suite.brand or {}
+    strategy_data = suite.strategy or {}
+
+    keyword = brand.get("niche") or brand.get("industry") or brand.get("name") or ""
+    loc = brand.get("audience_location") or {}
+    countries = loc.get("countries") or []
+    cities = loc.get("cities") or []
+    location = " ".join((cities[:1] + countries[:1])).strip()
+
+    items = await search_market_content(keyword, location, strategy_data)
+    return {"results": items}
