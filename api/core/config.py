@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # AI Keys
     anthropic_api_key: str = ""
     google_api_key: str = ""
+    google_image_model: str = "gemini-3.1-flash-preview-image-generation"
 
     # Cloudflare R2
     r2_account_id: str = ""

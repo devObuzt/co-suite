@@ -134,27 +134,50 @@ def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None
 
 
 def _generate_image(prompt: str, aspect_ratio: str = "1:1") -> Optional[bytes]:
-    """Generate a single image via Imagen 4. Returns PNG bytes or None."""
+    """Generate a single image via Gemini image model (falls back to Imagen 4). Returns PNG bytes or None."""
     if not settings.google_api_key:
         return None
+
+    # Primary: Gemini image generation (better multilingual instruction following)
     try:
         from google import genai
         from google.genai import types as gtypes
 
         client = genai.Client(api_key=settings.google_api_key)
-        resp = client.models.generate_images(
+        resp = client.models.generate_content(
+            model=settings.google_image_model,
+            contents=prompt,
+            config=gtypes.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+            ),
+        )
+        for candidate in (resp.candidates or []):
+            for part in (candidate.content.parts or []):
+                if hasattr(part, "inline_data") and part.inline_data:
+                    return part.inline_data.data
+    except Exception as e:
+        log.warning("Gemini image generation failed (%s): %s", settings.google_image_model, e)
+
+    # Fallback: Imagen 4
+    try:
+        from google import genai as _genai
+        from google.genai import types as _gtypes
+
+        _client = _genai.Client(api_key=settings.google_api_key)
+        _resp = _client.models.generate_images(
             model="imagen-4.0-fast-generate-001",
             prompt=prompt,
-            config=gtypes.GenerateImagesConfig(
+            config=_gtypes.GenerateImagesConfig(
                 number_of_images=1,
                 aspect_ratio="1:1" if aspect_ratio == "1:1" else "9:16",
                 output_mime_type="image/png",
             ),
         )
-        if resp.generated_images:
-            return resp.generated_images[0].image.image_bytes
-    except Exception as e:
-        log.warning("Image generation failed: %s", e)
+        if _resp.generated_images:
+            return _resp.generated_images[0].image.image_bytes
+    except Exception as e2:
+        log.warning("Imagen fallback also failed: %s", e2)
+
     return None
 
 
