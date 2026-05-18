@@ -65,15 +65,38 @@ async def health():
 
 @app.get("/debug-ai")
 async def debug_ai():
-    """Temporary: test Claude API connectivity and return the actual error."""
+    """Temporary: diagnose Claude API connectivity."""
+    import requests as _req
     import anthropic as _anthropic
+
+    # Test 1: raw HTTPS connectivity to Anthropic
+    raw_ok = False
+    raw_err = ""
+    try:
+        r = _req.get("https://api.anthropic.com", timeout=5)
+        raw_ok = True
+    except Exception as e:
+        raw_err = str(e)
+
+    # Test 2: Anthropic SDK call
+    sdk_result = ""
+    sdk_err = ""
     try:
         client = _anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        import asyncio as _aio
         msg = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=10,
             messages=[{"role": "user", "content": "Say OK"}],
         )
-        return {"status": "ok", "response": msg.content[0].text}
+        sdk_result = msg.content[0].text
     except Exception as e:
-        return {"status": "error", "error": str(e), "type": type(e).__name__}
+        sdk_err = f"{type(e).__name__}: {e}"
+
+    return {
+        "raw_https_ok": raw_ok,
+        "raw_error": raw_err,
+        "key_prefix": settings.anthropic_api_key[:12] if settings.anthropic_api_key else "NOT SET",
+        "sdk_result": sdk_result,
+        "sdk_error": sdk_err,
+    }
