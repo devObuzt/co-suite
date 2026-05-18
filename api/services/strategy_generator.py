@@ -8,11 +8,12 @@ from typing import Optional
 import anthropic
 
 from ..core.config import settings
+from ..core.ai_client import make_async_anthropic
 from .multi_scraper import search_business
 
 log = logging.getLogger(__name__)
 
-_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+_client = make_async_anthropic()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

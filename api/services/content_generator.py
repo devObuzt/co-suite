@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from ..core.config import settings
+from ..core.ai_client import make_sync_anthropic
 from ..models.content import ContentPost, PostFormat, PostStatus
 from ..models.suite import Suite
 
@@ -118,7 +119,7 @@ def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None
         recent_ideas=recent_str,
     )
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    client = make_sync_anthropic()
     for attempt in range(3):
         try:
             resp = client.messages.create(

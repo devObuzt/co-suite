@@ -78,11 +78,12 @@ async def debug_ai():
     except Exception as e:
         raw_err = str(e)
 
-    # Test 2: Anthropic SDK call
+    # Test 2: Anthropic SDK call via shared helper (HTTP/2 disabled)
     sdk_result = ""
     sdk_err = ""
     try:
-        client = _anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        from .core.ai_client import make_async_anthropic
+        client = make_async_anthropic()
         import asyncio as _aio
         msg = await client.messages.create(
             model="claude-haiku-4-5-20251001",
