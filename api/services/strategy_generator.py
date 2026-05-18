@@ -11,6 +11,15 @@ from .multi_scraper import search_business
 
 log = logging.getLogger(__name__)
 
+LANG_NAMES = {
+    "ar": "Arabic (Palestinian dialect, natural and professional)",
+    "he": "Hebrew",
+    "fr": "French",
+    "es": "Spanish",
+    "tr": "Turkish",
+    "en": "English",
+}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -64,9 +73,25 @@ def _parse_json(raw: str) -> dict:
     return {}
 
 
-def _is_arabic(brand: dict) -> bool:
+def _is_arabic(brand: dict, user_language: str = "") -> bool:
+    if user_language in ("ar",):
+        return True
     dialect = (brand.get("dialect") or "").lower()
-    return "arabic" in dialect or dialect == "msa"
+    lang_codes = [c.lower() for c in (brand.get("audience_languages") or [])]
+    return "arabic" in dialect or dialect == "msa" or lang_codes[:1] == ["ar"]
+
+
+def _get_output_language(brand: dict, user_language: str = "") -> str:
+    """Determine the language to use for AI output. Returns language code."""
+    if user_language and user_language != "en":
+        return user_language
+    lang_codes = [c.lower() for c in (brand.get("audience_languages") or [])]
+    if lang_codes:
+        return lang_codes[0]
+    dialect = (brand.get("dialect") or "").lower()
+    if "arabic" in dialect or dialect == "msa":
+        return "ar"
+    return "en"
 
 
 # ── Competitor research ───────────────────────────────────────────────────────
@@ -94,7 +119,7 @@ async def research_competitors(
 
 # ── Prompt builders ───────────────────────────────────────────────────────────
 
-def _build_strategy_prompt(brand: dict, competitor_snippets: dict[str, str], is_ar: bool) -> str:
+def _build_strategy_prompt(brand: dict, competitor_snippets: dict[str, str], is_ar: bool, output_language: str = "en") -> str:
     name = brand.get("name", "")
     industry = brand.get("industry", "")
     services = ", ".join(brand.get("services") or [])
@@ -224,18 +249,20 @@ Important rules:
 - Write exactly 10 personas
 - facebook_interests must be in English exactly as they appear in Meta Ads Manager
 - marketing_message: replace all values inside [] with actual content
-- Return ONLY valid JSON, no explanation or markdown"""
+- Return ONLY valid JSON, no explanation or markdown
+- IMPORTANT: Write ALL text content (marketing_message, audience descriptions, persona names, content themes, keywords, competitor USP/ESP) in {LANG_NAMES.get(output_language, 'English')}. Only facebook_interests must remain in English (Meta Ads requirement)."""
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-async def generate_strategy(brand: dict) -> dict:
+async def generate_strategy(brand: dict, user_language: str = "en") -> dict:
     """Generate full marketing strategy (plan + message) from brand data."""
     competitor_snippets = await research_competitors(
         brand.get("competitors") or [], brand.get("name", "")
     )
-    is_ar = _is_arabic(brand)
-    prompt = _build_strategy_prompt(brand, competitor_snippets, is_ar)
+    output_lang = _get_output_language(brand, user_language)
+    is_ar = output_lang == "ar"
+    prompt = _build_strategy_prompt(brand, competitor_snippets, is_ar, output_lang)
 
     raw = await call_claude(
         model="claude-sonnet-4-6",
@@ -247,5 +274,5 @@ async def generate_strategy(brand: dict) -> dict:
     return {
         "marketing_plan": data.get("marketing_plan", {}),
         "marketing_message": data.get("marketing_message", ""),
-        "language": "ar" if is_ar else "en",
+        "language": output_lang,
     }

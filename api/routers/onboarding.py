@@ -34,6 +34,7 @@ class SaveBrandRequest(BaseModel):
 
 class GenerateStrategyRequest(BaseModel):
     suite_id: str
+    user_language: str = "en"  # UI language selected by user: "ar" | "he" | "en" | "fr" | "es" | "tr"
 
 
 class SaveBrandStepRequest(BaseModel):
@@ -46,6 +47,7 @@ class GenerateBrandAssetsRequest(BaseModel):
     suite_id: str
     generate: list[str]  # ["logo", "colors", "fonts"]
     logo_style: str = "icon_only"  # "icon_only" | "with_name" | "initials"
+    user_language: str = "en"
 
 
 @router.post("/extract-brand")
@@ -142,7 +144,7 @@ async def generate_strategy_endpoint(
         brand["esp"] = ". ".join(brand["esp_points"])
 
     try:
-        strategy = await _generate_strategy(brand)
+        strategy = await _generate_strategy(brand, user_language=data.user_language)
     except HTTPException:
         raise
     except Exception as e:
@@ -259,7 +261,7 @@ async def generate_brand_assets_endpoint(
     brand = dict(suite.brand) if suite.brand else {}
     brand["logo_style"] = data.logo_style
     try:
-        generated = await suggest_brand_assets(brand, data.generate)
+        generated = await suggest_brand_assets(brand, data.generate, user_language=data.user_language)
     except Exception as e:
         log.exception("Brand asset generation failed for suite %s", data.suite_id)
         raise HTTPException(status_code=500, detail="Asset generation failed. Please try again.")

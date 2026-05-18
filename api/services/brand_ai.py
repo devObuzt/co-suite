@@ -287,7 +287,7 @@ Return ONLY a valid JSON object matching this structure exactly:
     return _parse_json(raw)
 
 
-async def suggest_brand_assets(brand: dict, generate: list[str]) -> dict:
+async def suggest_brand_assets(brand: dict, generate: list[str], user_language: str = "en") -> dict:
     """Generate missing brand elements (colors, fonts, logo) using AI."""
     result = {}
 
@@ -315,9 +315,15 @@ async def suggest_brand_assets(brand: dict, generate: list[str]) -> dict:
             log.warning("Color generation failed: %s", e)
 
     if "fonts" in generate:
+        lang_note = ""
+        if user_language == "ar":
+            lang_note = "IMPORTANT: Suggest Arabic-compatible Google Fonts (e.g. Cairo, Tajawal, Noto Kufi Arabic, Almarai). "
+        elif user_language == "he":
+            lang_note = "IMPORTANT: Suggest Hebrew-compatible Google Fonts (e.g. Rubik, Assistant, Heebo, Frank Ruhl Libre). "
         prompt = (
             f"Brand: {brand.get('name', 'Unknown')}, "
             f"Tone: {brand.get('tone', 'professional')}.\n"
+            f"{lang_note}"
             "Suggest 2 Google Font names that fit this brand. "
             'Return ONLY valid JSON: {"fonts":["FontName1","FontName2"]}'
         )
