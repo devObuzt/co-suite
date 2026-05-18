@@ -17,8 +17,9 @@ ANTHROPIC_VERSION = "2023-06-01"
 
 def _call_sync(model: str, max_tokens: int, messages: list, system: str = "") -> dict[str, Any]:
     """Synchronous Anthropic API call via requests."""
+    clean_key = "".join(c for c in settings.anthropic_api_key if c.isprintable() and c != " ")
     headers = {
-        "x-api-key": settings.anthropic_api_key.strip(),
+        "x-api-key": clean_key,
         "anthropic-version": ANTHROPIC_VERSION,
         "content-type": "application/json",
     }

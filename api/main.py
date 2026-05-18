@@ -94,7 +94,9 @@ async def debug_ai():
     return {
         "raw_https_ok": raw_ok,
         "raw_error": raw_err,
-        "key_prefix": settings.anthropic_api_key[:12] if settings.anthropic_api_key else "NOT SET",
+        "key_raw_len": len(settings.anthropic_api_key),
+        "key_stripped_len": len(settings.anthropic_api_key.strip()),
+        "key_prefix": settings.anthropic_api_key.strip()[:12] if settings.anthropic_api_key else "NOT SET",
         "sdk_result": sdk_result,
         "sdk_error": sdk_err,
     }
