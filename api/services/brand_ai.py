@@ -337,10 +337,34 @@ async def suggest_brand_assets(brand: dict, generate: list[str]) -> dict:
             import boto3 as _boto3
             import uuid as _uuid
 
+            logo_style = brand.get("logo_style", "icon_only")  # icon_only | with_name | initials
+
+            if logo_style == "with_name":
+                style_rule = (
+                    f"The logo MUST contain ONLY the business name '{brand.get('name', '')}' "
+                    "in clean modern typography. No icons, no abstract shapes, text only. "
+                    "Elegant font, centered."
+                )
+            elif logo_style == "initials":
+                name = brand.get("name", "B")
+                initials = "".join(w[0].upper() for w in name.split()[:2]) or name[0].upper()
+                style_rule = (
+                    f"The logo MUST contain ONLY the initials '{initials}' as a bold geometric monogram. "
+                    "No other text, no tagline, no slogan. Just the letters in a clean shape."
+                )
+            else:  # icon_only (default)
+                style_rule = (
+                    "CRITICAL: NO TEXT, NO WORDS, NO LETTERS, NO SLOGANS, NO TAGLINES anywhere in the image. "
+                    "ONLY a pure abstract icon, symbol, or geometric mark. Zero text. "
+                    "If you include any text you have failed the task."
+                )
+
             logo_prompt = (
-                f"Minimalist professional logo for {brand.get('name', 'a business')}, "
+                f"Professional logo design for {brand.get('name', 'a business')}, "
                 f"{brand.get('industry', '')} company. "
-                "Clean vector style, simple geometric shapes, modern. White background. No text."
+                f"Style: {brand.get('tone', 'professional')} and modern. "
+                f"Primary color hint: {(brand.get('colors') or {}).get('primary', '#4f46e5')}. "
+                f"White or transparent background. High contrast. {style_rule}"
             )
             png_bytes = _generate_image(logo_prompt, "1:1")
             if png_bytes and _settings.r2_account_id and _settings.r2_bucket_name:
@@ -354,7 +378,8 @@ async def suggest_brand_assets(brand: dict, generate: list[str]) -> dict:
                 s3.put_object(Bucket=_settings.r2_bucket_name, Key=key, Body=png_bytes, ContentType="image/png")
                 logo_url = f"{_settings.r2_public_url}/{key}"
                 result["logo_url"] = logo_url
-                result["brand_generated"] = {"logo_url": logo_url, "logo_prompt": logo_prompt}
+                result["logo_source"] = "ai-generated"
+                result["brand_generated"] = {"logo_url": logo_url, "logo_prompt": logo_prompt, "logo_style": logo_style}
         except Exception as e:
             log.warning("Logo generation failed: %s", e)
 

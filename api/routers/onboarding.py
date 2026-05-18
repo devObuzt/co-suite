@@ -1,11 +1,14 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
+import uuid as _uuid
+import boto3 as _boto3
 from ..core.database import get_db
 from ..core.security import get_current_user
+from ..core.config import settings
 from ..models.user import User
 from ..models.suite import Suite, SuiteStatus
 from ..services.brand_ai import extract_brand_from_sources, suggest_brand_identity, suggest_brand_assets
@@ -42,6 +45,7 @@ class SaveBrandStepRequest(BaseModel):
 class GenerateBrandAssetsRequest(BaseModel):
     suite_id: str
     generate: list[str]  # ["logo", "colors", "fonts"]
+    logo_style: str = "icon_only"  # "icon_only" | "with_name" | "initials"
 
 
 @router.post("/extract-brand")
@@ -155,6 +159,76 @@ async def save_brand_step(
     return {"ok": True}
 
 
+@router.post("/upload-brand-asset")
+async def upload_brand_asset(
+    suite_id: str = Form(...),
+    asset_type: str = Form(...),   # "logo" | "font"
+    language: str = Form(default=""),  # language code for fonts (e.g. "ar", "en")
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a logo or font file to R2, save URL to brand."""
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+
+    if not settings.r2_account_id or not settings.r2_bucket_name:
+        raise HTTPException(status_code=400, detail="Storage not configured")
+
+    # Validate file type
+    filename = file.filename or "upload"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if asset_type == "logo" and ext not in ("png", "jpg", "jpeg", "svg", "webp"):
+        raise HTTPException(status_code=400, detail="Logo must be PNG, JPG, SVG, or WebP")
+    if asset_type == "font" and ext not in ("ttf", "otf", "woff", "woff2"):
+        raise HTTPException(status_code=400, detail="Font must be TTF, OTF, WOFF, or WOFF2")
+
+    content = await file.read()
+    key = f"{asset_type}s/{suite_id}/{_uuid.uuid4()}.{ext}"
+
+    content_types = {
+        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "svg": "image/svg+xml", "webp": "image/webp",
+        "ttf": "font/ttf", "otf": "font/otf",
+        "woff": "font/woff", "woff2": "font/woff2",
+    }
+
+    s3 = _boto3.client(
+        "s3",
+        endpoint_url=f"https://{settings.r2_account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=settings.r2_access_key_id,
+        aws_secret_access_key=settings.r2_secret_access_key,
+    )
+    s3.put_object(
+        Bucket=settings.r2_bucket_name,
+        Key=key,
+        Body=content,
+        ContentType=content_types.get(ext, "application/octet-stream"),
+    )
+    url = f"{settings.r2_public_url}/{key}"
+
+    brand = dict(suite.brand) if suite.brand else {}
+
+    if asset_type == "logo":
+        brand["logo_url"] = url
+        brand["logo_source"] = "uploaded"
+    elif asset_type == "font":
+        fonts_by_lang = dict(brand.get("fonts_by_language") or {})
+        lang_key = language or "all"
+        existing = fonts_by_lang.get(lang_key) or []
+        if isinstance(existing, list):
+            existing = existing + [{"name": filename.rsplit(".", 1)[0], "url": url, "format": ext}]
+        fonts_by_lang[lang_key] = existing
+        brand["fonts_by_language"] = fonts_by_lang
+
+    suite.brand = brand
+    await db.commit()
+    return {"url": url, "brand": brand}
+
+
 @router.post("/generate-brand-assets")
 async def generate_brand_assets_endpoint(
     data: GenerateBrandAssetsRequest,
@@ -167,6 +241,7 @@ async def generate_brand_assets_endpoint(
         raise HTTPException(status_code=404, detail="Suite not found")
 
     brand = dict(suite.brand) if suite.brand else {}
+    brand["logo_style"] = data.logo_style
     try:
         generated = await suggest_brand_assets(brand, data.generate)
     except Exception as e:
