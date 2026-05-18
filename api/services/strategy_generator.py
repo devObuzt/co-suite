@@ -5,15 +5,11 @@ import logging
 import re
 from typing import Optional
 
-import anthropic
-
 from ..core.config import settings
-from ..core.ai_client import make_async_anthropic
+from ..core.ai_client import call_claude
 from .multi_scraper import search_business
 
 log = logging.getLogger(__name__)
-
-_client = make_async_anthropic()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -241,14 +237,11 @@ async def generate_strategy(brand: dict) -> dict:
     is_ar = _is_arabic(brand)
     prompt = _build_strategy_prompt(brand, competitor_snippets, is_ar)
 
-    response = await _client.messages.create(
+    raw = await call_claude(
         model="claude-sonnet-4-6",
         max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
-    if not response.content:
-        raise ValueError("Anthropic returned an empty response content list")
-    raw = response.content[0].text
     data = _parse_json(raw)
 
     return {

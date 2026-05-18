@@ -4,10 +4,8 @@ import logging
 import re
 from typing import Optional
 
-import anthropic
-
 from ..core.config import settings
-from ..core.ai_client import make_async_anthropic
+from ..core.ai_client import call_claude
 from .multi_scraper import gather_all_sources
 
 log = logging.getLogger(__name__)
@@ -235,13 +233,11 @@ async def extract_brand_from_sources(
         name_hint=business_name or "(derive from the data)",
     )
 
-    client = make_async_anthropic()
-    message = await client.messages.create(
+    raw = await call_claude(
         model="claude-sonnet-4-6",
         max_tokens=2048,
         messages=[{"role": "user", "content": prompt}],
     )
-    raw = message.content[0].text
     return _parse_json(raw)
 
 
@@ -283,10 +279,9 @@ Return ONLY a valid JSON object matching this structure exactly:
   "missing_info": ["logo", "brand colors", "actual services list"]
 }}"""
 
-    client = make_async_anthropic()
-    message = await client.messages.create(
+    raw = await call_claude(
         model="claude-sonnet-4-6",
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
-    return _parse_json(message.content[0].text)
+    return _parse_json(raw)

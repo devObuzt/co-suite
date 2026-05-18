@@ -10,12 +10,11 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-import anthropic
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from ..core.config import settings
-from ..core.ai_client import make_sync_anthropic
+from ..core.ai_client import call_claude_sync
 from ..models.content import ContentPost, PostFormat, PostStatus
 from ..models.suite import Suite
 
@@ -119,16 +118,14 @@ def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None
         recent_ideas=recent_str,
     )
 
-    client = make_sync_anthropic()
     for attempt in range(3):
         try:
-            resp = client.messages.create(
+            raw = call_claude_sync(
                 model="claude-sonnet-4-6",
                 max_tokens=8000,
                 system=system,
                 messages=[{"role": "user", "content": user}],
             )
-            raw = "".join(b.text for b in resp.content if hasattr(b, "text"))
             data = json.loads(_strip_json_fences(raw))
             return data.get("posts", [])
         except json.JSONDecodeError as e:

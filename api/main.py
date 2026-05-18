@@ -78,19 +78,16 @@ async def debug_ai():
     except Exception as e:
         raw_err = str(e)
 
-    # Test 2: Anthropic SDK call via shared helper (HTTP/2 disabled)
+    # Test 2: requests-based Claude call
     sdk_result = ""
     sdk_err = ""
     try:
-        from .core.ai_client import make_async_anthropic
-        client = make_async_anthropic()
-        import asyncio as _aio
-        msg = await client.messages.create(
+        from .core.ai_client import call_claude
+        sdk_result = await call_claude(
             model="claude-haiku-4-5-20251001",
             max_tokens=10,
             messages=[{"role": "user", "content": "Say OK"}],
         )
-        sdk_result = msg.content[0].text
     except Exception as e:
         sdk_err = f"{type(e).__name__}: {e}"
 
