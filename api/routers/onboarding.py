@@ -8,7 +8,7 @@ from ..core.database import get_db
 from ..core.security import get_current_user
 from ..models.user import User
 from ..models.suite import Suite, SuiteStatus
-from ..services.brand_ai import extract_brand_from_sources, suggest_brand_identity
+from ..services.brand_ai import extract_brand_from_sources, suggest_brand_identity, suggest_brand_assets
 from ..services.strategy_generator import generate_strategy as _generate_strategy
 
 log = logging.getLogger(__name__)
@@ -31,6 +31,17 @@ class SaveBrandRequest(BaseModel):
 
 class GenerateStrategyRequest(BaseModel):
     suite_id: str
+
+
+class SaveBrandStepRequest(BaseModel):
+    suite_id: str
+    step: str  # "a" | "b" | "c" | "d" | "e" | "f" | "g"
+    data: dict
+
+
+class GenerateBrandAssetsRequest(BaseModel):
+    suite_id: str
+    generate: list[str]  # ["logo", "colors", "fonts"]
 
 
 @router.post("/extract-brand")
@@ -124,3 +135,45 @@ async def generate_strategy_endpoint(
     suite.strategy = strategy
     await db.commit()
     return {"strategy": strategy}
+
+
+@router.post("/save-brand-step")
+async def save_brand_step(
+    data: SaveBrandStepRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == data.suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+
+    brand = dict(suite.brand) if suite.brand else {}
+    brand.update(data.data)
+    suite.brand = brand
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/generate-brand-assets")
+async def generate_brand_assets_endpoint(
+    data: GenerateBrandAssetsRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == data.suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+
+    brand = dict(suite.brand) if suite.brand else {}
+    try:
+        generated = await suggest_brand_assets(brand, data.generate)
+    except Exception as e:
+        log.exception("Brand asset generation failed for suite %s", data.suite_id)
+        raise HTTPException(status_code=500, detail="Asset generation failed. Please try again.")
+
+    brand.update(generated)
+    suite.brand = brand
+    await db.commit()
+    return {"brand": brand, "generated": generated}

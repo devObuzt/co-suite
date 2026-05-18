@@ -285,3 +285,77 @@ Return ONLY a valid JSON object matching this structure exactly:
         messages=[{"role": "user", "content": prompt}],
     )
     return _parse_json(raw)
+
+
+async def suggest_brand_assets(brand: dict, generate: list[str]) -> dict:
+    """Generate missing brand elements (colors, fonts, logo) using AI."""
+    result = {}
+
+    if "colors" in generate:
+        prompt = (
+            f"Brand: {brand.get('name', 'Unknown')}, "
+            f"Industry: {brand.get('industry', '')}, "
+            f"Tone: {brand.get('tone', 'professional')}.\n"
+            "Suggest a professional color palette. "
+            "Return ONLY valid JSON: "
+            '{"primary":"#hex","secondary":"#hex","accent":"#hex","reasoning":"one sentence"}'
+        )
+        try:
+            raw = await call_claude("claude-haiku-4-5-20251001", 200, [{"role": "user", "content": prompt}])
+            palette = _parse_json(raw)
+            if palette.get("primary"):
+                result["color_palette"] = palette
+                result["colors"] = {
+                    "primary": palette.get("primary"),
+                    "secondary": palette.get("secondary"),
+                    "accent": palette.get("accent"),
+                    "source": "ai-generated",
+                }
+        except Exception as e:
+            log.warning("Color generation failed: %s", e)
+
+    if "fonts" in generate:
+        prompt = (
+            f"Brand: {brand.get('name', 'Unknown')}, "
+            f"Tone: {brand.get('tone', 'professional')}.\n"
+            "Suggest 2 Google Font names that fit this brand. "
+            'Return ONLY valid JSON: {"fonts":["FontName1","FontName2"]}'
+        )
+        try:
+            raw = await call_claude("claude-haiku-4-5-20251001", 100, [{"role": "user", "content": prompt}])
+            data = _parse_json(raw)
+            if data.get("fonts"):
+                result["font_suggestions"] = data["fonts"]
+                result["fonts"] = data["fonts"]
+        except Exception as e:
+            log.warning("Font generation failed: %s", e)
+
+    if "logo" in generate:
+        try:
+            from .content_generator import _generate_image
+            from ..core.config import settings as _settings
+            import boto3 as _boto3
+            import uuid as _uuid
+
+            logo_prompt = (
+                f"Minimalist professional logo for {brand.get('name', 'a business')}, "
+                f"{brand.get('industry', '')} company. "
+                "Clean vector style, simple geometric shapes, modern. White background. No text."
+            )
+            png_bytes = _generate_image(logo_prompt, "1:1")
+            if png_bytes and _settings.r2_account_id and _settings.r2_bucket_name:
+                s3 = _boto3.client(
+                    "s3",
+                    endpoint_url=f"https://{_settings.r2_account_id}.r2.cloudflarestorage.com",
+                    aws_access_key_id=_settings.r2_access_key_id,
+                    aws_secret_access_key=_settings.r2_secret_access_key,
+                )
+                key = f"logos/{_uuid.uuid4()}.png"
+                s3.put_object(Bucket=_settings.r2_bucket_name, Key=key, Body=png_bytes, ContentType="image/png")
+                logo_url = f"{_settings.r2_public_url}/{key}"
+                result["logo_url"] = logo_url
+                result["brand_generated"] = {"logo_url": logo_url, "logo_prompt": logo_prompt}
+        except Exception as e:
+            log.warning("Logo generation failed: %s", e)
+
+    return result
