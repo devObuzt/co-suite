@@ -5,10 +5,21 @@ import re
 from typing import Optional
 
 from ..core.config import settings
-from ..core.ai_client import call_claude
+from ..core.llm_client import call_text_ai
 from .multi_scraper import gather_all_sources
 
 log = logging.getLogger(__name__)
+
+LANGUAGE_NAMES = {
+    "ar": "Arabic, natural Palestinian/local business Arabic",
+    "he": "Hebrew",
+    "en": "English",
+    "ru": "Russian",
+    "fr": "French",
+    "es": "Spanish",
+    "tr": "Turkish",
+    "zh": "Chinese",
+}
 
 
 def _extract_json_object(text: str) -> str | None:
@@ -150,6 +161,13 @@ EXTRACTION_PROMPT = """You are a senior brand analyst and strategist. Your job i
 
 Be specific and factual — only state things that are actually supported by the data. Where data is missing, make a well-reasoned educated guess based on industry context, but mark it as "suggested".
 
+OUTPUT LANGUAGE:
+Write all user-facing values in {output_language}. This includes description, target_audience, tone, unique_value, how_they_help, esp, content_themes, competitors, missing_info, services, and products when translation is appropriate.
+Keep brand names, URLs, handles, hashtags, and proper nouns in their original form.
+Do not default to English unless the selected output language is English.
+If the output language is Arabic, use natural local business Arabic, not stiff formal Arabic.
+If the output language is Hebrew, use natural modern Hebrew suitable for business onboarding.
+
 GATHERED INTELLIGENCE:
 {context}
 
@@ -220,21 +238,32 @@ Rules:
 async def extract_brand_from_sources(
     urls: list[str],
     business_name: Optional[str] = None,
+    user_language: str = "en",
+    ai_provider: Optional[str] = None,
 ) -> dict:
     """Main entry point: gather from all URLs + search, then extract with Claude."""
     intel = await gather_all_sources(urls, business_name)
     context = _build_sources_context(intel)
 
     if not context.strip():
-        return await suggest_brand_identity(business_name or "Unknown Business", "", "")
+        return await suggest_brand_identity(
+            business_name or "Unknown Business",
+            "",
+            "",
+            user_language=user_language,
+            ai_provider=ai_provider,
+        )
 
     prompt = EXTRACTION_PROMPT.format(
         context=context,
         name_hint=business_name or "(derive from the data)",
+        output_language=LANGUAGE_NAMES.get(user_language, user_language or "English"),
     )
 
-    raw = await call_claude(
-        model="claude-sonnet-4-6",
+    provider = (ai_provider or settings.ai_text_provider or "anthropic").strip().lower()
+    raw = await call_text_ai(
+        provider=provider,
+        model=settings.openai_text_model if provider == "openai" else settings.anthropic_text_model,
         max_tokens=2048,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -246,13 +275,20 @@ async def extract_brand_from_url(url: str, business_name: Optional[str] = None) 
     return await extract_brand_from_sources([url], business_name)
 
 
-async def suggest_brand_identity(business_name: str, industry: str, description: str) -> dict:
+async def suggest_brand_identity(
+    business_name: str,
+    industry: str,
+    description: str,
+    user_language: str = "en",
+    ai_provider: Optional[str] = None,
+) -> dict:
     """When no URLs are provided, AI suggests brand identity from scratch."""
     prompt = f"""You are a brand strategist. Suggest a complete brand identity for this business.
 
 Business name: {business_name}
 Industry: {industry}
 Description: {description}
+Output language for all user-facing values: {LANGUAGE_NAMES.get(user_language, user_language or "English")}
 
 Return ONLY a valid JSON object matching this structure exactly:
 {{
@@ -279,8 +315,10 @@ Return ONLY a valid JSON object matching this structure exactly:
   "missing_info": ["logo", "brand colors", "actual services list"]
 }}"""
 
-    raw = await call_claude(
-        model="claude-sonnet-4-6",
+    provider = (ai_provider or settings.ai_text_provider or "anthropic").strip().lower()
+    raw = await call_text_ai(
+        provider=provider,
+        model=settings.openai_text_model if provider == "openai" else settings.anthropic_text_model,
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -301,7 +339,12 @@ async def suggest_brand_assets(brand: dict, generate: list[str], user_language: 
             '{"primary":"#hex","secondary":"#hex","accent":"#hex","reasoning":"one sentence"}'
         )
         try:
-            raw = await call_claude("claude-haiku-4-5-20251001", 200, [{"role": "user", "content": prompt}])
+            raw = await call_text_ai(
+                provider=settings.ai_text_provider,
+                model=settings.openai_fast_model if settings.ai_text_provider == "openai" else settings.anthropic_fast_model,
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}],
+            )
             palette = _parse_json(raw)
             if palette.get("primary"):
                 result["color_palette"] = palette
@@ -328,7 +371,12 @@ async def suggest_brand_assets(brand: dict, generate: list[str], user_language: 
             'Return ONLY valid JSON: {"fonts":["FontName1","FontName2"]}'
         )
         try:
-            raw = await call_claude("claude-haiku-4-5-20251001", 100, [{"role": "user", "content": prompt}])
+            raw = await call_text_ai(
+                provider=settings.ai_text_provider,
+                model=settings.openai_fast_model if settings.ai_text_provider == "openai" else settings.anthropic_fast_model,
+                max_tokens=100,
+                messages=[{"role": "user", "content": prompt}],
+            )
             data = _parse_json(raw)
             if data.get("fonts"):
                 result["font_suggestions"] = data["fonts"]

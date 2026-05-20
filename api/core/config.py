@@ -29,8 +29,15 @@ class Settings(BaseSettings):
 
     # AI Keys
     anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    ai_text_provider: str = "anthropic"  # anthropic | openai
+    anthropic_text_model: str = "claude-sonnet-4-6"
+    anthropic_fast_model: str = "claude-haiku-4-5-20251001"
+    openai_text_model: str = "gpt-5.1"
+    openai_fast_model: str = "gpt-4.1"
     google_api_key: str = ""
     google_image_model: str = "gemini-3.1-flash-preview-image-generation"
+    openai_image_model: str = "gpt-image-1.5"
 
     # Cloudflare R2
     r2_account_id: str = ""

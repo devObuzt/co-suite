@@ -25,6 +25,8 @@ class ExtractBrandRequest(BaseModel):
     business_name: Optional[str] = None
     industry: Optional[str] = None
     description: Optional[str] = None
+    user_language: str = "en"
+    ai_provider: Optional[str] = None  # "anthropic" | "openai"; defaults to env
 
 
 class SaveBrandRequest(BaseModel):
@@ -53,9 +55,11 @@ class GenerateBrandAssetsRequest(BaseModel):
 TRANSLATE_LANG_NAMES = {
     "ar": "Arabic (natural Palestinian dialect)",
     "he": "Hebrew",
+    "ru": "Russian",
     "fr": "French",
     "es": "Spanish",
     "tr": "Turkish",
+    "zh": "Chinese",
 }
 
 
@@ -82,12 +86,19 @@ async def extract_brand(
 
     try:
         if urls:
-            brand = await extract_brand_from_sources(urls, data.business_name)
+            brand = await extract_brand_from_sources(
+                urls,
+                data.business_name,
+                user_language=data.user_language,
+                ai_provider=data.ai_provider,
+            )
         elif data.business_name and data.industry:
             brand = await suggest_brand_identity(
                 data.business_name,
                 data.industry,
                 data.description or "",
+                user_language=data.user_language,
+                ai_provider=data.ai_provider,
             )
         else:
             raise HTTPException(
@@ -313,10 +324,13 @@ async def translate_brand_fields(data: TranslateBrandFieldsRequest):
     )
 
     try:
-        from ..core.ai_client import call_claude
+        from ..core.llm_client import call_text_ai
+        from ..core.config import settings
         from ..services.brand_ai import _parse_json
-        raw = await call_claude(
-            model="claude-haiku-4-5-20251001",
+        provider = (settings.ai_text_provider or "anthropic").strip().lower()
+        raw = await call_text_ai(
+            provider=provider,
+            model=settings.openai_fast_model if provider == "openai" else settings.anthropic_fast_model,
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
