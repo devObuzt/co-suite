@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel
 from typing import Optional
 
@@ -62,9 +63,10 @@ async def meta_callback(
         raise HTTPException(status_code=400, detail=f"Meta OAuth failed: {e}")
 
     # Store user token temporarily on suite (will be replaced by page token on selection)
-    connections = suite.connections or {}
+    connections = dict(suite.connections or {})
     connections["meta_user_token"] = long_token
     suite.connections = connections
+    flag_modified(suite, "connections")
     await db.commit()
 
     return {"pages": pages}
@@ -79,7 +81,7 @@ async def meta_select_page(
     """After the user picks a Facebook Page, store its access token + IG info."""
     suite = await _get_suite(data.suite_id, current_user, db)
 
-    connections = suite.connections or {}
+    connections = dict(suite.connections or {})
     connections["facebook"] = {
         "connected": True,
         "page_id": data.page_id,
@@ -96,6 +98,7 @@ async def meta_select_page(
     # Clean up temp user token
     connections.pop("meta_user_token", None)
     suite.connections = connections
+    flag_modified(suite, "connections")
     await db.commit()
 
     return {"ok": True, "connections": _safe_connections(connections)}
@@ -111,11 +114,12 @@ async def disconnect(
     db: AsyncSession = Depends(get_db),
 ):
     suite = await _get_suite(suite_id, current_user, db)
-    connections = suite.connections or {}
+    connections = dict(suite.connections or {})
     connections.pop(platform, None)
     if platform == "facebook":
         connections.pop("instagram", None)
     suite.connections = connections
+    flag_modified(suite, "connections")
     await db.commit()
     return {"ok": True}
 
