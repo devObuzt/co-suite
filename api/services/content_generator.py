@@ -182,8 +182,40 @@ def _generate_image(prompt: str, aspect_ratio: str = "1:1") -> Optional[bytes]:
 
 
 def _save_image(image_bytes: bytes, post_id: str, slide_idx: int = 0) -> str:
-    """Save image bytes to static dir. Returns relative URL."""
+    """Store image bytes and return a URL.
+
+    In production, prefer R2 so generated media survives Railway redeploys and
+    Meta can fetch it over public HTTPS. Local /static paths are only a fallback.
+    """
     filename = f"{post_id}_{slide_idx}.png"
+    if (
+        settings.r2_account_id
+        and settings.r2_access_key_id
+        and settings.r2_secret_access_key
+        and settings.r2_bucket_name
+        and settings.r2_public_url
+    ):
+        try:
+            import boto3
+
+            key = f"posts/{filename}"
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=f"https://{settings.r2_account_id}.r2.cloudflarestorage.com",
+                aws_access_key_id=settings.r2_access_key_id,
+                aws_secret_access_key=settings.r2_secret_access_key,
+                region_name="auto",
+            )
+            s3.put_object(
+                Bucket=settings.r2_bucket_name,
+                Key=key,
+                Body=image_bytes,
+                ContentType="image/png",
+            )
+            return f"{settings.r2_public_url.rstrip('/')}/{key}"
+        except Exception as e:
+            log.warning("R2 image upload failed, falling back to local static file: %s", e)
+
     path = STATIC_DIR / filename
     path.write_bytes(image_bytes)
     return f"/static/posts/{filename}"
