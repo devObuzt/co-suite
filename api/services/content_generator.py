@@ -254,6 +254,7 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
     if await is_frozen(suite_id, db):
         log.warning("Suite %s is frozen — skipping generation", suite_id)
         return []
+    await db.commit()
 
     log.info("Generating %d ideas for suite %s…", count, suite_id)
     audience_languages = brand.get("audience_languages") or ["ar"]
@@ -268,17 +269,40 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
         all_ideas.extend(lang_ideas)
     ideas = all_ideas
 
-    # Record LLM cost
-    await record_usage(suite_id, "llm_idea_gen", COSTS["llm_idea_gen"] * count, db)
-
+    image_count = 0
     for idea in ideas:
         fmt_str = idea.get("format", "image")
         fmt = PostFormat.carousel if fmt_str == "carousel" else (
             PostFormat.video if fmt_str == "video" else PostFormat.image
         )
+        post_id = str(uuid.uuid4())
+        media_urls: list[str] = []
+
+        # Generate image(s) before opening a DB transaction. Image generation can
+        # take a while; holding a DB connection here exhausts Railway's pool.
+        try:
+            if fmt == PostFormat.image:
+                img_prompt = idea.get("image_prompt", "")
+                if img_prompt:
+                    img_bytes = _generate_image(img_prompt, idea.get("aspect_ratio", "1:1"))
+                    if img_bytes:
+                        media_urls = [_save_image(img_bytes, post_id, 0)]
+                        image_count += 1
+
+            elif fmt == PostFormat.carousel:
+                slides = idea.get("carousel_slides", [])
+                for i, slide in enumerate(slides):
+                    slide_prompt = slide.get("image_prompt", "")
+                    if slide_prompt:
+                        img_bytes = _generate_image(slide_prompt, "1:1")
+                        if img_bytes:
+                            media_urls.append(_save_image(img_bytes, post_id, i))
+                            image_count += 1
+        except Exception as e:
+            log.warning("Media generation for post %s failed: %s", post_id, e)
 
         post = ContentPost(
-            id=str(uuid.uuid4()),
+            id=post_id,
             suite_id=suite_id,
             format=fmt,
             status=PostStatus.pending,
@@ -286,38 +310,14 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
             caption=idea.get("caption"),
             hashtags=idea.get("hashtags", []),
             ai_metadata=idea,
-            media_urls=[],
+            media_urls=media_urls,
         )
         db.add(post)
-        await db.flush()
         post_ids.append(post.id)
 
-        # Generate image(s)
-        try:
-            if fmt == PostFormat.image:
-                img_prompt = idea.get("image_prompt", "")
-                if img_prompt:
-                    img_bytes = _generate_image(img_prompt, idea.get("aspect_ratio", "1:1"))
-                    if img_bytes:
-                        url = _save_image(img_bytes, post.id, 0)
-                        post.media_urls = [url]
-                        await record_usage(suite_id, "image_gen", COSTS["image_gen"], db)
-
-            elif fmt == PostFormat.carousel:
-                slides = idea.get("carousel_slides", [])
-                urls = []
-                for i, slide in enumerate(slides):
-                    slide_prompt = slide.get("image_prompt", "")
-                    if slide_prompt:
-                        img_bytes = _generate_image(slide_prompt, "1:1")
-                        if img_bytes:
-                            urls.append(_save_image(img_bytes, post.id, i))
-                            await record_usage(suite_id, "image_gen", COSTS["image_gen"], db)
-                if urls:
-                    post.media_urls = urls
-        except Exception as e:
-            log.warning("Media generation for post %s failed: %s", post.id, e)
-
     await db.commit()
+    await record_usage(suite_id, "llm_idea_gen", COSTS["llm_idea_gen"] * count, db)
+    if image_count:
+        await record_usage(suite_id, "image_gen", COSTS["image_gen"] * image_count, db)
     log.info("Created %d posts for suite %s", len(post_ids), suite_id)
     return post_ids

@@ -27,4 +27,7 @@ async def get_analytics(
     if not connections.get("facebook") and not connections.get("instagram"):
         return {"error": "no_connections", "facebook": {}, "instagram": {}, "days": days}
 
+    connections = dict(connections)
+    await db.close()
+
     return await fetch_suite_analytics(connections, days=days)
