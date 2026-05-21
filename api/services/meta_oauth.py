@@ -14,6 +14,7 @@ META_SCOPES = [
     "instagram_content_publish",
     "instagram_manage_insights",
     "ads_read",
+    "ads_management",
     "business_management",
     "public_profile",
     "email",
@@ -74,6 +75,21 @@ async def get_user_pages(user_token: str) -> list[dict]:
             params={
                 "access_token": user_token,
                 "fields": "id,name,access_token,instagram_business_account{id,name,username,profile_picture_url}",
+            },
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", [])
+
+
+async def get_ad_accounts(user_token: str) -> list[dict]:
+    """Get ad accounts the user can access."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{GRAPH}/me/adaccounts",
+            params={
+                "access_token": user_token,
+                "fields": "id,account_id,name,account_status,currency,timezone_name,business{name}",
+                "limit": 100,
             },
         )
         resp.raise_for_status()

@@ -11,7 +11,7 @@ from ..core.security import get_current_user
 from ..models.user import User
 from ..models.suite import Suite
 from ..services.meta_oauth import (
-    get_oauth_url, exchange_code, get_long_lived_token, get_user_pages, verify_token
+    get_oauth_url, exchange_code, get_long_lived_token, get_user_pages, get_ad_accounts, verify_token
 )
 
 router = APIRouter(prefix="/connections", tags=["connections"])
@@ -43,6 +43,9 @@ class PageSelection(BaseModel):
     page_access_token: str
     ig_user_id: Optional[str] = None
     ig_username: Optional[str] = None
+    ad_account_id: Optional[str] = None
+    ad_account_name: Optional[str] = None
+    ad_account_currency: Optional[str] = None
 
 
 @router.post("/meta/callback")
@@ -59,6 +62,7 @@ async def meta_callback(
         short_token = token_data["access_token"]
         long_token = await get_long_lived_token(short_token)
         pages = await get_user_pages(long_token)
+        ad_accounts = await get_ad_accounts(long_token)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Meta OAuth failed: {e}")
 
@@ -69,7 +73,7 @@ async def meta_callback(
     flag_modified(suite, "connections")
     await db.commit()
 
-    return {"pages": pages}
+    return {"pages": pages, "ad_accounts": ad_accounts}
 
 
 @router.post("/meta/select-page")
@@ -94,6 +98,13 @@ async def meta_select_page(
             "ig_user_id": data.ig_user_id,
             "username": data.ig_username,
             "page_access_token": data.page_access_token,
+        }
+    if data.ad_account_id:
+        connections["meta_ads"] = {
+            "connected": True,
+            "ad_account_id": data.ad_account_id,
+            "ad_account_name": data.ad_account_name,
+            "currency": data.ad_account_currency,
         }
     # Clean up temp user token
     connections.pop("meta_user_token", None)
