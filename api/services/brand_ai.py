@@ -10,6 +10,8 @@ from .multi_scraper import gather_all_sources
 
 log = logging.getLogger(__name__)
 
+ONBOARDING_AI_PROVIDER = "openai"
+
 LANGUAGE_NAMES = {
     "ar": "Arabic, natural Palestinian/local business Arabic",
     "he": "Hebrew",
@@ -73,7 +75,7 @@ def _parse_json(raw: str) -> dict:
 
 
 def _build_sources_context(intel: dict) -> str:
-    """Format the gathered intelligence into a readable block for Claude."""
+    """Format the gathered intelligence into a readable block for onboarding AI."""
     lines = []
 
     for src in intel.get("sources", []):
@@ -241,7 +243,7 @@ async def extract_brand_from_sources(
     user_language: str = "en",
     ai_provider: Optional[str] = None,
 ) -> dict:
-    """Main entry point: gather from all URLs + search, then extract with Claude."""
+    """Main entry point: gather from all URLs + search, then extract with OpenAI."""
     intel = await gather_all_sources(urls, business_name)
     context = _build_sources_context(intel)
 
@@ -260,10 +262,10 @@ async def extract_brand_from_sources(
         output_language=LANGUAGE_NAMES.get(user_language, user_language or "English"),
     )
 
-    provider = (ai_provider or settings.ai_text_provider or "anthropic").strip().lower()
+    provider = ONBOARDING_AI_PROVIDER
     raw = await call_text_ai(
         provider=provider,
-        model=settings.openai_text_model if provider == "openai" else settings.anthropic_text_model,
+        model=settings.openai_text_model,
         max_tokens=2048,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -315,10 +317,10 @@ Return ONLY a valid JSON object matching this structure exactly:
   "missing_info": ["logo", "brand colors", "actual services list"]
 }}"""
 
-    provider = (ai_provider or settings.ai_text_provider or "anthropic").strip().lower()
+    provider = ONBOARDING_AI_PROVIDER
     raw = await call_text_ai(
         provider=provider,
-        model=settings.openai_text_model if provider == "openai" else settings.anthropic_text_model,
+        model=settings.openai_text_model,
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -340,8 +342,8 @@ async def suggest_brand_assets(brand: dict, generate: list[str], user_language: 
         )
         try:
             raw = await call_text_ai(
-                provider=settings.ai_text_provider,
-                model=settings.openai_fast_model if settings.ai_text_provider == "openai" else settings.anthropic_fast_model,
+                provider=ONBOARDING_AI_PROVIDER,
+                model=settings.openai_fast_model,
                 max_tokens=200,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -372,8 +374,8 @@ async def suggest_brand_assets(brand: dict, generate: list[str], user_language: 
         )
         try:
             raw = await call_text_ai(
-                provider=settings.ai_text_provider,
-                model=settings.openai_fast_model if settings.ai_text_provider == "openai" else settings.anthropic_fast_model,
+                provider=ONBOARDING_AI_PROVIDER,
+                model=settings.openai_fast_model,
                 max_tokens=100,
                 messages=[{"role": "user", "content": prompt}],
             )

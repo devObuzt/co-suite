@@ -3,13 +3,14 @@ import asyncio
 import json
 import logging
 import re
-from typing import Optional
 
 from ..core.config import settings
-from ..core.ai_client import call_claude
+from ..core.llm_client import call_text_ai
 from .multi_scraper import search_business
 
 log = logging.getLogger(__name__)
+
+ONBOARDING_AI_PROVIDER = "openai"
 
 LANG_NAMES = {
     "ar": "Arabic (Palestinian dialect, natural and professional)",
@@ -264,8 +265,9 @@ async def generate_strategy(brand: dict, user_language: str = "en") -> dict:
     is_ar = output_lang == "ar"
     prompt = _build_strategy_prompt(brand, competitor_snippets, is_ar, output_lang)
 
-    raw = await call_claude(
-        model="claude-sonnet-4-6",
+    raw = await call_text_ai(
+        provider=ONBOARDING_AI_PROVIDER,
+        model=settings.openai_text_model,
         max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )

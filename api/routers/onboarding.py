@@ -26,7 +26,7 @@ class ExtractBrandRequest(BaseModel):
     industry: Optional[str] = None
     description: Optional[str] = None
     user_language: str = "en"
-    ai_provider: Optional[str] = None  # "anthropic" | "openai"; defaults to env
+    ai_provider: Optional[str] = None  # deprecated; onboarding now always uses OpenAI
 
 
 class SaveBrandRequest(BaseModel):
@@ -327,10 +327,9 @@ async def translate_brand_fields(data: TranslateBrandFieldsRequest):
         from ..core.llm_client import call_text_ai
         from ..core.config import settings
         from ..services.brand_ai import _parse_json
-        provider = (settings.ai_text_provider or "anthropic").strip().lower()
         raw = await call_text_ai(
-            provider=provider,
-            model=settings.openai_fast_model if provider == "openai" else settings.anthropic_fast_model,
+            provider="openai",
+            model=settings.openai_fast_model,
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
