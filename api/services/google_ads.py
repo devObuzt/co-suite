@@ -17,9 +17,21 @@ def _redirect_uri() -> str:
     return f"{settings.frontend_url}/connections/google/callback"
 
 
+def _missing_google_ads_config() -> list[str]:
+    required = {
+        "GOOGLE_ADS_CLIENT_ID": settings.google_ads_client_id,
+        "GOOGLE_ADS_CLIENT_SECRET": settings.google_ads_client_secret,
+        "GOOGLE_ADS_DEVELOPER_TOKEN": settings.google_ads_developer_token,
+    }
+    return [name for name, value in required.items() if not value]
+
+
 def get_google_ads_oauth_url(suite_id: str) -> str:
-    if not settings.google_ads_client_id:
-        raise RuntimeError("GOOGLE_ADS_CLIENT_ID is missing")
+    missing = _missing_google_ads_config()
+    if missing:
+        raise RuntimeError("Missing Google Ads configuration: " + ", ".join(missing))
+    if not settings.frontend_url.startswith("https://"):
+        raise RuntimeError("FRONTEND_URL must be the public HTTPS web domain for Google Ads OAuth.")
 
     from urllib.parse import urlencode
 
