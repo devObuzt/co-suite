@@ -19,8 +19,8 @@ def _env(key: str, default: str | None = None, required: bool = False) -> str:
 # API keys
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY", required=True)
 GOOGLE_API_KEY = _env("GOOGLE_API_KEY", required=True)
-TELEGRAM_BOT_TOKEN = _env("TELEGRAM_BOT_TOKEN", required=True)
-TELEGRAM_CHAT_ID = _env("TELEGRAM_CHAT_ID", required=True)
+TELEGRAM_BOT_TOKEN = _env("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = _env("TELEGRAM_CHAT_ID")
 
 # Cloudflare R2 (optional — required only for social publishing)
 R2_ACCOUNT_ID = _env("R2_ACCOUNT_ID")
