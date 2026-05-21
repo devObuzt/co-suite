@@ -43,15 +43,13 @@ async def fetch_fb_page_summary(page_id: str, token: str) -> dict:
 
 
 async def fetch_fb_insights(page_id: str, token: str, days: int = 28) -> dict:
-    """Reach, impressions, engaged users over the last `days` days."""
+    """Page reach and engagement over the last `days` days."""
     until = datetime.now(timezone.utc)
     since = until - timedelta(days=days)
 
     metrics = [
-        "page_impressions",
         "page_impressions_unique",
         "page_post_engagements",
-        "page_fan_adds",
     ]
     result: dict = {}
     errors = []
@@ -128,13 +126,15 @@ async def fetch_ig_summary(ig_user_id: str, token: str) -> dict:
 
 
 async def fetch_ig_insights(ig_user_id: str, token: str, days: int = 28) -> dict:
-    """Reach, impressions over the last `days` days."""
+    """Instagram reach and total-value metrics over the last `days` days."""
     until = datetime.now(timezone.utc)
     since = until - timedelta(days=days)
+    result: dict = {}
+    errors = []
 
     try:
         data = await _get(f"{ig_user_id}/insights", {
-            "metric": "views,reach,profile_views,follower_count",
+            "metric": "reach,follower_count",
             "period": "day",
             "since": int(since.timestamp()),
             "until": int(until.timestamp()),
@@ -146,10 +146,33 @@ async def fetch_ig_insights(ig_user_id: str, token: str, days: int = 28) -> dict
             values = [{"date": v["end_time"][:10], "value": v["value"]}
                       for v in item.get("values", [])]
             result[name] = values
-        return result
     except Exception as e:
-        log.warning("IG insights failed: %s", e)
-        return {"error": str(e)}
+        log.warning("IG daily insights failed: %s", e)
+        errors.append(f"daily: {e}")
+
+    try:
+        data = await _get(f"{ig_user_id}/insights", {
+            "metric": "views,profile_views",
+            "metric_type": "total_value",
+            "period": "day",
+            "since": int(since.timestamp()),
+            "until": int(until.timestamp()),
+            "access_token": token,
+        })
+        today = until.date().isoformat()
+        for item in data.get("data", []):
+            name = item["name"]
+            value = (item.get("total_value") or {}).get("value", 0)
+            result[name] = [{"date": today, "value": value}]
+    except Exception as e:
+        log.warning("IG total insights failed: %s", e)
+        errors.append(f"total: {e}")
+
+    if errors and not result:
+        return {"error": "; ".join(errors)}
+    if errors:
+        result["warnings"] = errors
+    return result
 
 
 async def fetch_ig_recent_media(ig_user_id: str, token: str, limit: int = 9) -> list[dict]:
@@ -220,6 +243,8 @@ async def fetch_suite_analytics(connections: dict, days: int = 28) -> dict:
             errors.append(f"Instagram summary: {summary.pop('error')}")
         if insights.get("error"):
             errors.append(f"Instagram insights: {insights.pop('error')}")
+        for warning in insights.pop("warnings", []):
+            errors.append(f"Instagram insight warning: {warning}")
         result["errors"].extend(errors)
         result["instagram"] = {**summary, "insights": insights, "recent_media": media}
 
