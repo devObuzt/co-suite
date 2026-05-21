@@ -14,6 +14,12 @@ from ..services.meta_oauth import (
     get_oauth_url, exchange_code, get_long_lived_token, get_user_pages, get_ad_accounts, verify_token
 )
 from ..services.meta_ads_manager import fetch_campaigns
+from ..services.google_ads import (
+    get_google_ads_oauth_url,
+    exchange_google_ads_code,
+    list_accessible_customers,
+    fetch_google_ads_campaigns,
+)
 
 router = APIRouter(prefix="/connections", tags=["connections"])
 
@@ -47,6 +53,12 @@ class PageSelection(BaseModel):
     ad_account_id: Optional[str] = None
     ad_account_name: Optional[str] = None
     ad_account_currency: Optional[str] = None
+
+
+class GoogleCustomerSelection(BaseModel):
+    suite_id: str
+    customer_id: str
+    customer_name: Optional[str] = None
 
 
 @router.post("/meta/callback")
@@ -117,6 +129,71 @@ async def meta_select_page(
     return {"ok": True, "connections": _safe_connections(connections)}
 
 
+@router.get("/{suite_id}/google/auth-url")
+async def google_auth_url(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_suite(suite_id, current_user, db)
+    try:
+        return {"url": get_google_ads_oauth_url(suite.id)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/google/callback")
+async def google_callback(
+    data: CallbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_suite(data.suite_id, current_user, db)
+    try:
+        token_data = await exchange_google_ads_code(data.code)
+        refresh_token = token_data.get("refresh_token")
+        access_token = token_data.get("access_token")
+        if not refresh_token:
+            raise RuntimeError("Google did not return a refresh token. Reconnect and approve offline access.")
+        customers = await list_accessible_customers(access_token)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Google Ads OAuth failed: {e}")
+
+    connections = dict(suite.connections or {})
+    connections["google_ads_pending"] = {"refresh_token": refresh_token}
+    suite.connections = connections
+    flag_modified(suite, "connections")
+    await db.commit()
+
+    return {"customers": customers}
+
+
+@router.post("/google/select-customer")
+async def google_select_customer(
+    data: GoogleCustomerSelection,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_suite(data.suite_id, current_user, db)
+    connections = dict(suite.connections or {})
+    pending = connections.get("google_ads_pending") or {}
+    refresh_token = pending.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Google Ads OAuth session expired. Connect again.")
+
+    connections["google_ads"] = {
+        "connected": True,
+        "customer_id": data.customer_id.replace("-", ""),
+        "customer_name": data.customer_name or data.customer_id,
+        "refresh_token": refresh_token,
+    }
+    connections.pop("google_ads_pending", None)
+    suite.connections = connections
+    flag_modified(suite, "connections")
+    await db.commit()
+    return {"ok": True, "connections": _safe_connections(connections)}
+
+
 # ── Disconnect ────────────────────────────────────────────────────────────────
 
 @router.delete("/{suite_id}/{platform}")
@@ -131,6 +208,9 @@ async def disconnect(
     connections.pop(platform, None)
     if platform == "facebook":
         connections.pop("instagram", None)
+        connections.pop("meta_ads", None)
+    if platform == "google_ads":
+        connections.pop("google_ads_pending", None)
     suite.connections = connections
     flag_modified(suite, "connections")
     await db.commit()
@@ -163,6 +243,23 @@ async def meta_campaigns(
     return await fetch_campaigns(
         meta_ads.get("ad_account_id", ""),
         meta_ads.get("user_access_token", ""),
+    )
+
+
+@router.get("/{suite_id}/google/campaigns")
+async def google_campaigns(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_suite(suite_id, current_user, db)
+    connections = dict(suite.connections or {})
+    google_ads = connections.get("google_ads") or {}
+    await db.close()
+
+    return await fetch_google_ads_campaigns(
+        google_ads.get("customer_id", ""),
+        google_ads.get("refresh_token", ""),
     )
 
 

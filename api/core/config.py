@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     google_image_model: str = "gemini-3.1-flash-preview-image-generation"
     openai_image_model: str = "gpt-image-1.5"
+    google_ads_developer_token: str = ""
+    google_ads_client_id: str = ""
+    google_ads_client_secret: str = ""
+    google_ads_login_customer_id: str = ""
 
     # Cloudflare R2
     r2_account_id: str = ""
