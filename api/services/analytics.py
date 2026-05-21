@@ -1,5 +1,6 @@
 """Fetch analytics from Facebook Page and Instagram Business via Graph API."""
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -12,8 +13,15 @@ GRAPH = "https://graph.facebook.com/v22.0"
 async def _get(path: str, params: dict) -> dict:
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.get(f"{GRAPH}/{path}", params=params)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            body = _sanitize_meta_error(resp.text)
+            raise RuntimeError(f"Meta API {path} [{resp.status_code}]: {body}")
         return resp.json()
+
+
+def _sanitize_meta_error(text: str) -> str:
+    """Keep Meta's useful error body but never log access tokens."""
+    return re.sub(r'"access_token"\s*:\s*"[^"]+"', '"access_token":"[redacted]"', text)
 
 
 # ── Facebook Page ─────────────────────────────────────────────────────────────
@@ -22,17 +30,16 @@ async def fetch_fb_page_summary(page_id: str, token: str) -> dict:
     """Basic page info: name, fan count."""
     try:
         data = await _get(page_id, {
-            "fields": "name,fan_count,followers_count",
+            "fields": "name,followers_count",
             "access_token": token,
         })
         return {
             "name": data.get("name"),
-            "fans": data.get("fan_count", 0),
             "followers": data.get("followers_count", 0),
         }
     except Exception as e:
         log.warning("FB page summary failed: %s", e)
-        return {}
+        return {"error": str(e)}
 
 
 async def fetch_fb_insights(page_id: str, token: str, days: int = 28) -> dict:
@@ -41,10 +48,7 @@ async def fetch_fb_insights(page_id: str, token: str, days: int = 28) -> dict:
     since = until - timedelta(days=days)
 
     metrics = [
-        "page_impressions",
-        "page_reach",
-        "page_engaged_users",
-        "page_fan_adds",
+        "views",
     ]
     try:
         data = await _get(f"{page_id}/insights", {
@@ -63,7 +67,7 @@ async def fetch_fb_insights(page_id: str, token: str, days: int = 28) -> dict:
         return result
     except Exception as e:
         log.warning("FB insights failed: %s", e)
-        return {}
+        return {"error": str(e)}
 
 
 async def fetch_fb_recent_posts(page_id: str, token: str, limit: int = 10) -> list[dict]:
@@ -108,7 +112,7 @@ async def fetch_ig_summary(ig_user_id: str, token: str) -> dict:
         }
     except Exception as e:
         log.warning("IG summary failed: %s", e)
-        return {}
+        return {"error": str(e)}
 
 
 async def fetch_ig_insights(ig_user_id: str, token: str, days: int = 28) -> dict:
@@ -118,7 +122,7 @@ async def fetch_ig_insights(ig_user_id: str, token: str, days: int = 28) -> dict
 
     try:
         data = await _get(f"{ig_user_id}/insights", {
-            "metric": "impressions,reach,profile_views,follower_count",
+            "metric": "views,reach,profile_views,follower_count",
             "period": "day",
             "since": int(since.timestamp()),
             "until": int(until.timestamp()),
@@ -133,7 +137,7 @@ async def fetch_ig_insights(ig_user_id: str, token: str, days: int = 28) -> dict
         return result
     except Exception as e:
         log.warning("IG insights failed: %s", e)
-        return {}
+        return {"error": str(e)}
 
 
 async def fetch_ig_recent_media(ig_user_id: str, token: str, limit: int = 9) -> list[dict]:
@@ -166,7 +170,7 @@ async def fetch_ig_recent_media(ig_user_id: str, token: str, limit: int = 9) -> 
 
 async def fetch_suite_analytics(connections: dict, days: int = 28) -> dict:
     """Top-level: gather all analytics for a suite from its connections."""
-    result: dict = {"facebook": {}, "instagram": {}, "days": days}
+    result: dict = {"facebook": {}, "instagram": {}, "days": days, "errors": []}
 
     fb = connections.get("facebook", {})
     ig = connections.get("instagram", {})
@@ -183,6 +187,12 @@ async def fetch_suite_analytics(connections: dict, days: int = 28) -> dict:
             fetch_fb_insights(page_id, page_token, days),
             fetch_fb_recent_posts(page_id, page_token),
         )
+        errors = []
+        if summary.get("error"):
+            errors.append(f"Facebook summary: {summary.pop('error')}")
+        if insights.get("error"):
+            errors.append(f"Facebook insights: {insights.pop('error')}")
+        result["errors"].extend(errors)
         result["facebook"] = {**summary, "insights": insights, "recent_posts": posts}
 
     if ig_user_id and ig_token:
@@ -191,6 +201,12 @@ async def fetch_suite_analytics(connections: dict, days: int = 28) -> dict:
             fetch_ig_insights(ig_user_id, ig_token, days),
             fetch_ig_recent_media(ig_user_id, ig_token),
         )
+        errors = []
+        if summary.get("error"):
+            errors.append(f"Instagram summary: {summary.pop('error')}")
+        if insights.get("error"):
+            errors.append(f"Instagram insights: {insights.pop('error')}")
+        result["errors"].extend(errors)
         result["instagram"] = {**summary, "insights": insights, "recent_media": media}
 
     return result
