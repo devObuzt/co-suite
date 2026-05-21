@@ -48,26 +48,38 @@ async def fetch_fb_insights(page_id: str, token: str, days: int = 28) -> dict:
     since = until - timedelta(days=days)
 
     metrics = [
-        "views",
+        "page_impressions",
+        "page_impressions_unique",
+        "page_post_engagements",
+        "page_fan_adds",
     ]
-    try:
-        data = await _get(f"{page_id}/insights", {
-            "metric": ",".join(metrics),
-            "period": "day",
-            "since": int(since.timestamp()),
-            "until": int(until.timestamp()),
-            "access_token": token,
-        })
-        result: dict = {}
-        for item in data.get("data", []):
-            name = item["name"]
-            values = [{"date": v["end_time"][:10], "value": v["value"]}
-                      for v in item.get("values", [])]
-            result[name] = values
-        return result
-    except Exception as e:
-        log.warning("FB insights failed: %s", e)
-        return {"error": str(e)}
+    result: dict = {}
+    errors = []
+
+    for metric in metrics:
+        try:
+            data = await _get(f"{page_id}/insights", {
+                "metric": metric,
+                "period": "day",
+                "since": int(since.timestamp()),
+                "until": int(until.timestamp()),
+                "access_token": token,
+            })
+            for item in data.get("data", []):
+                name = item["name"]
+                result[name] = [
+                    {"date": v["end_time"][:10], "value": v["value"]}
+                    for v in item.get("values", [])
+                ]
+        except Exception as e:
+            log.warning("FB insight metric %s failed: %s", metric, e)
+            errors.append(f"{metric}: {e}")
+
+    if errors and not result:
+        return {"error": "; ".join(errors[:2])}
+    if errors:
+        result["warnings"] = errors[:2]
+    return result
 
 
 async def fetch_fb_recent_posts(page_id: str, token: str, limit: int = 10) -> list[dict]:
@@ -192,6 +204,8 @@ async def fetch_suite_analytics(connections: dict, days: int = 28) -> dict:
             errors.append(f"Facebook summary: {summary.pop('error')}")
         if insights.get("error"):
             errors.append(f"Facebook insights: {insights.pop('error')}")
+        for warning in insights.pop("warnings", []):
+            errors.append(f"Facebook insight warning: {warning}")
         result["errors"].extend(errors)
         result["facebook"] = {**summary, "insights": insights, "recent_posts": posts}
 
