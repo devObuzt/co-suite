@@ -13,6 +13,7 @@ from ..models.suite import Suite
 from ..services.meta_oauth import (
     get_oauth_url, exchange_code, get_long_lived_token, get_user_pages, get_ad_accounts, verify_token
 )
+from ..services.meta_ads_manager import fetch_campaigns
 
 router = APIRouter(prefix="/connections", tags=["connections"])
 
@@ -105,6 +106,7 @@ async def meta_select_page(
             "ad_account_id": data.ad_account_id,
             "ad_account_name": data.ad_account_name,
             "currency": data.ad_account_currency,
+            "user_access_token": connections.get("meta_user_token"),
         }
     # Clean up temp user token
     connections.pop("meta_user_token", None)
@@ -145,6 +147,23 @@ async def get_connections(
 ):
     suite = await _get_suite(suite_id, current_user, db)
     return _safe_connections(suite.connections or {})
+
+
+@router.get("/{suite_id}/meta/campaigns")
+async def meta_campaigns(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_suite(suite_id, current_user, db)
+    connections = dict(suite.connections or {})
+    meta_ads = connections.get("meta_ads") or {}
+    await db.close()
+
+    return await fetch_campaigns(
+        meta_ads.get("ad_account_id", ""),
+        meta_ads.get("user_access_token", ""),
+    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
