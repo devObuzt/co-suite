@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ENGINE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = ENGINE_DIR.parent
 # override=True so values in .env always win over any (possibly empty) shell vars
 load_dotenv(PROJECT_ROOT / ".env", override=True)
 
@@ -70,8 +71,8 @@ PUBLISHED_DIR = DATA_DIR / "published"
 REJECTED_DIR = DATA_DIR / "rejected"
 DB_PATH = DATA_DIR / "posts.db"
 LOGS_DIR = PROJECT_ROOT / "logs"
-ASSETS_DIR = PROJECT_ROOT / "assets"
-CONFIG_DIR = PROJECT_ROOT / "config"
+ASSETS_DIR = ENGINE_DIR / "assets"
+CONFIG_DIR = ENGINE_DIR / "config"
 
 for d in (PENDING_DIR, APPROVED_DIR, PUBLISHED_DIR, REJECTED_DIR, LOGS_DIR):
     d.mkdir(parents=True, exist_ok=True)
