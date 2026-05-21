@@ -9,6 +9,7 @@ from ..core.security import get_current_user
 from ..models.user import User
 from ..models.suite import Suite, SuiteMember, SuiteStatus, MemberRole
 from ..services.multi_scraper import search_market_content
+from ..services.meta_ads_library import fetch_meta_ads_inspiration
 
 router = APIRouter(prefix="/suites", tags=["suites"])
 
@@ -130,3 +131,22 @@ async def market_research(
 
     items = await search_market_content(keyword, location, strategy_data)
     return {"results": items}
+
+
+@router.get("/{suite_id}/meta-ads")
+async def meta_ads(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch active Meta Ad Library ads for inspiration."""
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+
+    brand = suite.brand or {}
+    connections = dict(suite.connections or {})
+    await db.close()
+
+    return await fetch_meta_ads_inspiration(suite.name, brand, connections)
