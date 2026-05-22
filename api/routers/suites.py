@@ -2,7 +2,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from ..core.database import get_db
 from ..core.security import get_current_user
@@ -33,9 +33,21 @@ class SuiteResponse(BaseModel):
     slug: str
     status: str
     brand: Optional[dict] = None
+    strategy: Optional[dict] = None
 
     class Config:
         from_attributes = True
+
+
+class SocialLoopRequest(BaseModel):
+    id: Optional[str] = None
+    name: str = "Social loop"
+    status: str = "draft"
+    content_mix: list[dict] = Field(default_factory=list)
+    divisions: list[str] = Field(default_factory=list)
+    formats: list[dict] = Field(default_factory=list)
+    cadence: Optional[dict] = None
+    notes: Optional[str] = None
 
 
 @router.get("/", response_model=list[SuiteResponse])
@@ -106,6 +118,75 @@ async def update_brand(
         suite.status = SuiteStatus.active
     await db.commit()
     return {"ok": True}
+
+
+@router.get("/{suite_id}/loops")
+async def list_social_loops(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+    brand = suite.brand or {}
+    return {"loops": brand.get("social_loops") or [], "suggestions": _loop_suggestions(brand, suite.strategy or {})}
+
+
+@router.post("/{suite_id}/loops")
+async def save_social_loop(
+    suite_id: str,
+    data: SocialLoopRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+    brand = dict(suite.brand or {})
+    loops = list(brand.get("social_loops") or [])
+    loop = data.model_dump()
+    loop["id"] = loop.get("id") or slugify(loop["name"]) or f"loop-{len(loops) + 1}"
+    existing_idx = next((i for i, item in enumerate(loops) if item.get("id") == loop["id"]), -1)
+    if existing_idx >= 0:
+        loops[existing_idx] = loop
+    else:
+        loops.append(loop)
+    brand["social_loops"] = loops
+    suite.brand = brand
+    await db.commit()
+    return {"ok": True, "loop": loop, "loops": loops}
+
+
+def _loop_suggestions(brand: dict, strategy: dict) -> dict:
+    services = brand.get("services") or brand.get("products") or []
+    plan = strategy.get("marketing_plan") or {}
+    themes = plan.get("content_themes") or []
+    divisions = []
+    for item in [brand.get("name"), *(services[:4]), *(themes[:4])]:
+        if item and item not in divisions:
+            divisions.append(item)
+    return {
+        "content_mix": [
+            {"type": "educational", "label": "Educational", "percentage": 30},
+            {"type": "branding", "label": "Branding", "percentage": 20},
+            {"type": "trust", "label": "Trust", "percentage": 20},
+            {"type": "sales", "label": "Sales", "percentage": 20},
+            {"type": "results", "label": "Results", "percentage": 10},
+        ],
+        "divisions": divisions or ["Business", "Services", "Results", "Team"],
+        "formats": [
+            {"type": "ai_image", "label": "AI image", "enabled": True},
+            {"type": "ai_image_text", "label": "AI image with text", "enabled": True},
+            {"type": "ai_carousel", "label": "AI carousel", "enabled": True},
+            {"type": "ai_carousel_text", "label": "AI carousel with text", "enabled": True},
+            {"type": "ai_video_branding", "label": "AI branding video", "enabled": True},
+            {"type": "ai_video_animation", "label": "AI animation video", "enabled": True},
+            {"type": "manual_upload", "label": "Manual upload", "enabled": True},
+        ],
+    }
 
 
 @router.get("/{suite_id}/market-research")

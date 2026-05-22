@@ -21,7 +21,6 @@ from google.genai import types as gtypes
 
 from . import audio_mixer, tts, video_overlay
 from .config import (
-    BRAND,
     GOOGLE_API_KEY,
     PROMPTS,
     VIDEO_MODEL,
@@ -51,8 +50,41 @@ def _subtype(idea: dict) -> str:
     return s if s in VALID_SUBTYPES else "video_with_titles"
 
 
-def _build_prompt(idea: dict) -> str:
-    div = BRAND["divisions"].get(idea["division"], BRAND["divisions"]["design"])
+def _video_model_for_idea(idea: dict) -> str:
+    request = idea.get("generation_request") or {}
+    tier = (request.get("model_tier") or "auto").strip()
+    if tier == "fast":
+        return "veo-3.1-lite-generate-preview"
+    if tier == "quality":
+        return "veo-3.1-generate-preview"
+    return VIDEO_MODEL
+
+
+DEFAULT_DIVISIONS = {
+    "design": {"name_en": "Design", "color_name": "yellow"},
+    "marketing": {"name_en": "Marketing", "color_name": "pink"},
+    "development": {"name_en": "Development", "color_name": "cyan"},
+    "media": {"name_en": "Media", "color_name": "teal"},
+    "academy": {"name_en": "Academy", "color_name": "green"},
+}
+
+
+def _brand_video_context(brand: dict | None) -> str:
+    brand = brand or {}
+    colors = brand.get("colors") or {}
+    services = brand.get("services") or brand.get("products") or []
+    return (
+        f"Business name: {brand.get('name') or 'the business'}.\n"
+        f"Industry/niche: {brand.get('industry') or brand.get('niche') or 'business services'}.\n"
+        f"Tone: {brand.get('tone') or 'professional, credible, modern'}.\n"
+        f"Colors: {colors.get('primary') or '#4f46e5'}, {colors.get('secondary') or '#111827'}, {colors.get('accent') or '#f8fafc'}.\n"
+        f"Services/products: {', '.join(services[:8]) if services else 'the business offer'}.\n"
+        f"Audience: {brand.get('target_audience') or 'relevant local customers'}."
+    )
+
+
+def _build_prompt(idea: dict, brand: dict | None = None) -> str:
+    div = DEFAULT_DIVISIONS.get(idea["division"], DEFAULT_DIVISIONS["marketing"])
     template = PROMPTS["video_enhancement_base"]
     subtype = _subtype(idea)
 
@@ -99,20 +131,24 @@ def _build_prompt(idea: dict) -> str:
         color_name=div["color_name"],
         topic=idea.get("topic", ""),
         aspect_ratio=idea.get("aspect_ratio", "9:16"),
-        detailed_prompt=idea.get("video_prompt") or idea.get("image_prompt", ""),
+        detailed_prompt=(
+            f"BRAND CONTEXT:\n{_brand_video_context(brand)}\n\n"
+            f"SCENE:\n{idea.get('video_prompt') or idea.get('image_prompt', '')}"
+        ),
         music_directive=music_directive,
         sfx_directive=sfx_directive,
         subtype_directive=subtype_directive,
     )
 
 
-def generate_video(idea: dict, out_dir: Path) -> tuple[Path, float]:
+def generate_video(idea: dict, out_dir: Path, brand: dict | None = None) -> tuple[Path, float]:
     """Generate a Veo 3 video, then optionally overlay an Arabic title and/or
     mux a separate voiceover. Returns (final_path, total_cost_usd).
     """
     subtype = _subtype(idea)
-    prompt = _build_prompt(idea)
+    prompt = _build_prompt(idea, brand)
     aspect = idea.get("aspect_ratio", "9:16")
+    model = _video_model_for_idea(idea)
 
     log.info(
         "Submitting Veo 3 job for post %s (subtype=%s, %s)…",
@@ -120,7 +156,7 @@ def generate_video(idea: dict, out_dir: Path) -> tuple[Path, float]:
     )
 
     operation = _client.models.generate_videos(
-        model=VIDEO_MODEL,
+        model=model,
         prompt=prompt,
         config=gtypes.GenerateVideosConfig(aspect_ratio=aspect),
     )
@@ -142,7 +178,7 @@ def generate_video(idea: dict, out_dir: Path) -> tuple[Path, float]:
     _client.files.download(file=generated.video)
     generated.video.save(str(raw_video_path))
 
-    veo_cost = COST_PER_SECOND.get(VIDEO_MODEL, 0.40) * DEFAULT_DURATION_SEC
+    veo_cost = COST_PER_SECOND.get(model, 0.40) * DEFAULT_DURATION_SEC
     log.info("Veo 3 raw video saved (cost ≈ $%.2f)", veo_cost)
 
     total_cost = veo_cost

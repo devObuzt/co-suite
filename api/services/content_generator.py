@@ -137,8 +137,15 @@ def _load_reference_images(brand: dict, limit: int = 2) -> list:
     return loaded
 
 
-def _build_brand_summary(brand: dict, strategy: Optional[dict] = None) -> str:
+def _build_brand_summary(brand: dict, strategy: Optional[dict] = None, use_brand: bool = True) -> str:
     """Build Claude-friendly brand summary from a suite's brand + strategy dicts."""
+    if not use_brand:
+        return (
+            "Brand mode is off for this generation. Use only the user's prompt, "
+            "the target audience language, and general social media best practices. "
+            "Do not rely on saved brand colors, services, tone, or positioning."
+        )
+
     name = brand.get("name") or brand.get("tagline", "Business")
     desc = brand.get("description") or brand.get("tagline", "")
     industry = brand.get("industry", "")
@@ -172,6 +179,15 @@ def _build_brand_summary(brand: dict, strategy: Optional[dict] = None) -> str:
             f"\nContent themes: {', '.join(plan.get('content_themes') or [])}"
         )
 
+    rules = brand.get("content_rules") or []
+    if rules:
+        summary += "\n\nLEARNED CONTENT RULES FROM USER FEEDBACK:"
+        for rule in rules[-12:]:
+            if isinstance(rule, dict):
+                summary += f"\n- {rule.get('text', '')}"
+            else:
+                summary += f"\n- {rule}"
+
     return summary
 
 
@@ -181,11 +197,27 @@ def _strip_json_fences(text: str) -> str:
     return m.group(1) if m else text
 
 
-def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None = None, strategy: Optional[dict] = None, language: str = "ar") -> list[dict]:
+def _generate_ideas(
+    brand: dict,
+    count: int = 3,
+    recent_topics: list[str] | None = None,
+    strategy: Optional[dict] = None,
+    language: str = "ar",
+    options: Optional[dict] = None,
+) -> list[dict]:
     """Call Claude to generate post ideas for a given brand."""
-    video_count = 1 if count >= 3 else 0
-    carousel_count = 1 if count >= 2 else 0
-    image_count = max(1, count - video_count - carousel_count)
+    options = options or {}
+    content_type = (options.get("content_type") or "mixed").strip()
+    if content_type == "video":
+        video_count, carousel_count, image_count = count, 0, 0
+    elif content_type == "carousel":
+        video_count, carousel_count, image_count = 0, count, 0
+    elif content_type == "image":
+        video_count, carousel_count, image_count = 0, 0, count
+    else:
+        video_count = 1 if count >= 3 else 0
+        carousel_count = 1 if count >= 2 else 0
+        image_count = max(1, count - video_count - carousel_count)
 
     recent_str = (
         "\n".join(f"- {t}" for t in (recent_topics or [])[:10])
@@ -193,7 +225,7 @@ def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None
     )
 
     system = _PROMPTS["idea_generator_system"].format(
-        brand_summary=_build_brand_summary(brand, strategy)
+        brand_summary=_build_brand_summary(brand, strategy, use_brand=options.get("use_brand", True))
     )
     # Append character directive so Claude writes correct video_prompt descriptions
     system += (
@@ -241,6 +273,31 @@ def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None
         video_count=video_count,
         recent_ideas=recent_str,
     )
+    request_bits = []
+    if options.get("prompt"):
+        request_bits.append(f"USER REQUEST / CREATIVE BRIEF:\n{options['prompt']}")
+    if options.get("mode"):
+        request_bits.append(f"CREATE MODE: {options['mode']}")
+    if content_type and content_type != "mixed":
+        request_bits.append(f"FORCE CONTENT FORMAT: {content_type}")
+    if options.get("aspect_ratio") and options["aspect_ratio"] != "Auto":
+        request_bits.append(f"PREFERRED ASPECT RATIO: {options['aspect_ratio']}")
+    if options.get("destination"):
+        request_bits.append(f"DESTINATION: {options['destination']}")
+    if options.get("model_tier"):
+        request_bits.append(f"MODEL TIER: {options['model_tier']}")
+    if options.get("regenerate_from"):
+        request_bits.append(
+            "REGENERATE / REPLACE THIS PREVIOUS IDEA:\n"
+            + json.dumps(options["regenerate_from"], ensure_ascii=False)[:2500]
+        )
+    if options.get("feedback"):
+        request_bits.append(
+            "USER FEEDBACK TO FIX NOW AND LEARN FOR FUTURE:\n"
+            + str(options["feedback"])
+        )
+    if request_bits:
+        user += "\n\n" + "\n\n".join(request_bits)
 
     for attempt in range(3):
         try:
@@ -251,21 +308,30 @@ def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None
                 messages=[{"role": "user", "content": user}],
             )
             data = json.loads(_strip_json_fences(raw))
-            return _normalize_ideas(data.get("posts", []), language=language)
+            return _normalize_ideas(data.get("posts", []), language=language, options=options)
         except json.JSONDecodeError as e:
             log.warning("Attempt %d: invalid JSON from Claude: %s", attempt + 1, e)
     return []
 
 
-def _normalize_ideas(posts: list[dict], language: str = "ar") -> list[dict]:
+def _normalize_ideas(posts: list[dict], language: str = "ar", options: Optional[dict] = None) -> list[dict]:
     """Apply connec-content-engine's format validation rules to generated ideas."""
+    options = options or {}
+    forced_format = (options.get("content_type") or "").strip()
+    if forced_format == "mixed":
+        forced_format = ""
     normalized = []
     for idea in posts:
         idea["division"] = _division_key(idea)
         fmt = idea.get("format", "image")
         if fmt not in ("image", "carousel", "video"):
             fmt = "image"
+        if forced_format in {"image", "carousel", "video"}:
+            fmt = forced_format
         idea["format"] = fmt
+        requested_aspect = options.get("aspect_ratio")
+        if requested_aspect and requested_aspect != "Auto":
+            idea["aspect_ratio"] = requested_aspect
 
         if fmt == "carousel":
             slides = idea.get("carousel_slides") or []
@@ -325,6 +391,7 @@ def _normalize_ideas(posts: list[dict], language: str = "ar") -> list[dict]:
         idea.setdefault("hashtags", [])
         idea.setdefault("include_logo", True)
         idea.setdefault("text_language", language)
+        idea.setdefault("generation_request", options)
         normalized.append(idea)
     return normalized
 
@@ -641,13 +708,13 @@ def _generate_carousel_media(idea: dict, brand: dict) -> dict[str, list[bytes]]:
     return out
 
 
-def _generate_video_media(idea: dict) -> Optional[bytes]:
+def _generate_video_media(idea: dict, brand: dict) -> Optional[bytes]:
     from ..engine.video_generator import generate_video
 
     out_dir = STATIC_DIR / f"video_{uuid.uuid4().hex}"
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        video_path, _cost = generate_video(idea, out_dir)
+        video_path, _cost = generate_video(idea, out_dir, brand=brand)
         return Path(video_path).read_bytes()
     finally:
         for path in sorted(out_dir.glob("*"), reverse=True):
@@ -655,7 +722,7 @@ def _generate_video_media(idea: dict) -> Optional[bytes]:
         out_dir.rmdir()
 
 
-async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int = 3) -> list[str]:
+async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int = 3, options: Optional[dict] = None) -> list[str]:
     """
     Main entry point — generates `count` posts for a suite.
     Creates ContentPost rows in DB, triggers image generation, updates URLs.
@@ -669,6 +736,7 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
 
     brand = suite.brand
     strategy = suite.strategy
+    options = options or {}
     post_ids = []
 
     # Get recent topics to avoid repetition
@@ -690,6 +758,12 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
         return []
     await db.commit()
 
+    mode = options.get("mode")
+    if mode == "quick":
+        count = min(count, 1)
+    elif mode == "set":
+        count = max(count, 3)
+
     log.info("Generating %d ideas for suite %s…", count, suite_id)
     audience_languages = brand.get("audience_languages") or ["ar"]
     if not audience_languages:
@@ -697,7 +771,14 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
 
     all_ideas = []
     for lang_code in audience_languages:
-        lang_ideas = _generate_ideas(brand, count=count, recent_topics=recent_topics, strategy=strategy, language=lang_code)
+        lang_ideas = _generate_ideas(
+            brand,
+            count=count,
+            recent_topics=recent_topics,
+            strategy=strategy,
+            language=lang_code,
+            options=options,
+        )
         for idea in lang_ideas:
             idea["content_language"] = lang_code
         all_ideas.extend(lang_ideas)
@@ -741,7 +822,7 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
                 image_count += sum(len(images) for images in variants.values())
 
             elif fmt == PostFormat.video:
-                video_bytes = _generate_video_media(idea)
+                video_bytes = _generate_video_media(idea, brand)
                 if video_bytes:
                     media_urls = [_save_video(video_bytes, post_id)]
                     generated_video_count += 1
