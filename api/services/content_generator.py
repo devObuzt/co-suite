@@ -54,6 +54,23 @@ def _language_label(code: str) -> str:
     }.get((code or "").lower(), code or "the target language")
 
 
+def _text_for_language(idea: dict, language: str, *candidates: str | None) -> str:
+    """Pick visible text that is least likely to cross languages.
+
+    Some legacy JSON fields are named *_ar, but they are only field names now;
+    for non-Arabic output, prefer neutral fields such as visible_text/hook/topic.
+    """
+    for candidate in candidates:
+        text = (candidate or "").strip()
+        if language != "ar" and re.search(r"[\u0600-\u06FF]", text):
+            continue
+        if language != "he" and re.search(r"[\u0590-\u05FF]", text):
+            continue
+        if text:
+            return text
+    return (idea.get("hook") or idea.get("topic") or "").strip()
+
+
 def _brand_colors(brand: dict) -> dict:
     colors = brand.get("colors") or {}
     return {
@@ -244,13 +261,15 @@ def _generate_ideas(
         "tr": "Turkish",
     }
     lang_label = lang_labels.get(language, language)
-    if language != "ar":
-        system += (
-            f"\n\n--- LANGUAGE RULE ---\n"
-            f"Generate ALL captions, hooks, hashtags, and visible text in {lang_label}. "
-            f"The language of every caption must be {lang_label} only. "
-            f"Do NOT use Arabic unless the language is Arabic."
-        )
+    system += (
+        f"\n\n--- SINGLE LANGUAGE RULE ---\n"
+        f"The whole post must be in one language: {lang_label}. "
+        f"Generate caption, hook, topic, hashtags, image visible text, carousel slide visible text, and CTA in {lang_label}. "
+        "Do not mix languages inside one post. "
+        "Legacy field names like image_title_ar, title_ar, and video_title_ar are only schema names; "
+        f"their values must still be written in {lang_label}. "
+        f"If the post image contains text, that text must be in the same language as the caption: {lang_label}."
+    )
     system += (
         "\n\n--- MODERN IMAGE MODEL RULE ---\n"
         "The image model can now render designed text and can use reference images. "
@@ -260,7 +279,8 @@ def _generate_ideas(
         "or 'hybrid' when the model should render core text but leave room for later polish. "
         "Prefer native_text_design for ads, announcements, educational carousel hooks, and strong visual headlines. "
         "Use the visible_text field for the exact text that should appear in the image, in the requested language. "
-        "For educational carousel posts, every slide must have short visible_text/title text rendered natively by the model."
+        "For educational carousel posts, every slide must have short visible_text/title text rendered natively by the model. "
+        "The visible text language must match the caption language exactly."
         "\n\n--- VIDEO TITLE RULE ---\n"
         "For video_with_titles, do not ask Veo to render Arabic, Hebrew, or any non-Latin visible text. "
         "If a video needs a visible title, provide video_title_en as a short English title for a post-production overlay. "
@@ -341,21 +361,37 @@ def _normalize_ideas(posts: list[dict], language: str = "ar", options: Optional[
             else:
                 idea["carousel_slides"] = slides[:6]
                 idea["aspect_ratio"] = "1:1"
-                idea.setdefault("text_language", language)
+                idea["text_language"] = language
                 idea.setdefault("text_rendering_mode", "native_text_design")
                 for idx, slide in enumerate(idea["carousel_slides"], start=1):
                     slide.setdefault("slide", idx)
                     slide.setdefault("role", "hook" if idx == 1 else ("cta" if idx == len(slides) else "content"))
-                    slide.setdefault("title_ar", idea.get("topic", f"Slide {idx}")[:40])
-                    slide.setdefault("visible_text", slide.get("title_ar", ""))
+                    fallback_title = idea.get("topic", f"Slide {idx}")[:40]
+                    slide.setdefault("title_ar", fallback_title)
+                    if language == "ar":
+                        slide["visible_text"] = _text_for_language(idea, language, slide.get("visible_text"), slide.get("title_ar"), fallback_title)
+                    else:
+                        slide["visible_text"] = _text_for_language(
+                            idea,
+                            language,
+                            slide.get("visible_text"),
+                            slide.get("title"),
+                            slide.get("text"),
+                            slide.get("headline"),
+                            idea.get("hook"),
+                            fallback_title,
+                        )
                     slide.setdefault("image_prompt", idea.get("image_prompt", idea.get("topic", "")))
 
         if idea["format"] == "image":
             idea.setdefault("image_prompt", idea.get("topic", ""))
             idea.setdefault("aspect_ratio", "1:1")
             idea.setdefault("image_title_ar", "")
-            idea.setdefault("visible_text", idea.get("image_title_ar") or idea.get("hook") or "")
-            idea.setdefault("text_language", language)
+            if language == "ar":
+                idea["visible_text"] = _text_for_language(idea, language, idea.get("visible_text"), idea.get("image_title_ar"), idea.get("hook"))
+            else:
+                idea["visible_text"] = _text_for_language(idea, language, idea.get("visible_text"), idea.get("hook"), idea.get("topic"))
+            idea["text_language"] = language
             idea.setdefault("text_rendering_mode", "native_text_design" if idea.get("visible_text") else "text_free_background")
 
         if idea["format"] == "video":
@@ -390,7 +426,8 @@ def _normalize_ideas(posts: list[dict], language: str = "ar", options: Optional[
 
         idea.setdefault("hashtags", [])
         idea.setdefault("include_logo", True)
-        idea.setdefault("text_language", language)
+        idea["content_language"] = language
+        idea["text_language"] = language
         idea.setdefault("generation_request", options)
         normalized.append(idea)
     return normalized
