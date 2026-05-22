@@ -17,6 +17,7 @@ from ..services.meta_ads_manager import fetch_campaigns
 from ..services.google_ads import (
     get_google_ads_oauth_url,
     exchange_google_ads_code,
+    fetch_google_user_info,
     list_accessible_customers,
     fetch_google_ads_campaigns,
 )
@@ -155,12 +156,17 @@ async def google_callback(
         access_token = token_data.get("access_token")
         if not refresh_token:
             raise RuntimeError("Google did not return a refresh token. Reconnect and approve offline access.")
+        google_user = await fetch_google_user_info(access_token)
         customers = await list_accessible_customers(access_token)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Google Ads OAuth failed: {e}")
 
     connections = dict(suite.connections or {})
-    connections["google_ads_pending"] = {"refresh_token": refresh_token}
+    connections["google_ads_pending"] = {
+        "refresh_token": refresh_token,
+        "user_email": google_user.get("email"),
+        "user_name": google_user.get("name"),
+    }
     suite.connections = connections
     flag_modified(suite, "connections")
     await db.commit()
@@ -185,6 +191,8 @@ async def google_select_customer(
         "connected": True,
         "customer_id": data.customer_id.replace("-", ""),
         "customer_name": data.customer_name or data.customer_id,
+        "user_email": pending.get("user_email"),
+        "user_name": pending.get("user_name"),
         "refresh_token": refresh_token,
     }
     connections.pop("google_ads_pending", None)

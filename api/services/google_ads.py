@@ -5,8 +5,14 @@ from ..core.config import settings
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 GOOGLE_ADS_API = "https://googleads.googleapis.com/v20"
-GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords"
+GOOGLE_ADS_SCOPE = " ".join([
+    "https://www.googleapis.com/auth/adwords",
+    "openid",
+    "email",
+    "profile",
+])
 
 
 def _clean_customer_id(customer_id: str) -> str:
@@ -63,6 +69,17 @@ async def exchange_google_ads_code(code: str) -> dict:
         return resp.json()
 
 
+async def fetch_google_user_info(access_token: str) -> dict:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if resp.status_code >= 400:
+            return {}
+        return resp.json()
+
+
 async def refresh_google_ads_access_token(refresh_token: str) -> str:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
@@ -90,6 +107,26 @@ def _headers(access_token: str) -> dict:
     return headers
 
 
+async def _customer_details(customer_id: str, access_token: str) -> dict:
+    rows = await _search(customer_id, access_token, """
+        SELECT
+          customer.id,
+          customer.descriptive_name,
+          customer.currency_code,
+          customer.time_zone
+        FROM customer
+        LIMIT 1
+    """)
+    if not rows:
+        return {}
+    customer = rows[0].get("customer") or {}
+    return {
+        "name": customer.get("descriptiveName") or customer.get("descriptive_name"),
+        "currency_code": customer.get("currencyCode") or customer.get("currency_code"),
+        "time_zone": customer.get("timeZone") or customer.get("time_zone"),
+    }
+
+
 async def list_accessible_customers(access_token: str) -> list[dict]:
     if not settings.google_ads_developer_token:
         raise RuntimeError("GOOGLE_ADS_DEVELOPER_TOKEN is missing")
@@ -102,10 +139,16 @@ async def list_accessible_customers(access_token: str) -> list[dict]:
         resp.raise_for_status()
         resource_names = resp.json().get("resourceNames", [])
 
-    return [
-        {"id": name.replace("customers/", ""), "resource_name": name}
-        for name in resource_names
-    ]
+    customers = []
+    for name in resource_names:
+        customer_id = name.replace("customers/", "")
+        customer = {"id": customer_id, "resource_name": name}
+        try:
+            customer.update(await _customer_details(customer_id, access_token))
+        except Exception:
+            pass
+        customers.append(customer)
+    return customers
 
 
 async def _search(customer_id: str, access_token: str, query: str) -> list[dict]:
