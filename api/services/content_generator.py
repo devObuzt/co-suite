@@ -9,7 +9,7 @@ import re
 import uuid
 from io import BytesIO
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -22,6 +22,7 @@ from ..models.content import ContentPost, PostFormat, PostStatus
 from ..models.suite import Suite
 
 log = logging.getLogger(__name__)
+ProgressCallback = Callable[[dict], None]
 
 _PROMPTS_PATH = Path(__file__).parent.parent / "engine" / "config" / "prompts.json"
 with open(_PROMPTS_PATH, "r", encoding="utf-8") as _f:
@@ -232,9 +233,11 @@ def _generate_ideas(
     elif content_type == "image":
         video_count, carousel_count, image_count = 0, 0, count
     else:
-        video_count = 1 if count >= 3 else 0
+        # Keep the default dashboard action fast and predictable. Video is
+        # expensive/slow, so users must choose video explicitly.
+        video_count = 0
         carousel_count = 1 if count >= 2 else 0
-        image_count = max(1, count - video_count - carousel_count)
+        image_count = max(1, count - carousel_count)
 
     recent_str = (
         "\n".join(f"- {t}" for t in (recent_topics or [])[:10])
@@ -631,14 +634,25 @@ def _overlay_image_title(image_bytes: bytes, idea: dict, title_ar: str, slide_nu
         tmp_path.unlink(missing_ok=True)
 
 
+def _target_platforms(idea: dict) -> list[str]:
+    request = idea.get("generation_request") or {}
+    destination = str(request.get("destination") or "").lower()
+    if request.get("platform_variants") is True or destination in {"ads", "both", "publish"}:
+        return ["instagram", "facebook"]
+    return ["instagram"]
+
+
 def _generate_single_image_media(idea: dict, brand: dict) -> dict[str, list[bytes]]:
     title_ar = (idea.get("image_title_ar") or "").strip()
     visible_text = (idea.get("visible_text") or title_ar or "").strip()
     native_text = bool(visible_text and _native_text_allowed(idea))
     references = _load_reference_images(brand) if idea.get("include_logo", True) else []
-    out: dict[str, list[bytes]] = {"instagram": [], "facebook": []}
+    platforms = _target_platforms(idea)
+    out: dict[str, list[bytes]] = {platform: [] for platform in platforms}
 
-    for platform, aspect in (("instagram", "4:5"), ("facebook", "16:9")):
+    platform_aspects = {"instagram": "4:5", "facebook": "16:9"}
+    for platform in platforms:
+        aspect = platform_aspects.get(platform, "4:5")
         platform_idea = {**idea, "aspect_ratio": aspect}
         if native_text:
             prompt = _native_image_prompt(platform_idea, brand, visible_text)
@@ -667,7 +681,8 @@ def _generate_carousel_media(idea: dict, brand: dict) -> dict[str, list[bytes]]:
     from PIL import Image
 
     slides = idea.get("carousel_slides") or []
-    out: dict[str, list[bytes]] = {"instagram": [], "facebook": []}
+    platforms = _target_platforms(idea)
+    out: dict[str, list[bytes]] = {platform: [] for platform in platforms}
     previous_ig = None
     references = _load_reference_images(brand) if idea.get("include_logo", True) else []
     native_text = _native_text_allowed(idea)
@@ -714,6 +729,9 @@ def _generate_carousel_media(idea: dict, brand: dict) -> dict[str, list[bytes]]:
             except Exception:
                 previous_ig = None
 
+        if "facebook" not in platforms:
+            continue
+
         # Facebook version: cover is 16:9, remaining slides are square.
         fb_aspect = "16:9" if idx == 1 else "1:1"
         fb_idea = {**idea, "aspect_ratio": fb_aspect}
@@ -759,7 +777,31 @@ def _generate_video_media(idea: dict, brand: dict) -> Optional[bytes]:
         out_dir.rmdir()
 
 
-async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int = 3, options: Optional[dict] = None) -> list[str]:
+def _language_counts(languages: list[str], count: int) -> list[tuple[str, int]]:
+    clean_languages = [lang for lang in languages if lang]
+    if not clean_languages:
+        clean_languages = ["ar"]
+    count = max(1, count)
+    selected = clean_languages[:count]
+    if len(selected) >= count:
+        return [(lang, 1) for lang in selected]
+    base = count // len(selected)
+    extra = count % len(selected)
+    return [(lang, base + (1 if idx < extra else 0)) for idx, lang in enumerate(selected)]
+
+
+def _emit_progress(progress: Optional[ProgressCallback], **event):
+    if progress:
+        progress(event)
+
+
+async def generate_content_for_suite(
+    suite_id: str,
+    db: AsyncSession,
+    count: int = 3,
+    options: Optional[dict] = None,
+    progress: Optional[ProgressCallback] = None,
+) -> list[str]:
     """
     Main entry point — generates `count` posts for a suite.
     Creates ContentPost rows in DB, triggers image generation, updates URLs.
@@ -792,6 +834,7 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
     from .billing import is_frozen, record_usage, COSTS
     if await is_frozen(suite_id, db):
         log.warning("Suite %s is frozen — skipping generation", suite_id)
+        _emit_progress(progress, stage="blocked", message="Suite billing is frozen.", progress=100)
         return []
     await db.commit()
 
@@ -802,15 +845,30 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
         count = max(count, 3)
 
     log.info("Generating %d ideas for suite %s…", count, suite_id)
+    _emit_progress(
+        progress,
+        status="running",
+        stage="ideas",
+        message=f"Generating {count} content idea{'s' if count != 1 else ''}.",
+        progress=15,
+    )
     audience_languages = brand.get("audience_languages") or ["ar"]
     if not audience_languages:
         audience_languages = ["ar"]
 
     all_ideas = []
-    for lang_code in audience_languages:
+    lang_jobs = _language_counts(audience_languages, count)
+    for lang_idx, (lang_code, lang_count) in enumerate(lang_jobs, start=1):
+        _emit_progress(
+            progress,
+            status="running",
+            stage="ideas",
+            message=f"Writing ideas in {lang_code} ({lang_idx}/{len(lang_jobs)}).",
+            progress=15 + int(20 * (lang_idx - 1) / max(1, len(lang_jobs))),
+        )
         lang_ideas = _generate_ideas(
             brand,
-            count=count,
+            count=lang_count,
             recent_topics=recent_topics,
             strategy=strategy,
             language=lang_code,
@@ -823,7 +881,8 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
 
     image_count = 0
     generated_video_count = 0
-    for idea in ideas:
+    total_ideas = max(1, len(ideas))
+    for idx, idea in enumerate(ideas, start=1):
         fmt_str = idea.get("format", "image")
         fmt = PostFormat.carousel if fmt_str == "carousel" else (
             PostFormat.video if fmt_str == "video" else PostFormat.image
@@ -834,6 +893,13 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
         # Generate image(s) before opening a DB transaction. Image generation can
         # take a while; holding a DB connection here exhausts Railway's pool.
         try:
+            _emit_progress(
+                progress,
+                status="running",
+                stage="media",
+                message=f"Generating media {idx}/{total_ideas}.",
+                progress=40 + int(45 * (idx - 1) / total_ideas),
+            )
             if fmt == PostFormat.image:
                 variants = _generate_single_image_media(idea, brand)
                 platform_urls: dict[str, list[str]] = {}
@@ -881,6 +947,13 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
         post_ids.append(post.id)
 
     await db.commit()
+    _emit_progress(
+        progress,
+        status="running",
+        stage="saving",
+        message="Saving generated content.",
+        progress=90,
+    )
     await record_usage(suite_id, "llm_idea_gen", COSTS["llm_idea_gen"] * count, db)
     if image_count:
         await record_usage(suite_id, "image_gen", COSTS["image_gen"] * image_count, db)
