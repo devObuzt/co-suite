@@ -10,7 +10,9 @@ import uuid
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -35,6 +37,104 @@ DIVISION_META = {
     "media": {"name_en": "Media", "color_name": "teal", "color": "#1B7F78"},
     "academy": {"name_en": "Academy", "color_name": "green", "color": "#7CB342"},
 }
+
+NATIVE_TEXT_LANGUAGES = {"ar", "he", "en", "fr", "es", "tr", "ru", "zh"}
+
+
+def _language_label(code: str) -> str:
+    return {
+        "ar": "Arabic",
+        "he": "Hebrew",
+        "en": "English",
+        "fr": "French",
+        "es": "Spanish",
+        "tr": "Turkish",
+        "ru": "Russian",
+        "zh": "Chinese",
+    }.get((code or "").lower(), code or "the target language")
+
+
+def _brand_colors(brand: dict) -> dict:
+    colors = brand.get("colors") or {}
+    return {
+        "primary": colors.get("primary") or "#4f46e5",
+        "secondary": colors.get("secondary") or "#111827",
+        "accent": colors.get("accent") or "#f8fafc",
+    }
+
+
+def _brand_visual_context(brand: dict) -> str:
+    colors = _brand_colors(brand)
+    fonts = brand.get("font_suggestions") or brand.get("fonts") or []
+    services = brand.get("services") or []
+    return (
+        f"Brand name: {brand.get('name') or 'Business'}\n"
+        f"Industry: {brand.get('industry') or brand.get('niche') or ''}\n"
+        f"Tone: {brand.get('tone') or 'professional, clear, trustworthy'}\n"
+        f"Primary colors: {colors['primary']}, {colors['secondary']}, {colors['accent']}\n"
+        f"Fonts/style hints: {', '.join(fonts[:4]) if fonts else 'clean modern typography'}\n"
+        f"Services/products: {', '.join(services[:8]) if services else 'business services'}\n"
+        f"Logo notes: {brand.get('logo_description') or ''}"
+    )
+
+
+def _native_text_allowed(idea: dict) -> bool:
+    mode = (idea.get("text_rendering_mode") or "").strip()
+    if mode in {"overlay", "text_free_background"}:
+        return False
+    if mode in {"native_text_design", "reference_based", "hybrid"}:
+        return True
+    return (idea.get("content_language") or "ar") in NATIVE_TEXT_LANGUAGES
+
+
+def _clean_native_visual_direction(text: str) -> str:
+    cleaned = text or ""
+    patterns = [
+        r"avoid any text\.?",
+        r"no text(?:s)?(?: inside the image)?\.?",
+        r"without any text\.?",
+        r"do not render any text\.?",
+        r"تجنب أي نصوص\.?",
+        r"بدون نصوص\.?",
+    ]
+    for pattern in patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+    return " ".join(cleaned.split())
+
+
+def _load_reference_images(brand: dict, limit: int = 2) -> list:
+    """Load uploaded/scraped brand images as PIL references for Gemini image models."""
+    from PIL import Image
+
+    urls: list[str] = []
+    for key in ("logo_url",):
+        if brand.get(key):
+            urls.append(brand[key])
+    for asset in brand.get("logo_assets") or []:
+        if isinstance(asset, dict) and asset.get("url"):
+            urls.append(asset["url"])
+    loaded = []
+    seen = set()
+    for url in urls:
+        if not url or url in seen or len(loaded) >= limit:
+            continue
+        seen.add(url)
+        try:
+            if url.startswith("/static/"):
+                path = Path(__file__).parent.parent / url.lstrip("/")
+                if path.exists():
+                    loaded.append(Image.open(path))
+            elif url.startswith("http"):
+                parsed = urlparse(url)
+                if parsed.scheme not in {"http", "https"}:
+                    continue
+                with httpx.Client(timeout=10, follow_redirects=True) as client:
+                    resp = client.get(url)
+                    resp.raise_for_status()
+                    loaded.append(Image.open(BytesIO(resp.content)))
+        except Exception as e:
+            log.warning("Could not load brand reference image %s: %s", url, e)
+    return loaded
 
 
 def _build_brand_summary(brand: dict, strategy: Optional[dict] = None) -> str:
@@ -119,6 +219,16 @@ def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None
             f"The language of every caption must be {lang_label} only. "
             f"Do NOT use Arabic unless the language is Arabic."
         )
+    system += (
+        "\n\n--- MODERN IMAGE MODEL RULE ---\n"
+        "The image model can now render designed text and can use reference images. "
+        "For image and carousel ideas, decide a text_rendering_mode: "
+        "'native_text_design' when the post benefits from built-in headline text, "
+        "'text_free_background' only when the image must be pure background, "
+        "or 'hybrid' when the model should render core text but leave room for later polish. "
+        "Prefer native_text_design for ads, announcements, educational carousel hooks, and strong visual headlines. "
+        "Use the visible_text field for the exact text that should appear in the image, in the requested language."
+    )
     user = _PROMPTS["idea_generator_user"].format(
         count=count,
         image_count=image_count,
@@ -136,13 +246,13 @@ def _generate_ideas(brand: dict, count: int = 3, recent_topics: list[str] | None
                 messages=[{"role": "user", "content": user}],
             )
             data = json.loads(_strip_json_fences(raw))
-            return _normalize_ideas(data.get("posts", []))
+            return _normalize_ideas(data.get("posts", []), language=language)
         except json.JSONDecodeError as e:
             log.warning("Attempt %d: invalid JSON from Claude: %s", attempt + 1, e)
     return []
 
 
-def _normalize_ideas(posts: list[dict]) -> list[dict]:
+def _normalize_ideas(posts: list[dict], language: str = "ar") -> list[dict]:
     """Apply connec-content-engine's format validation rules to generated ideas."""
     normalized = []
     for idea in posts:
@@ -160,16 +270,22 @@ def _normalize_ideas(posts: list[dict]) -> list[dict]:
             else:
                 idea["carousel_slides"] = slides[:6]
                 idea["aspect_ratio"] = "1:1"
+                idea.setdefault("text_language", language)
+                idea.setdefault("text_rendering_mode", "native_text_design")
                 for idx, slide in enumerate(idea["carousel_slides"], start=1):
                     slide.setdefault("slide", idx)
                     slide.setdefault("role", "hook" if idx == 1 else ("cta" if idx == len(slides) else "content"))
                     slide.setdefault("title_ar", idea.get("topic", f"Slide {idx}")[:40])
+                    slide.setdefault("visible_text", slide.get("title_ar", ""))
                     slide.setdefault("image_prompt", idea.get("image_prompt", idea.get("topic", "")))
 
         if idea["format"] == "image":
             idea.setdefault("image_prompt", idea.get("topic", ""))
             idea.setdefault("aspect_ratio", "1:1")
             idea.setdefault("image_title_ar", "")
+            idea.setdefault("visible_text", idea.get("image_title_ar") or idea.get("hook") or "")
+            idea.setdefault("text_language", language)
+            idea.setdefault("text_rendering_mode", "native_text_design" if idea.get("visible_text") else "text_free_background")
 
         if idea["format"] == "video":
             idea.setdefault("video_prompt", idea.get("image_prompt", idea.get("topic", "")))
@@ -200,6 +316,7 @@ def _normalize_ideas(posts: list[dict]) -> list[dict]:
 
         idea.setdefault("hashtags", [])
         idea.setdefault("include_logo", True)
+        idea.setdefault("text_language", language)
         normalized.append(idea)
     return normalized
 
@@ -236,6 +353,46 @@ def _slide_prompt(idea: dict, slide: dict, total_slides: int) -> str:
         topic=idea.get("topic", ""),
         slide_role=slide.get("role", "content"),
         detailed_prompt=slide.get("image_prompt", ""),
+    )
+
+
+def _native_image_prompt(idea: dict, brand: dict, visible_text: str) -> str:
+    div = _division_meta(idea)
+    lang = _language_label(idea.get("text_language") or idea.get("content_language") or "ar")
+    return (
+        "Create a finished, production-ready social media design.\n\n"
+        f"BRAND CONTEXT:\n{_brand_visual_context(brand)}\n\n"
+        f"CONTENT LANGUAGE: {lang}\n"
+        f"EXACT VISIBLE TEXT TO RENDER: {visible_text}\n"
+        f"TOPIC: {idea.get('topic', '')}\n"
+        f"FORMAT: single post image\n"
+        f"ASPECT RATIO: {idea.get('aspect_ratio', '1:1')}\n"
+        f"VISUAL DIRECTION: {_clean_native_visual_direction(idea.get('image_prompt', ''))}\n\n"
+        "Render the visible text natively inside the image as polished graphic design typography. "
+        "Keep the text exactly as provided, readable, well-spaced, and not cropped. "
+        "Use strong hierarchy: headline first, supporting visual second. "
+        f"Use the {div['name_en']} accent feel if it fits, but prioritize the business brand colors. "
+        "Use provided reference images only as brand/style/logo references, not as the whole composition. "
+        "Do not add extra words, fake UI, fake phone numbers, fake URLs, or unreadable signage."
+    )
+
+
+def _native_slide_prompt(idea: dict, slide: dict, total_slides: int, brand: dict) -> str:
+    div = _division_meta(idea)
+    text = slide.get("visible_text") or slide.get("title_ar") or ""
+    lang = _language_label(idea.get("text_language") or idea.get("content_language") or "ar")
+    return (
+        f"Create slide {slide.get('slide', 1)} of {total_slides} for a cohesive carousel.\n\n"
+        f"BRAND CONTEXT:\n{_brand_visual_context(brand)}\n\n"
+        f"CONTENT LANGUAGE: {lang}\n"
+        f"EXACT VISIBLE TEXT TO RENDER ON THIS SLIDE: {text}\n"
+        f"SLIDE ROLE: {slide.get('role', 'content')}\n"
+        f"TOPIC: {idea.get('topic', '')}\n"
+        f"VISUAL DIRECTION: {_clean_native_visual_direction(slide.get('image_prompt', ''))}\n\n"
+        "Render the exact visible text natively inside the image. Make it large, readable, and polished. "
+        "Keep the carousel style consistent across slides: same typography logic, spacing, colors, and visual rhythm. "
+        f"The slide may use a subtle {div['color_name']} accent, but should primarily follow the business brand identity. "
+        "Do not add extra text beyond the exact visible text unless it is purely decorative and unreadable."
     )
 
 
@@ -357,17 +514,25 @@ def _overlay_image_title(image_bytes: bytes, idea: dict, title_ar: str, slide_nu
         tmp_path.unlink(missing_ok=True)
 
 
-def _generate_single_image_media(idea: dict) -> Optional[bytes]:
-    prompt = _image_prompt(idea)
+def _generate_single_image_media(idea: dict, brand: dict) -> Optional[bytes]:
     title_ar = (idea.get("image_title_ar") or "").strip()
-    if title_ar:
+    visible_text = (idea.get("visible_text") or title_ar or "").strip()
+    native_text = bool(visible_text and _native_text_allowed(idea))
+    references = _load_reference_images(brand) if idea.get("include_logo", True) else []
+
+    if native_text:
+        prompt = _native_image_prompt(idea, brand, visible_text)
+    else:
+        prompt = _image_prompt(idea)
+
+    if title_ar and not native_text:
         prompt += (
             "\n\nIMPORTANT: This image is a clean visual background. "
             "DO NOT render any text in the image. Leave the bottom 25-30% "
             "relatively clean and uncluttered. We will add title text in post-processing."
         )
-    image_bytes = _generate_image(prompt, idea.get("aspect_ratio", "1:1"))
-    if image_bytes and title_ar:
+    image_bytes = _generate_image(prompt, idea.get("aspect_ratio", "1:1"), extra_images=references)
+    if image_bytes and title_ar and not native_text:
         try:
             image_bytes = _overlay_image_title(image_bytes, idea, title_ar)
         except Exception as e:
@@ -375,21 +540,26 @@ def _generate_single_image_media(idea: dict) -> Optional[bytes]:
     return image_bytes
 
 
-def _generate_carousel_media(idea: dict) -> list[bytes]:
+def _generate_carousel_media(idea: dict, brand: dict) -> list[bytes]:
     from PIL import Image
 
     slides = idea.get("carousel_slides") or []
     out: list[bytes] = []
     previous = None
+    references = _load_reference_images(brand) if idea.get("include_logo", True) else []
+    native_text = _native_text_allowed(idea)
     for idx, slide in enumerate(slides, start=1):
-        prompt = _slide_prompt(idea, slide, len(slides))
-        prompt += (
-            "\n\nIMPORTANT: This image is a clean visual background. "
-            "DO NOT render any text, letters, words, captions, or readable signs in the image. "
-            "Leave the bottom 25-30% of the composition relatively clean and uncluttered. "
-            "We will add title text in post-processing."
-        )
-        extras = []
+        if native_text:
+            prompt = _native_slide_prompt(idea, slide, len(slides), brand)
+        else:
+            prompt = _slide_prompt(idea, slide, len(slides))
+            prompt += (
+                "\n\nIMPORTANT: This image is a clean visual background. "
+                "DO NOT render any text, letters, words, captions, or readable signs in the image. "
+                "Leave the bottom 25-30% of the composition relatively clean and uncluttered. "
+                "We will add title text in post-processing."
+            )
+        extras = list(references)
         if previous is not None:
             extras.append(previous)
             prompt += (
@@ -400,7 +570,7 @@ def _generate_carousel_media(idea: dict) -> list[bytes]:
         if not image_bytes:
             continue
         title_ar = (slide.get("title_ar") or "").strip()
-        if title_ar:
+        if title_ar and not native_text:
             try:
                 image_bytes = _overlay_image_title(
                     image_bytes,
@@ -496,13 +666,13 @@ async def generate_content_for_suite(suite_id: str, db: AsyncSession, count: int
         # take a while; holding a DB connection here exhausts Railway's pool.
         try:
             if fmt == PostFormat.image:
-                img_bytes = _generate_single_image_media(idea)
+                img_bytes = _generate_single_image_media(idea, brand)
                 if img_bytes:
                     media_urls = [_save_image(img_bytes, post_id, 0)]
                     image_count += 1
 
             elif fmt == PostFormat.carousel:
-                for i, img_bytes in enumerate(_generate_carousel_media(idea)):
+                for i, img_bytes in enumerate(_generate_carousel_media(idea, brand)):
                     media_urls.append(_save_image(img_bytes, post_id, i))
                     image_count += 1
 
