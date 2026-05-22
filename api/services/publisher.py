@@ -66,6 +66,15 @@ def _resolve_url(local_or_remote: str) -> Optional[str]:
     return None
 
 
+def _platform_media(post: ContentPost, platform: str) -> list[str]:
+    meta = post.ai_metadata or {}
+    platform_media = meta.get("platform_media") or {}
+    urls = platform_media.get(platform) or []
+    if urls:
+        return urls
+    return post.media_urls or []
+
+
 def _upload_to_r2(static_path: str) -> str:
     """Upload a /static/... file to R2 and return its public URL."""
     import boto3
@@ -173,27 +182,20 @@ def publish_post(post: ContentPost, connections: dict, platforms: list[str]) -> 
     results: dict = {"warnings": []}
     caption = _full_caption(post)
     fmt = post.format
-    raw_urls = post.media_urls or []
-
-    # Resolve public URLs for all media
-    public_urls = []
-    for url in raw_urls:
-        resolved = _resolve_url(url)
-        if resolved:
-            public_urls.append(resolved)
-
-    has_media = bool(public_urls)
-    if raw_urls and not has_media:
-        results["warnings"].append(
-            "Images are stored locally and couldn't be made public. "
-            "Configure R2 in api/.env to publish images. Publishing text-only."
-        )
 
     # ── Facebook ──────────────────────────────────────────────────────────────
     if "facebook" in platforms:
         fb = connections.get("facebook", {})
         page_id = fb.get("page_id")
         token = fb.get("page_access_token")
+        raw_urls = _platform_media(post, "facebook")
+        public_urls = [resolved for url in raw_urls if (resolved := _resolve_url(url))]
+        has_media = bool(public_urls)
+        if raw_urls and not has_media:
+            results["warnings"].append(
+                "Facebook media is stored locally and couldn't be made public. "
+                "Configure R2 in api/.env to publish media. Publishing text-only."
+            )
 
         if not page_id or not token:
             results["facebook_error"] = "Facebook not connected"
@@ -218,6 +220,9 @@ def publish_post(post: ContentPost, connections: dict, platforms: list[str]) -> 
         ig = connections.get("instagram", {})
         ig_user_id = ig.get("ig_user_id")
         token = ig.get("page_access_token") or connections.get("facebook", {}).get("page_access_token")
+        raw_urls = _platform_media(post, "instagram")
+        public_urls = [resolved for url in raw_urls if (resolved := _resolve_url(url))]
+        has_media = bool(public_urls)
 
         if not ig_user_id or not token:
             results["instagram_error"] = "Instagram not connected"

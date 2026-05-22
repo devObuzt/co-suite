@@ -215,6 +215,132 @@ def overlay_arabic_title(
     )
 
 
+def render_english_title_png(
+    title_en: str,
+    video_width: int,
+    video_height: int,
+    out_path: Path,
+    band_y_fraction: float = DEFAULT_BAND_Y_FRACTION,
+) -> Path:
+    """Render an English title band as a transparent PNG matching the video."""
+    img = Image.new("RGBA", (video_width, video_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    band_height = int(video_height * 0.15)
+    band_top = int(video_height * band_y_fraction) - band_height // 2
+    band_bottom = band_top + band_height
+
+    draw.rectangle([0, band_top, video_width, band_bottom], fill=(0, 0, 0, 205))
+
+    padding_x = int(video_width * 0.06)
+    padding_y = int(band_height * 0.14)
+    max_text_w = video_width - 2 * padding_x
+    max_text_h = band_height - 2 * padding_y
+
+    initial = int(video_height * 0.058)
+    font, lines = _best_latin_font(title_en, FONT_EXTRABOLD, max_text_w, max_text_h, initial)
+    line_gap = int(font.size * 0.16)
+    line_h = _line_height(font)
+    block_h = len(lines) * line_h + (len(lines) - 1) * line_gap
+    text_y = band_top + (band_height - block_h) // 2
+
+    for line in lines:
+        bbox = font.getbbox(line)
+        line_w = bbox[2] - bbox[0]
+        x = (video_width - line_w) // 2 - bbox[0]
+        draw.text((x + 2, text_y + 2), line, font=font, fill=(0, 0, 0, 210))
+        draw.text((x, text_y), line, font=font, fill=(255, 255, 255, 255))
+        text_y += line_h + line_gap
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_path, format="PNG")
+    return out_path
+
+
+def _latin_width(text: str, font: ImageFont.FreeTypeFont) -> int:
+    bbox = font.getbbox(text)
+    return bbox[2] - bbox[0]
+
+
+def _wrap_latin_to_width(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return [text]
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        if _latin_width(candidate, font) <= max_w:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines
+
+
+def _best_latin_font(text: str, font_path: Path, max_w: int, max_h: int, initial: int):
+    size = initial
+    while size >= 34:
+        font = ImageFont.truetype(str(font_path), size)
+        if _latin_width(text, font) <= max_w and _line_height(font) <= max_h:
+            return font, [text]
+        size -= 4
+
+    size = initial
+    while size >= 28:
+        font = ImageFont.truetype(str(font_path), size)
+        lines = _wrap_latin_to_width(text, font, max_w)
+        gap = int(size * 0.16)
+        total_h = len(lines) * _line_height(font) + (len(lines) - 1) * gap
+        if all(_latin_width(line, font) <= max_w for line in lines) and total_h <= max_h:
+            return font, lines
+        size -= 4
+
+    font = ImageFont.truetype(str(font_path), 28)
+    return font, _wrap_latin_to_width(text, font, max_w)
+
+
+def overlay_english_title(
+    video_path: Path | str,
+    title_en: str,
+    output_path: Path | str,
+    band_y_fraction: float = DEFAULT_BAND_Y_FRACTION,
+) -> Path:
+    """Overlay one English title band across the full video duration."""
+    video_path = Path(video_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    w, h = _probe_video(video_path)
+    png = output_path.parent / "_english_title.png"
+    render_english_title_png(title_en, w, h, png, band_y_fraction)
+
+    cmd = [
+        FFMPEG, "-y",
+        "-i", str(video_path),
+        "-loop", "1", "-t", "30", "-i", str(png),
+        "-filter_complex", "[0:v][1:v]overlay=0:0[vout]",
+        "-map", "[vout]",
+        "-map", "0:a?",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-preset", "fast",
+        "-crf", "20",
+        "-shortest",
+        str(output_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        png.unlink()
+    except OSError:
+        pass
+    if proc.returncode != 0:
+        log.error("ffmpeg English overlay failed:\n%s", proc.stderr[-2000:])
+        raise RuntimeError(f"ffmpeg English overlay failed: {proc.stderr[-500:]}")
+    return output_path
+
+
 def overlay_arabic_segments(
     video_path: Path | str,
     segments: list[dict],

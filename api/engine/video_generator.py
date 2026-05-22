@@ -1,12 +1,12 @@
-"""Video generator using Veo 3 (or Veo 3 Fast).
+"""Video generator using Veo 3.1 Fast (or other Veo variants).
 
 Three video subtypes are supported (set by Claude in `idea['video_subtype']`):
 
   * `animation`        — 2D motion-graphics output. No overlay.
   * `english_hook`     — Veo 3 renders an English hook visible inside the video.
                          No overlay (Veo handles the text).
-  * `video_with_titles` — clean live-action visual, Arabic title overlaid in
-                         post-production at the lower-middle of the frame.
+  * `video_with_titles` — clean live-action visual, optional English title
+                         overlaid in post-production.
 
 Audio: instrumental only (music + SFX from Veo 3). Voiceover is OFF by default
 (`idea['use_voiceover']` to opt in). The TTS+mux pipeline is preserved for
@@ -34,6 +34,9 @@ _client = genai.Client(api_key=GOOGLE_API_KEY)
 COST_PER_SECOND = {
     "veo-3.0-generate-001": 0.40,
     "veo-3.0-fast-generate-001": 0.15,
+    "veo-3.1-generate-preview": 0.40,
+    "veo-3.1-fast-generate-preview": 0.15,
+    "veo-3.1-lite-generate-preview": 0.075,
 }
 
 DEFAULT_DURATION_SEC = 8
@@ -145,32 +148,24 @@ def generate_video(idea: dict, out_dir: Path) -> tuple[Path, float]:
     total_cost = veo_cost
     current_video = raw_video_path
 
-    # ---- Stage 2: Arabic title overlay (only for video_with_titles) ----
+    # ---- Stage 2: Title overlay (only for video_with_titles) ----
+    # Prefer English overlay for video. Arabic/Hebrew glyphs are intentionally
+    # kept out of Veo and video overlays for now; captions carry local-language
+    # copy until we have a typography QA loop for video.
     if subtype == "video_with_titles":
-        segments = idea.get("video_title_segments") or []
-        title_ar = (idea.get("video_title_ar") or "").strip()
+        title_en = (idea.get("video_title_en") or idea.get("video_hook_en") or "").strip()
         overlaid = out_dir / "video_with_overlay.mp4"
         try:
-            if segments:
-                video_overlay.overlay_arabic_segments(
+            if title_en:
+                video_overlay.overlay_english_title(
                     video_path=current_video,
-                    segments=segments,
-                    division_key=idea["division"],
+                    title_en=title_en[:60],
                     output_path=overlaid,
                 )
                 current_video = overlaid
-                log.info("Arabic overlay applied (%d segments)", len(segments))
-            elif title_ar:
-                video_overlay.overlay_arabic_title(
-                    video_path=current_video,
-                    title_ar=title_ar,
-                    division_key=idea["division"],
-                    output_path=overlaid,
-                )
-                current_video = overlaid
-                log.info("Arabic title overlaid: %s", title_ar)
+                log.info("English title overlaid: %s", title_en)
             else:
-                log.warning("video_with_titles but no titles provided — skipping overlay")
+                log.info("No English title provided — keeping clean Veo video")
         except Exception as e:
             log.exception("Title overlay failed; keeping raw video: %s", e)
 

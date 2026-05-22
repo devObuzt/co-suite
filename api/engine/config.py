@@ -61,7 +61,7 @@ CAROUSELS_PER_DAY = int(_env("CAROUSELS_PER_DAY", "2"))
 # Models
 CLAUDE_MODEL = _env("CLAUDE_MODEL", "claude-opus-4-7")
 IMAGE_MODEL = _env("IMAGE_MODEL", "gemini-2.5-flash-image")
-VIDEO_MODEL = _env("VIDEO_MODEL", "veo-3.0-fast-generate-001")
+VIDEO_MODEL = _env("VIDEO_MODEL", _env("GOOGLE_VIDEO_MODEL", "veo-3.1-fast-generate-preview"))
 
 # Paths
 DATA_DIR = PROJECT_ROOT / "data"
