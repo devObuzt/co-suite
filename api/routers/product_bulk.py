@@ -1,26 +1,45 @@
+import asyncio
 import logging
 import re
 from io import BytesIO
 from pathlib import PurePosixPath
 from zipfile import BadZipFile, ZipFile
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..core.database import get_db
+from ..core.database import AsyncSessionLocal, get_db
 from ..core.security import get_current_user
+from ..models.generation_job import GenerationJobType
 from ..models.product_bulk import (
     ProductBulkAsset,
+    ProductBulkAssetStatus,
     ProductBulkBatch,
     ProductBulkBatchStatus,
     ProductBulkItem,
+    ProductBulkItemStatus,
     ProductTemplateDirection,
 )
 from ..models.suite import Suite
 from ..models.user import User
+from ..services.generation_jobs import (
+    classify_provider_limit,
+    create_job,
+    mark_completed,
+    mark_failed,
+    mark_progress,
+    mark_provider_limit,
+    mark_running,
+    serialize_job,
+)
 from ..services.media_storage import store_brand_asset
+from ..services.product_bulk_generator import (
+    approve_template_direction,
+    generate_all_products,
+    generate_first_product_templates,
+)
 from ..services.product_bulk_parser import (
     IMAGE_CONTENT_TYPES,
     match_zip_images,
@@ -319,3 +338,157 @@ async def get_product_bulk_batch(
 ):
     batch = await get_batch(db, suite_id, batch_id, current_user)
     return serialize_batch(batch)
+
+
+def progress_writer(job_id: str):
+    def progress(event: dict) -> None:
+        async def _write() -> None:
+            async with AsyncSessionLocal() as progress_db:
+                await mark_progress(progress_db, job_id, event)
+
+        try:
+            asyncio.create_task(_write())
+        except RuntimeError:
+            pass
+
+    return progress
+
+
+async def _run_generate_first(suite_id: str, batch_id: str, job_id: str) -> None:
+    async with AsyncSessionLocal() as db:
+        await mark_running(db, job_id, "Generating first product templates.")
+        try:
+            asset_ids = await generate_first_product_templates(db, suite_id, batch_id, progress_writer(job_id))
+            await mark_completed(db, job_id, {"batch_id": batch_id, "asset_ids": asset_ids})
+        except Exception as exc:
+            limit = classify_provider_limit(exc)
+            if limit:
+                await mark_provider_limit(db, job_id, **limit)
+                return
+            await mark_failed(db, job_id, str(exc))
+
+
+async def _run_generate_all(suite_id: str, batch_id: str, job_id: str) -> None:
+    async with AsyncSessionLocal() as db:
+        await mark_running(db, job_id, "Generating product batch.")
+        try:
+            asset_ids = await generate_all_products(db, suite_id, batch_id, progress_writer(job_id))
+            await mark_completed(db, job_id, {"batch_id": batch_id, "asset_ids": asset_ids})
+        except Exception as exc:
+            limit = classify_provider_limit(exc)
+            if limit:
+                await mark_provider_limit(db, job_id, **limit)
+                return
+            await mark_failed(db, job_id, str(exc))
+
+
+@router.post("/{batch_id}/generate-first", status_code=202)
+async def generate_first(
+    suite_id: str,
+    batch_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    batch = await get_batch(db, suite_id, batch_id, current_user)
+    if not batch.items:
+        raise HTTPException(status_code=400, detail="Product bulk batch has no products.")
+
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.product_bulk_generate_first,
+        user_id=current_user.id,
+        input_data={"batch_id": batch.id},
+    )
+    background_tasks.add_task(_run_generate_first, suite_id, batch.id, job.id)
+    return serialize_job(job)
+
+
+@router.post("/{batch_id}/templates/{template_id}/approve")
+async def approve_template(
+    suite_id: str,
+    batch_id: str,
+    template_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    batch = await get_batch(db, suite_id, batch_id, current_user)
+    if not any(direction.id == template_id for direction in batch.template_directions):
+        raise HTTPException(status_code=404, detail="Product template direction not found")
+
+    await approve_template_direction(db, batch_id, template_id)
+    return {"ok": True, "template_id": template_id, "status": "approved_template"}
+
+
+@router.post("/{batch_id}/generate-all", status_code=202)
+async def generate_all(
+    suite_id: str,
+    batch_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    batch = await get_batch(db, suite_id, batch_id, current_user)
+    if not batch.approved_template_id:
+        raise HTTPException(status_code=400, detail="Approve a template direction before generating all products.")
+    if not any(direction.id == batch.approved_template_id for direction in batch.template_directions):
+        raise HTTPException(status_code=400, detail="Approved template direction is no longer available.")
+
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.product_bulk_generate_all,
+        user_id=current_user.id,
+        input_data={"batch_id": batch.id, "template_id": batch.approved_template_id},
+    )
+    background_tasks.add_task(_run_generate_all, suite_id, batch.id, job.id)
+    return serialize_job(job)
+
+
+async def get_asset(db: AsyncSession, batch_id: str, asset_id: str) -> ProductBulkAsset:
+    result = await db.execute(
+        select(ProductBulkAsset)
+        .where(ProductBulkAsset.id == asset_id)
+        .where(ProductBulkAsset.batch_id == batch_id)
+    )
+    asset = result.scalar_one_or_none()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Product bulk asset not found")
+    return asset
+
+
+@router.post("/{batch_id}/assets/{asset_id}/approve")
+async def approve_asset(
+    suite_id: str,
+    batch_id: str,
+    asset_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    batch = await get_batch(db, suite_id, batch_id, current_user)
+    asset = await get_asset(db, batch.id, asset_id)
+    asset.status = ProductBulkAssetStatus.approved
+    item = next((product for product in batch.items if product.id == asset.item_id), None)
+    if item:
+        item.status = ProductBulkItemStatus.approved
+    await db.commit()
+    return {"ok": True, "asset_id": asset.id, "status": "approved"}
+
+
+@router.post("/{batch_id}/assets/{asset_id}/reject")
+async def reject_asset(
+    suite_id: str,
+    batch_id: str,
+    asset_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    batch = await get_batch(db, suite_id, batch_id, current_user)
+    asset = await get_asset(db, batch.id, asset_id)
+    asset.status = ProductBulkAssetStatus.rejected
+    item = next((product for product in batch.items if product.id == asset.item_id), None)
+    if item:
+        item.status = ProductBulkItemStatus.rejected
+    await db.commit()
+    return {"ok": True, "asset_id": asset.id, "status": "rejected"}
