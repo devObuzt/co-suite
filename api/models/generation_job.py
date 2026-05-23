@@ -24,6 +24,10 @@ class GenerationJobStatus(str, enum.Enum):
 class GenerationJobType(str, enum.Enum):
     content_generation = "content_generation"
     content_regeneration = "content_regeneration"
+    product_bulk_import = "product_bulk_import"
+    product_bulk_generate_first = "product_bulk_generate_first"
+    product_bulk_generate_all = "product_bulk_generate_all"
+    product_bulk_regenerate_asset = "product_bulk_regenerate_asset"
 
 
 class GenerationJob(Base):
