@@ -1,39 +1,33 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
-import uuid
+import asyncio
 
 from ..core.database import get_db, AsyncSessionLocal
 from ..core.security import get_current_user
 from ..models.user import User
 from ..models.suite import Suite
 from ..models.content import ContentPost, PostStatus
+from ..models.generation_job import GenerationJobType
 from ..services.content_generator import generate_content_for_suite
+from ..services.generation_jobs import (
+    classify_provider_limit,
+    create_job,
+    get_active_job,
+    get_latest_job,
+    mark_completed,
+    mark_failed,
+    mark_progress,
+    mark_provider_limit,
+    mark_running,
+    serialize_job,
+)
 from ..services.publisher import publish_post as _publish_post
 
 router = APIRouter(prefix="/content", tags=["content"])
-_GENERATION_JOBS: dict[str, dict] = {}
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _active_job(job: Optional[dict]) -> bool:
-    return bool(job and job.get("status") in {"queued", "running"})
-
-
-def _job_payload(suite_id: str) -> dict:
-    return _GENERATION_JOBS.get(suite_id) or {
-        "suite_id": suite_id,
-        "status": "idle",
-        "stage": "idle",
-        "message": "No generation is running.",
-        "progress": 0,
-    }
 
 
 class PostOut(BaseModel):
@@ -78,30 +72,24 @@ class SchedulePostRequest(BaseModel):
 
 async def _run_generation(
     suite_id: str,
+    job_id: str,
     count: int = 3,
     options: Optional[dict] = None,
-    job_id: Optional[str] = None,
 ):
     """Background task — runs outside the request's DB session."""
-    job = _GENERATION_JOBS.get(suite_id)
-    if not job or (job_id and job.get("job_id") != job_id):
-        return
-
     def progress(event: dict):
-        current = _GENERATION_JOBS.get(suite_id)
-        if not current or current.get("job_id") != job.get("job_id"):
-            return
-        current.update(event)
-        current["updated_at"] = _now_iso()
+        async def _write():
+            async with AsyncSessionLocal() as progress_db:
+                await mark_progress(progress_db, job_id, event)
 
-    try:
-        progress({
-            "status": "running",
-            "stage": "starting",
-            "message": "Preparing content generation.",
-            "progress": 5,
-        })
-        async with AsyncSessionLocal() as db:
+        try:
+            asyncio.create_task(_write())
+        except RuntimeError:
+            pass
+
+    async with AsyncSessionLocal() as db:
+        await mark_running(db, job_id, "Preparing content generation.")
+        try:
             post_ids = await generate_content_for_suite(
                 suite_id,
                 db,
@@ -109,23 +97,13 @@ async def _run_generation(
                 options=options or {},
                 progress=progress,
             )
-        progress({
-            "status": "success",
-            "stage": "done",
-            "message": f"Generated {len(post_ids)} post{'s' if len(post_ids) != 1 else ''}.",
-            "progress": 100,
-            "finished_at": _now_iso(),
-            "post_ids": post_ids,
-        })
-    except Exception as exc:
-        progress({
-            "status": "failed",
-            "stage": "failed",
-            "message": "Generation failed.",
-            "progress": 100,
-            "finished_at": _now_iso(),
-            "error": str(exc),
-        })
+            await mark_completed(db, job_id, {"post_ids": post_ids, "count": len(post_ids)})
+        except Exception as exc:
+            limit = classify_provider_limit(exc)
+            if limit:
+                await mark_provider_limit(db, job_id, **limit)
+                return
+            await mark_failed(db, job_id, str(exc))
 
 
 @router.post("/{suite_id}/generate", status_code=202)
@@ -143,13 +121,6 @@ async def generate_content(
     if not suite.brand:
         raise HTTPException(status_code=400, detail="Complete suite onboarding first")
 
-    existing = _GENERATION_JOBS.get(suite_id)
-    if _active_job(existing):
-        return {
-            **existing,
-            "message": existing.get("message") or "Generation is already running.",
-        }
-
     options = {
         "prompt": data.prompt,
         "mode": data.mode,
@@ -159,19 +130,19 @@ async def generate_content(
         "model_tier": data.model_tier,
         "use_brand": data.use_brand,
     }
-    job = {
-        "suite_id": suite_id,
-        "job_id": uuid.uuid4().hex,
-        "status": "queued",
-        "stage": "queued",
-        "message": "Generation queued.",
-        "progress": 0,
-        "created_at": _now_iso(),
-        "updated_at": _now_iso(),
-    }
-    _GENERATION_JOBS[suite_id] = job
-    background_tasks.add_task(_run_generation, suite_id, data.count, options, job["job_id"])
-    return job
+    existing = await get_active_job(db, suite_id)
+    if existing:
+        return serialize_job(existing)
+
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.content_generation,
+        user_id=current_user.id,
+        input_data={**options, "count": data.count},
+    )
+    background_tasks.add_task(_run_generation, suite_id, job.id, data.count, options)
+    return serialize_job(job)
 
 
 @router.get("/{suite_id}/generation-status")
@@ -184,7 +155,8 @@ async def generation_status(
     suite = result.scalar_one_or_none()
     if not suite or suite.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Suite not found")
-    return _job_payload(suite_id)
+    job = await get_latest_job(db, suite_id)
+    return serialize_job(job, suite_id=suite_id)
 
 
 @router.get("/{suite_id}", response_model=list[PostOut])
@@ -301,12 +273,9 @@ async def regenerate_post(
     db: AsyncSession = Depends(get_db),
 ):
     post = await _get_post(suite_id, post_id, current_user, db)
-    existing = _GENERATION_JOBS.get(suite_id)
-    if _active_job(existing):
-        return {
-            **existing,
-            "message": existing.get("message") or "Generation is already running.",
-        }
+    existing = await get_active_job(db, suite_id)
+    if existing:
+        return serialize_job(existing)
 
     suite_result = await db.execute(select(Suite).where(Suite.id == suite_id))
     suite = suite_result.scalar_one_or_none()
@@ -334,19 +303,15 @@ async def regenerate_post(
     await db.delete(post)
     await db.commit()
 
-    job = {
-        "suite_id": suite_id,
-        "job_id": uuid.uuid4().hex,
-        "status": "queued",
-        "stage": "queued",
-        "message": "Regeneration queued.",
-        "progress": 0,
-        "created_at": _now_iso(),
-        "updated_at": _now_iso(),
-    }
-    _GENERATION_JOBS[suite_id] = job
-    background_tasks.add_task(_run_generation, suite_id, 1, options, job["job_id"])
-    return job
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.content_regeneration,
+        user_id=current_user.id,
+        input_data={**options, "count": 1, "post_id": post_id},
+    )
+    background_tasks.add_task(_run_generation, suite_id, job.id, 1, options)
+    return serialize_job(job)
 
 
 class PublishRequest(BaseModel):
@@ -372,7 +337,6 @@ async def publish_post(
     if not connections.get("facebook") and not connections.get("instagram"):
         raise HTTPException(status_code=400, detail="No platforms connected. Connect Facebook or Instagram first.")
 
-    import asyncio
     publish_result = await asyncio.to_thread(_publish_post, post, connections, data.platforms)
 
     success = "facebook" in publish_result or "instagram" in publish_result
