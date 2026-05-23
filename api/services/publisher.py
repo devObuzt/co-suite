@@ -11,13 +11,13 @@ Image URL strategy:
 import json
 import logging
 import time
-from pathlib import Path
 from typing import Optional
 
 import httpx
 
 from ..core.config import settings
 from ..models.content import ContentPost, PostFormat, PostStatus
+from .media_storage import upload_static_path
 
 log = logging.getLogger(__name__)
 GRAPH = "https://graph.facebook.com/v22.0"
@@ -59,7 +59,7 @@ def _resolve_url(local_or_remote: str) -> Optional[str]:
     # Local static path — try R2 upload
     if settings.r2_access_key_id and settings.r2_public_url:
         try:
-            return _upload_to_r2(local_or_remote)
+            return upload_static_path(local_or_remote).url
         except Exception as e:
             log.warning("R2 upload failed: %s", e)
 
@@ -73,23 +73,6 @@ def _platform_media(post: ContentPost, platform: str) -> list[str]:
     if urls:
         return urls
     return post.media_urls or []
-
-
-def _upload_to_r2(static_path: str) -> str:
-    """Upload a /static/... file to R2 and return its public URL."""
-    import boto3
-    local = Path(__file__).parent.parent / static_path.lstrip("/")
-    key = f"posts/{local.name}"
-
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=f"https://{settings.r2_account_id}.r2.cloudflarestorage.com",
-        aws_access_key_id=settings.r2_access_key_id,
-        aws_secret_access_key=settings.r2_secret_access_key,
-        region_name="auto",
-    )
-    s3.upload_file(str(local), settings.r2_bucket_name, key, ExtraArgs={"ContentType": "image/png"})
-    return f"{settings.r2_public_url}/{key}"
 
 
 # ── Facebook ──────────────────────────────────────────────────────────────────

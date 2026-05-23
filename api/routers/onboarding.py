@@ -5,13 +5,12 @@ from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
 import uuid as _uuid
-import boto3 as _boto3
 from ..core.database import get_db
 from ..core.security import get_current_user
-from ..core.config import settings
 from ..models.user import User
 from ..models.suite import Suite, SuiteStatus
 from ..services.brand_ai import extract_brand_from_sources, suggest_brand_identity, suggest_brand_assets
+from ..services.media_storage import r2_configured, store_brand_asset
 from ..services.strategy_generator import generate_strategy as _generate_strategy
 
 log = logging.getLogger(__name__)
@@ -219,7 +218,7 @@ async def upload_brand_asset(
     if not suite or suite.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Suite not found")
 
-    if not settings.r2_account_id or not settings.r2_bucket_name:
+    if not r2_configured():
         raise HTTPException(status_code=400, detail="Storage not configured")
 
     # Validate file type
@@ -232,7 +231,7 @@ async def upload_brand_asset(
         raise HTTPException(status_code=400, detail="Font must be TTF, OTF, WOFF, or WOFF2")
 
     content = await file.read()
-    key = f"{asset_type}s/{suite_id}/{_uuid.uuid4()}.{ext}"
+    storage_filename = f"{_uuid.uuid4()}.{ext}"
 
     content_types = {
         "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
@@ -241,19 +240,14 @@ async def upload_brand_asset(
         "woff": "font/woff", "woff2": "font/woff2",
     }
 
-    s3 = _boto3.client(
-        "s3",
-        endpoint_url=f"https://{settings.r2_account_id}.r2.cloudflarestorage.com",
-        aws_access_key_id=settings.r2_access_key_id,
-        aws_secret_access_key=settings.r2_secret_access_key,
+    stored = store_brand_asset(
+        suite_id=suite_id,
+        asset_type=asset_type,
+        filename=storage_filename,
+        data=content,
+        content_type=content_types.get(ext, "application/octet-stream"),
     )
-    s3.put_object(
-        Bucket=settings.r2_bucket_name,
-        Key=key,
-        Body=content,
-        ContentType=content_types.get(ext, "application/octet-stream"),
-    )
-    url = f"{settings.r2_public_url}/{key}"
+    url = stored.url
 
     brand = dict(suite.brand) if suite.brand else {}
 

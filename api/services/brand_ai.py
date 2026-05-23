@@ -6,6 +6,7 @@ from typing import Optional
 
 from ..core.config import settings
 from ..core.llm_client import call_text_ai
+from .media_storage import r2_configured, upload_bytes
 from .multi_scraper import gather_all_sources
 
 log = logging.getLogger(__name__)
@@ -389,8 +390,6 @@ async def suggest_brand_assets(brand: dict, generate: list[str], user_language: 
     if "logo" in generate:
         try:
             from .content_generator import _generate_image
-            from ..core.config import settings as _settings
-            import boto3 as _boto3
             import uuid as _uuid
             from pathlib import Path as _Path
             from PIL import Image as _PILImage, ImageDraw as _ImageDraw, ImageFont as _IFont
@@ -479,16 +478,9 @@ async def suggest_brand_assets(brand: dict, generate: list[str], user_language: 
                     else:
                         log.warning("Font %s not found — skipping text overlay", font_path)
 
-                if _settings.r2_account_id and _settings.r2_bucket_name:
-                    s3 = _boto3.client(
-                        "s3",
-                        endpoint_url=f"https://{_settings.r2_account_id}.r2.cloudflarestorage.com",
-                        aws_access_key_id=_settings.r2_access_key_id,
-                        aws_secret_access_key=_settings.r2_secret_access_key,
-                    )
+                if r2_configured():
                     key = f"logos/{_uuid.uuid4()}.png"
-                    s3.put_object(Bucket=_settings.r2_bucket_name, Key=key, Body=png_bytes, ContentType="image/png")
-                    logo_url = f"{_settings.r2_public_url}/{key}"
+                    logo_url = upload_bytes(key, png_bytes, "image/png").url
                     result["logo_url"] = logo_url
                     result["logo_source"] = "ai-generated"
                     result["brand_generated"] = {"logo_url": logo_url, "logo_style": logo_style}

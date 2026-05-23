@@ -20,6 +20,7 @@ from ..core.config import settings
 from ..core.ai_client import call_claude_sync
 from ..models.content import ContentPost, PostFormat, PostStatus
 from ..models.suite import Suite
+from .media_storage import STATIC_DIR, store_post_media
 
 log = logging.getLogger(__name__)
 ProgressCallback = Callable[[dict], None]
@@ -27,9 +28,6 @@ ProgressCallback = Callable[[dict], None]
 _PROMPTS_PATH = Path(__file__).parent.parent / "engine" / "config" / "prompts.json"
 with open(_PROMPTS_PATH, "r", encoding="utf-8") as _f:
     _PROMPTS = json.load(_f)
-
-STATIC_DIR = Path(__file__).parent.parent / "static" / "posts"
-STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 DIVISION_META = {
     "design": {"name_en": "Design", "color_name": "yellow", "color": "#E5B833"},
@@ -569,37 +567,7 @@ def _save_media(media_bytes: bytes, post_id: str, filename: str, content_type: s
     In production, prefer R2 so generated media survives Railway redeploys and
     Meta can fetch it over public HTTPS. Local /static paths are only a fallback.
     """
-    if (
-        settings.r2_account_id
-        and settings.r2_access_key_id
-        and settings.r2_secret_access_key
-        and settings.r2_bucket_name
-        and settings.r2_public_url
-    ):
-        try:
-            import boto3
-
-            key = f"posts/{filename}"
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=f"https://{settings.r2_account_id}.r2.cloudflarestorage.com",
-                aws_access_key_id=settings.r2_access_key_id,
-                aws_secret_access_key=settings.r2_secret_access_key,
-                region_name="auto",
-            )
-            s3.put_object(
-                Bucket=settings.r2_bucket_name,
-                Key=key,
-                Body=media_bytes,
-                ContentType=content_type,
-            )
-            return f"{settings.r2_public_url.rstrip('/')}/{key}"
-        except Exception as e:
-            log.warning("R2 media upload failed, falling back to local static file: %s", e)
-
-    path = STATIC_DIR / filename
-    path.write_bytes(media_bytes)
-    return f"/static/posts/{filename}"
+    return store_post_media(post_id, filename, media_bytes, content_type).url
 
 
 def _save_image(image_bytes: bytes, post_id: str, slide_idx: int = 0) -> str:
