@@ -1,5 +1,8 @@
 import logging
+import re
+from io import BytesIO
 from pathlib import PurePosixPath
+from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
@@ -18,11 +21,23 @@ from ..models.product_bulk import (
 from ..models.suite import Suite
 from ..models.user import User
 from ..services.media_storage import store_brand_asset
-from ..services.product_bulk_parser import match_zip_images, parse_workbook
+from ..services.product_bulk_parser import (
+    IMAGE_CONTENT_TYPES,
+    match_zip_images,
+    normalize_filename,
+    parse_workbook,
+)
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suites/{suite_id}/product-bulk", tags=["product-bulk"])
+
+MAX_EXCEL_BYTES = 5 * 1024 * 1024
+MAX_ZIP_BYTES = 250 * 1024 * 1024
+MAX_PRODUCT_ROWS = 500
+MAX_ZIP_ENTRIES = 1000
+MAX_MATCHED_IMAGE_BYTES = 15 * 1024 * 1024
+MAX_TOTAL_MATCHED_IMAGE_BYTES = 200 * 1024 * 1024
 
 
 async def get_owned_suite(db: AsyncSession, suite_id: str, user: User) -> Suite:
@@ -123,6 +138,56 @@ def _zip_filename(filename: str) -> str:
     return PurePosixPath(filename.replace("\\", "/")).name or "image"
 
 
+def _sanitized_zip_basename(filename: str) -> str:
+    basename = _zip_filename(filename)
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", basename).strip("._")
+    return safe or "image"
+
+
+def _validate_zip_metadata(zip_bytes: bytes, image_refs: list[str]) -> None:
+    wanted = {normalize_filename(ref): ref for ref in image_refs if ref}
+    seen_refs: set[str] = set()
+    total_matched_bytes = 0
+
+    try:
+        with ZipFile(BytesIO(zip_bytes)) as zf:
+            entries = zf.infolist()
+            if len(entries) > MAX_ZIP_ENTRIES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Image ZIP contains too many entries. Maximum is {MAX_ZIP_ENTRIES}.",
+                )
+
+            for info in entries:
+                suffix = PurePosixPath(info.filename).suffix.lower()
+                if info.is_dir() or suffix not in IMAGE_CONTENT_TYPES:
+                    continue
+
+                original_ref = wanted.get(normalize_filename(info.filename))
+                if not original_ref or original_ref in seen_refs:
+                    continue
+
+                seen_refs.add(original_ref)
+                if info.file_size > MAX_MATCHED_IMAGE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Matched image '{_zip_filename(info.filename)}' is too large. "
+                            "Maximum is 15 MB per image."
+                        ),
+                    )
+                total_matched_bytes += info.file_size
+                if total_matched_bytes > MAX_TOTAL_MATCHED_IMAGE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Matched images are too large in total. Maximum is 200 MB.",
+                    )
+    except HTTPException:
+        raise
+    except BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="Invalid image ZIP file.") from exc
+
+
 @router.post("")
 async def create_product_bulk_batch(
     suite_id: str,
@@ -137,12 +202,25 @@ async def create_product_bulk_batch(
     excel_bytes = await excel.read()
     zip_bytes = await images_zip.read()
 
+    if len(excel_bytes) > MAX_EXCEL_BYTES:
+        raise HTTPException(status_code=413, detail="Excel file is too large. Maximum is 5 MB.")
+    if len(zip_bytes) > MAX_ZIP_BYTES:
+        raise HTTPException(status_code=413, detail="Image ZIP file is too large. Maximum is 250 MB.")
+
     try:
         parsed = parse_workbook(excel_bytes)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid Excel file: {exc}") from exc
 
+    if len(parsed.rows) > MAX_PRODUCT_ROWS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Product import contains too many rows. Maximum is {MAX_PRODUCT_ROWS}.",
+        )
+
     image_refs = [row.get("image_ref", "") for row in parsed.rows]
+    _validate_zip_metadata(zip_bytes, image_refs)
+
     try:
         image_matches = match_zip_images(zip_bytes, image_refs)
     except Exception as exc:
@@ -167,10 +245,11 @@ async def create_product_bulk_batch(
         matched = image_matches.get(image_ref)
         if matched:
             try:
+                row_index = int(row["row_index"])
                 stored = store_brand_asset(
                     suite_id=suite.id,
                     asset_type="product-bulk",
-                    filename=f"{batch.id}/{_zip_filename(matched.filename)}",
+                    filename=f"{batch.id}/{row_index}_{_sanitized_zip_basename(matched.filename)}",
                     data=matched.data,
                     content_type=matched.content_type,
                 )
@@ -183,6 +262,13 @@ async def create_product_bulk_batch(
                     matched.filename,
                     exc,
                 )
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Matched product image could not be stored. "
+                        "Check public storage configuration and retry."
+                    ),
+                ) from exc
 
         db.add(
             ProductBulkItem(
