@@ -43,8 +43,17 @@ async def startup():
                 await conn.execute(text(
                     "ALTER TABLE suites ADD COLUMN IF NOT EXISTS strategy JSON"
                 ))
+                for value in (
+                    "product_bulk_import",
+                    "product_bulk_generate_first",
+                    "product_bulk_generate_all",
+                    "product_bulk_regenerate_asset",
+                ):
+                    await conn.execute(text(
+                        f"ALTER TYPE generationjobtype ADD VALUE IF NOT EXISTS '{value}'"
+                    ))
         except Exception as e:
-            log.warning("strategy column migration skipped: %s", e)
+            log.warning("startup migration skipped: %s", e)
     except Exception as e:
         log.error("Database startup failed (check DATABASE_URL env var): %s", e)
 
@@ -61,5 +70,3 @@ app.include_router(analytics.router, prefix="/api/v1")
 @app.get("/health")
 async def health():
     return {"status": "ok", "app": settings.app_name}
-
-
