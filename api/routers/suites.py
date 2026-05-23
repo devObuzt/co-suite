@@ -8,6 +8,7 @@ from ..core.database import get_db
 from ..core.security import get_current_user
 from ..models.user import User
 from ..models.suite import Suite, SuiteMember, SuiteStatus, MemberRole
+from ..services.media_storage import storage_status
 from ..services.multi_scraper import search_market_content
 from ..services.meta_ads_library import fetch_meta_ads_inspiration
 
@@ -99,6 +100,19 @@ async def get_suite(
     if suite.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
     return suite
+
+
+@router.get("/{suite_id}/storage-status")
+async def get_storage_status(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+    return storage_status()
 
 
 @router.patch("/{suite_id}/brand")

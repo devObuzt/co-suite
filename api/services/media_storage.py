@@ -34,6 +34,39 @@ def r2_configured() -> bool:
     )
 
 
+def storage_status() -> dict:
+    missing = []
+    checks = {
+        "R2_ACCOUNT_ID": bool(settings.r2_account_id),
+        "R2_ACCESS_KEY_ID": bool(settings.r2_access_key_id),
+        "R2_SECRET_ACCESS_KEY": bool(settings.r2_secret_access_key),
+        "R2_BUCKET_NAME": bool(settings.r2_bucket_name),
+        "R2_PUBLIC_URL": bool(settings.r2_public_url),
+    }
+    for key, present in checks.items():
+        if not present:
+            missing.append(key)
+
+    configured = not missing
+    warnings = []
+    if not configured:
+        warnings.append("Generated media will fall back to local storage and may disappear after redeploys.")
+        warnings.append("Publishing media to Meta requires a public HTTPS storage URL.")
+    elif not settings.r2_public_url.startswith("https://"):
+        configured = False
+        warnings.append("R2_PUBLIC_URL must start with https:// so social platforms can fetch media.")
+
+    return {
+        "configured": configured,
+        "backend": "r2" if configured else "local",
+        "public": configured,
+        "bucket_configured": bool(settings.r2_bucket_name),
+        "public_url_configured": bool(settings.r2_public_url),
+        "missing": missing,
+        "warnings": warnings,
+    }
+
+
 def _r2_client():
     if not r2_configured():
         raise RuntimeError("R2 storage is not configured")
