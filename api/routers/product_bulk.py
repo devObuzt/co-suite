@@ -54,7 +54,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suites/{suite_id}/product-bulk", tags=["product-bulk"])
 
-MAX_EXCEL_MB = 25
+MAX_EXCEL_MB = 50
 MAX_EXCEL_BYTES = MAX_EXCEL_MB * 1024 * 1024
 MAX_ZIP_BYTES = 250 * 1024 * 1024
 MAX_PRODUCT_ROWS = 500
