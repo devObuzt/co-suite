@@ -8,7 +8,7 @@ from ..core.database import get_db
 from ..core.security import get_current_user
 from ..models.user import User
 from ..models.suite import Suite, SuiteMember, SuiteStatus, MemberRole
-from ..services.media_storage import storage_status
+from ..services.media_storage import storage_status, test_public_storage
 from ..services.multi_scraper import search_market_content
 from ..services.meta_ads_library import fetch_meta_ads_inspiration
 
@@ -113,6 +113,19 @@ async def get_storage_status(
     if not suite or suite.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Suite not found")
     return storage_status()
+
+
+@router.post("/{suite_id}/storage-test")
+async def run_storage_test(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+    return await test_public_storage()
 
 
 @router.patch("/{suite_id}/brand")

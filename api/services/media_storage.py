@@ -1,8 +1,11 @@
 import logging
 import mimetypes
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
+
+import httpx
 
 from ..core.config import settings
 
@@ -65,6 +68,64 @@ def storage_status() -> dict:
         "missing": missing,
         "warnings": warnings,
     }
+
+
+def storage_test_key() -> str:
+    return f"healthchecks/{uuid.uuid4().hex}.txt"
+
+
+async def test_public_storage() -> dict:
+    status = storage_status()
+    if not status["configured"]:
+        return {
+            **status,
+            "ok": False,
+            "uploaded": False,
+            "public_fetch_ok": False,
+            "error": "R2 storage is not fully configured.",
+        }
+
+    try:
+        stored = upload_bytes(
+            storage_test_key(),
+            b"co-suite storage health check\n",
+            "text/plain; charset=utf-8",
+        )
+    except Exception as exc:
+        return {
+            **status,
+            "ok": False,
+            "uploaded": False,
+            "public_fetch_ok": False,
+            "error": str(exc),
+        }
+
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            response = await client.head(stored.url)
+            if response.status_code in (405, 403):
+                response = await client.get(stored.url)
+        public_ok = 200 <= response.status_code < 300
+        return {
+            **status,
+            "ok": public_ok,
+            "uploaded": True,
+            "public_fetch_ok": public_ok,
+            "status_code": response.status_code,
+            "url": stored.url,
+            "key": stored.key,
+            "error": None if public_ok else f"Public URL returned HTTP {response.status_code}.",
+        }
+    except Exception as exc:
+        return {
+            **status,
+            "ok": False,
+            "uploaded": True,
+            "public_fetch_ok": False,
+            "url": stored.url,
+            "key": stored.key,
+            "error": str(exc),
+        }
 
 
 def _r2_client():
