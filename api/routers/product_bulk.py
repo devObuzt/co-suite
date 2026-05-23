@@ -6,6 +6,7 @@ from pathlib import PurePosixPath
 from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -27,6 +28,7 @@ from ..models.user import User
 from ..services.generation_jobs import (
     classify_provider_limit,
     create_job,
+    get_active_job,
     mark_completed,
     mark_failed,
     mark_progress,
@@ -39,6 +41,7 @@ from ..services.product_bulk_generator import (
     approve_template_direction,
     generate_all_products,
     generate_first_product_templates,
+    regenerate_product_asset,
 )
 from ..services.product_bulk_parser import (
     IMAGE_CONTENT_TYPES,
@@ -57,6 +60,10 @@ MAX_PRODUCT_ROWS = 500
 MAX_ZIP_ENTRIES = 1000
 MAX_MATCHED_IMAGE_BYTES = 15 * 1024 * 1024
 MAX_TOTAL_MATCHED_IMAGE_BYTES = 200 * 1024 * 1024
+
+
+class RegenerateAssetRequest(BaseModel):
+    feedback: str | None = None
 
 
 async def get_owned_suite(db: AsyncSession, suite_id: str, user: User) -> Suite:
@@ -382,6 +389,37 @@ async def _run_generate_all(suite_id: str, batch_id: str, job_id: str) -> None:
             await mark_failed(db, job_id, str(exc))
 
 
+async def _run_regenerate_asset(
+    suite_id: str,
+    batch_id: str,
+    asset_id: str,
+    job_id: str,
+    feedback: str | None,
+) -> None:
+    async with AsyncSessionLocal() as db:
+        await mark_running(db, job_id, "Regenerating product asset.")
+        try:
+            new_asset_id = await regenerate_product_asset(
+                db,
+                suite_id,
+                batch_id,
+                asset_id,
+                feedback=feedback,
+                progress=progress_writer(job_id),
+            )
+            await mark_completed(
+                db,
+                job_id,
+                {"batch_id": batch_id, "asset_id": new_asset_id, "regenerated_from_asset_id": asset_id},
+            )
+        except Exception as exc:
+            limit = classify_provider_limit(exc)
+            if limit:
+                await mark_provider_limit(db, job_id, **limit)
+                return
+            await mark_failed(db, job_id, str(exc))
+
+
 @router.post("/{batch_id}/generate-first", status_code=202)
 async def generate_first(
     suite_id: str,
@@ -393,6 +431,9 @@ async def generate_first(
     batch = await get_batch(db, suite_id, batch_id, current_user)
     if not batch.items:
         raise HTTPException(status_code=400, detail="Product bulk batch has no products.")
+    existing = await get_active_job(db, suite_id)
+    if existing:
+        return serialize_job(existing)
 
     job = await create_job(
         db,
@@ -434,6 +475,9 @@ async def generate_all(
         raise HTTPException(status_code=400, detail="Approve a template direction before generating all products.")
     if not any(direction.id == batch.approved_template_id for direction in batch.template_directions):
         raise HTTPException(status_code=400, detail="Approved template direction is no longer available.")
+    existing = await get_active_job(db, suite_id)
+    if existing:
+        return serialize_job(existing)
 
     job = await create_job(
         db,
@@ -492,3 +536,38 @@ async def reject_asset(
         item.status = ProductBulkItemStatus.rejected
     await db.commit()
     return {"ok": True, "asset_id": asset.id, "status": "rejected"}
+
+
+@router.post("/{batch_id}/assets/{asset_id}/regenerate", status_code=202)
+async def regenerate_asset(
+    suite_id: str,
+    batch_id: str,
+    asset_id: str,
+    data: RegenerateAssetRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    batch = await get_batch(db, suite_id, batch_id, current_user)
+    asset = await get_asset(db, batch.id, asset_id)
+    if not any(item.id == asset.item_id for item in batch.items):
+        raise HTTPException(status_code=404, detail="Product bulk item not found")
+    if asset.template_direction_id and not any(
+        direction.id == asset.template_direction_id for direction in batch.template_directions
+    ):
+        raise HTTPException(status_code=400, detail="Product template direction is no longer available.")
+
+    existing = await get_active_job(db, suite_id)
+    if existing:
+        return serialize_job(existing)
+
+    feedback = (data.feedback or "").strip()
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.product_bulk_regenerate_asset,
+        user_id=current_user.id,
+        input_data={"batch_id": batch.id, "asset_id": asset.id, "feedback": feedback},
+    )
+    background_tasks.add_task(_run_regenerate_asset, suite_id, batch.id, asset.id, job.id, feedback)
+    return serialize_job(job)

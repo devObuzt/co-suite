@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from io import BytesIO
 from pathlib import Path
@@ -21,6 +22,7 @@ from ..models.product_bulk import (
 )
 from ..models.suite import Suite
 from .content_generator import _generate_image
+from .generation_jobs import classify_provider_limit
 from .media_storage import store_post_media
 
 log = logging.getLogger(__name__)
@@ -104,10 +106,7 @@ def _open_reference_image(data: bytes):
     return image
 
 
-def _load_product_reference_image(image_url: Optional[str]):
-    if not image_url:
-        return None
-
+def _load_product_reference_image(image_url: str):
     try:
         if image_url.startswith("/static/"):
             path = Path(__file__).parent.parent / image_url.lstrip("/")
@@ -126,6 +125,16 @@ def _load_product_reference_image(image_url: Optional[str]):
     except Exception:
         log.exception("Could not load product reference image %s", image_url)
         raise
+
+
+def _generate_and_store_product_image(asset_id: str, image_url: str, prompt: str, filename: str) -> Optional[str]:
+    reference_image = _load_product_reference_image(image_url)
+    image_bytes = _generate_image(prompt, "4:5", extra_images=[reference_image])
+    if not image_bytes:
+        return None
+
+    stored = store_post_media(asset_id, f"{asset_id}_{filename}", image_bytes, "image/png")
+    return stored.url
 
 
 async def _load_batch(db: AsyncSession, batch_id: str) -> ProductBulkBatch:
@@ -171,15 +180,35 @@ async def _generate_asset_image(
     prompt: str,
     filename: str,
 ) -> bool:
-    reference_image = _load_product_reference_image(item.image_url)
-    extra_images = [reference_image] if reference_image is not None else []
-    image_bytes = _generate_image(prompt, "4:5", extra_images=extra_images)
-    if not image_bytes:
+    if not item.image_url:
         asset.status = ProductBulkAssetStatus.failed
+        asset.feedback = "Missing product image. Generation requires a matched stored product image."
+        await db.flush()
         return False
 
-    stored = store_post_media(asset.id, f"{asset.id}_{filename}", image_bytes, "image/png")
-    asset.media_url = stored.url
+    try:
+        media_url = await asyncio.to_thread(
+            _generate_and_store_product_image,
+            asset.id,
+            item.image_url,
+            prompt,
+            filename,
+        )
+    except Exception as exc:
+        if classify_provider_limit(exc):
+            raise
+        asset.status = ProductBulkAssetStatus.failed
+        asset.feedback = str(exc)
+        await db.flush()
+        return False
+
+    if not media_url:
+        asset.status = ProductBulkAssetStatus.failed
+        asset.feedback = "Image provider returned no product image."
+        await db.flush()
+        return False
+
+    asset.media_url = media_url
     asset.status = ProductBulkAssetStatus.generated
     await db.flush()
     return True
@@ -191,7 +220,7 @@ def _existing_full_batch_asset(item: ProductBulkItem, template_id: str) -> Optio
             asset.template_direction_id == template_id
             and asset.status in {ProductBulkAssetStatus.generated, ProductBulkAssetStatus.approved}
             and asset.ai_metadata
-            and asset.ai_metadata.get("phase") == "first_product"
+            and asset.ai_metadata.get("phase") == "full_batch"
         ):
             return asset
     return None
@@ -208,8 +237,16 @@ async def generate_first_product_templates(
     items = sorted(batch.items, key=lambda item: item.row_index)
     if not items:
         raise ValueError("Product bulk batch has no products.")
+    if batch.template_directions:
+        raise ValueError("Template directions already exist for this batch.")
 
     first_item = items[0]
+    if not first_item.image_url:
+        first_item.status = ProductBulkItemStatus.failed
+        batch.status = ProductBulkBatchStatus.failed
+        await db.commit()
+        raise ValueError("First product has no stored product image. Upload a matched product image before generating templates.")
+
     batch.status = ProductBulkBatchStatus.first_generating
     first_item.status = ProductBulkItemStatus.first_sample
     await db.commit()
@@ -232,9 +269,12 @@ async def generate_first_product_templates(
 
         prompt = _product_prompt(suite, batch, first_item, direction_data)
         asset = await _create_asset(db, batch, first_item, direction, direction_data, prompt, "first_product")
+        await db.commit()
         try:
             await _generate_asset_image(db, asset, first_item, prompt, "product-template.png")
         except Exception as exc:
+            if classify_provider_limit(exc):
+                raise
             asset.status = ProductBulkAssetStatus.failed
             asset.feedback = str(exc)
         direction.sample_asset_id = asset.id
@@ -277,6 +317,15 @@ async def generate_all_products(
 
     direction_data = _direction_data(direction)
     items = sorted(batch.items, key=lambda item: item.row_index)
+    if items and not any(item.image_url for item in items):
+        batch.status = ProductBulkBatchStatus.failed
+        batch.completed_products = 0
+        batch.failed_products = len(items)
+        for item in items:
+            item.status = ProductBulkItemStatus.failed
+        await db.commit()
+        raise ValueError("No products have stored product images. Upload matched product images before generating.")
+
     batch.status = ProductBulkBatchStatus.generating_all
     batch.completed_products = 0
     batch.failed_products = 0
@@ -305,9 +354,12 @@ async def generate_all_products(
         item.status = ProductBulkItemStatus.generating
         prompt = _product_prompt(suite, batch, item, direction_data)
         asset = await _create_asset(db, batch, item, direction, direction_data, prompt, "full_batch")
+        await db.commit()
         try:
             generated = await _generate_asset_image(db, asset, item, prompt, "product.png")
         except Exception as exc:
+            if classify_provider_limit(exc):
+                raise
             generated = False
             asset.status = ProductBulkAssetStatus.failed
             asset.feedback = str(exc)
@@ -324,3 +376,74 @@ async def generate_all_products(
     batch.status = ProductBulkBatchStatus.completed
     await db.commit()
     return asset_ids
+
+
+async def regenerate_product_asset(
+    db: AsyncSession,
+    suite_id: str,
+    batch_id: str,
+    asset_id: str,
+    feedback: Optional[str] = None,
+    progress: ProgressCallback = None,
+) -> str:
+    suite = (await db.execute(select(Suite).where(Suite.id == suite_id))).scalar_one()
+    batch = await _load_batch(db, batch_id)
+    original_asset = next((asset for asset in batch.assets if asset.id == asset_id), None)
+    if not original_asset:
+        raise ValueError("Product bulk asset does not belong to this batch.")
+
+    item = next((product for product in batch.items if product.id == original_asset.item_id), None)
+    if not item:
+        raise ValueError("Product bulk asset item does not belong to this batch.")
+
+    direction = next(
+        (
+            template
+            for template in batch.template_directions
+            if template.id == (original_asset.template_direction_id or batch.approved_template_id)
+        ),
+        None,
+    )
+    if not direction:
+        raise ValueError("Product bulk asset template direction is no longer available.")
+
+    direction_data = _direction_data(direction)
+    prompt = _product_prompt(suite, batch, item, direction_data)
+    clean_feedback = (feedback or "").strip()
+    if clean_feedback:
+        prompt += f"\n\nRegeneration feedback: {clean_feedback}"
+
+    if progress:
+        progress(
+            {
+                "status": "running",
+                "stage": "regenerate",
+                "message": "Regenerating product asset.",
+                "progress": 35,
+            }
+        )
+
+    item.status = ProductBulkItemStatus.generating
+    new_asset = await _create_asset(db, batch, item, direction, direction_data, prompt, "regenerate_asset")
+    new_asset.ai_metadata = {
+        **(new_asset.ai_metadata or {}),
+        "regenerated_from_asset_id": original_asset.id,
+        "feedback": clean_feedback,
+    }
+    await db.commit()
+
+    try:
+        generated = await _generate_asset_image(db, new_asset, item, prompt, "product-regenerate.png")
+    except Exception as exc:
+        if classify_provider_limit(exc):
+            raise
+        generated = False
+        new_asset.status = ProductBulkAssetStatus.failed
+        new_asset.feedback = str(exc)
+
+    if generated:
+        item.status = ProductBulkItemStatus.generated
+    else:
+        item.status = ProductBulkItemStatus.failed
+    await db.commit()
+    return new_asset.id
