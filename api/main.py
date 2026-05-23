@@ -10,6 +10,7 @@ from .routers import content
 from .routers import connections
 from .routers import billing
 from .routers import analytics
+from .routers import product_bulk
 
 app = FastAPI(title=settings.app_name, docs_url="/docs" if settings.debug else None)
 
@@ -68,6 +69,7 @@ app.include_router(content.router, prefix="/api/v1")
 app.include_router(connections.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
 app.include_router(analytics.router, prefix="/api/v1")
+app.include_router(product_bulk.router, prefix="/api/v1")
 
 
 @app.get("/health")
