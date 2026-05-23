@@ -6,6 +6,7 @@ from openpyxl import Workbook
 from api.services.product_bulk_parser import (
     DEFAULT_HEBREW_MAPPING,
     detect_column_mapping,
+    fill_missing_image_refs_from_zip,
     match_zip_images,
     parse_workbook,
 )
@@ -28,6 +29,17 @@ def make_xlsx_with_leading_empty_rows() -> bytes:
     ws.append([None, "", None])
     ws.append(["שם", "תמונה", "סלוגן"])
     ws.append(["כסא משרדי", "chair.png", "יושבים נכון"])
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def make_xlsx_with_title_before_headers() -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.append([None, "אורא אופיס - יבוא ושיווק ריהוט משרדי"])
+    ws.append(["שם", "תמונה", "סלוגן", "תיאור המוצר", "מחיר לסט שלם + מע\"מ", "תוספת בכל העיצובים", "הערות"])
+    ws.append(["ASIL", None, "סלוגן", "שולחן עבודה מודרני", "990", "הנחה", None])
     out = BytesIO()
     wb.save(out)
     return out.getvalue()
@@ -87,6 +99,29 @@ def test_parse_workbook_uses_first_non_empty_row_as_headers():
         "תמונה": "chair.png",
         "סלוגן": "יושבים נכון",
     }
+
+
+def test_parse_workbook_skips_title_rows_before_real_headers():
+    parsed = parse_workbook(make_xlsx_with_title_before_headers())
+
+    assert parsed.headers[0] == "שם"
+    assert parsed.mapping["product_name"] == "שם"
+    assert len(parsed.rows) == 1
+    row = parsed.rows[0]
+    assert row["row_index"] == 3
+    assert row["product_name"] == "ASIL"
+    assert row["description"] == "שולחן עבודה מודרני"
+
+
+def test_fill_missing_image_refs_from_zip_matches_product_name():
+    parsed = parse_workbook(make_xlsx_with_title_before_headers())
+    out = BytesIO()
+    with ZipFile(out, "w") as zf:
+        zf.writestr("ASIL-1 1.20 + 1.40 + 1.60.jpg", b"fake-image")
+
+    fill_missing_image_refs_from_zip(parsed.rows, out.getvalue())
+
+    assert parsed.rows[0]["image_ref"] == "asil-1 1.20 + 1.40 + 1.60.jpg"
 
 
 def test_match_zip_images_matches_by_basename_and_ignores_non_images():

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import PurePosixPath
+import re
 from typing import Any
 from zipfile import ZipFile
 
@@ -59,6 +60,12 @@ def detect_column_mapping(headers: list[str]) -> dict[str, str]:
     return mapping
 
 
+def _looks_like_header_row(row: tuple[Any, ...]) -> bool:
+    headers = [clean_cell(cell) for cell in row]
+    mapping = detect_column_mapping(headers)
+    return "product_name" in mapping and len(mapping) >= 2
+
+
 def parse_workbook(xlsx_bytes: bytes, mapping: dict[str, str] | None = None) -> ParsedWorkbook:
     wb = load_workbook(BytesIO(xlsx_bytes), read_only=True, data_only=True)
     ws = wb.worksheets[0]
@@ -67,7 +74,11 @@ def parse_workbook(xlsx_bytes: bytes, mapping: dict[str, str] | None = None) -> 
     header_row_index = None
     header_row = None
     for idx, row in enumerate(rows):
-        if any(clean_cell(cell) for cell in row):
+        if mapping:
+            is_header = any(clean_cell(cell) for cell in row)
+        else:
+            is_header = _looks_like_header_row(row)
+        if is_header:
             header_row_index = idx
             header_row = row
             break
@@ -96,6 +107,118 @@ def parse_workbook(xlsx_bytes: bytes, mapping: dict[str, str] | None = None) -> 
         data_rows.append(normalized)
 
     return ParsedWorkbook(headers=headers, mapping=active_mapping, rows=data_rows)
+
+
+def _matchable_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9א-ת\u0600-\u06ff]+", " ", clean_cell(value).lower()).strip()
+
+
+def _zip_image_candidates(zip_bytes: bytes) -> list[str]:
+    with ZipFile(BytesIO(zip_bytes)) as zf:
+        return [
+            info.filename
+            for info in zf.infolist()
+            if not info.is_dir() and PurePosixPath(info.filename).suffix.lower() in IMAGE_CONTENT_TYPES
+        ]
+
+
+def fill_missing_image_refs_from_zip(rows: list[dict[str, Any]], zip_bytes: bytes) -> None:
+    """Fill blank image_ref values by matching product names against ZIP image filenames."""
+    candidates = _zip_image_candidates(zip_bytes)
+    used: set[str] = set()
+
+    for row in rows:
+        if clean_cell(row.get("image_ref")):
+            continue
+
+        product_name = _matchable_text(row.get("product_name", ""))
+        if not product_name:
+            continue
+
+        product_tokens = product_name.split()
+        match = None
+        for filename in candidates:
+            if filename in used:
+                continue
+            stem = _matchable_text(PurePosixPath(filename).stem)
+            if product_name in stem or all(token in stem for token in product_tokens):
+                match = filename
+                break
+
+        if match:
+            row["image_ref"] = normalize_filename(match)
+            row.setdefault("raw_row", {})["__matched_image_from_product_name"] = match
+            used.add(match)
+
+
+def _image_content_type(image_format: str | None) -> tuple[str, str]:
+    normalized = (image_format or "png").lower()
+    if normalized in {"jpg", "jpeg"}:
+        return "image/jpeg", "jpg"
+    if normalized == "webp":
+        return "image/webp", "webp"
+    return "image/png", "png"
+
+
+def fill_missing_images_from_workbook(rows: list[dict[str, Any]], xlsx_bytes: bytes) -> None:
+    """Attach embedded worksheet images to rows that have no image reference."""
+    if not rows:
+        return
+
+    wb = load_workbook(BytesIO(xlsx_bytes), data_only=True)
+    ws = wb.worksheets[0]
+    images = []
+    for image in getattr(ws, "_images", []):
+        try:
+            row_index = image.anchor._from.row + 1
+            data = image._data()
+        except Exception:
+            continue
+        content_type, extension = _image_content_type(getattr(image, "format", None))
+        images.append(
+            {
+                "row_index": row_index,
+                "filename": f"embedded-row-{row_index}.{extension}",
+                "data": data,
+                "content_type": content_type,
+                "size": len(data),
+            }
+        )
+
+    if not images:
+        return
+
+    images.sort(key=lambda item: (item["row_index"], -item["size"]))
+    sorted_rows = sorted(rows, key=lambda item: int(item.get("row_index") or 0))
+    used: set[int] = set()
+
+    for index, row in enumerate(sorted_rows):
+        if clean_cell(row.get("image_ref")):
+            continue
+
+        row_index = int(row.get("row_index") or 0)
+        next_row_index = (
+            int(sorted_rows[index + 1].get("row_index") or 0)
+            if index + 1 < len(sorted_rows)
+            else 10**9
+        )
+        candidates = [
+            (image_index, image)
+            for image_index, image in enumerate(images)
+            if image_index not in used and row_index <= image["row_index"] < next_row_index
+        ]
+        if not candidates:
+            continue
+
+        _, selected = max(candidates, key=lambda item: (item[1]["row_index"] == row_index, item[1]["size"]))
+        image_index = images.index(selected)
+        used.add(image_index)
+        row["image_ref"] = selected["filename"]
+        row["__embedded_image"] = ZipImage(
+            filename=selected["filename"],
+            data=selected["data"],
+            content_type=selected["content_type"],
+        )
 
 
 def match_zip_images(zip_bytes: bytes, image_refs: list[str]) -> dict[str, ZipImage]:

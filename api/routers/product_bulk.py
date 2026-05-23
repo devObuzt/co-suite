@@ -45,6 +45,8 @@ from ..services.product_bulk_generator import (
 )
 from ..services.product_bulk_parser import (
     IMAGE_CONTENT_TYPES,
+    fill_missing_image_refs_from_zip,
+    fill_missing_images_from_workbook,
     match_zip_images,
     normalize_filename,
     parse_workbook,
@@ -248,6 +250,12 @@ async def create_product_bulk_batch(
             detail=f"Product import contains too many rows. Maximum is {MAX_PRODUCT_ROWS}.",
         )
 
+    try:
+        fill_missing_image_refs_from_zip(parsed.rows, zip_bytes)
+        fill_missing_images_from_workbook(parsed.rows, excel_bytes)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid product images: {exc}") from exc
+
     image_refs = [row.get("image_ref", "") for row in parsed.rows]
     _validate_zip_metadata(zip_bytes, image_refs)
 
@@ -272,7 +280,7 @@ async def create_product_bulk_batch(
     for row in parsed.rows:
         image_ref = row.get("image_ref") or ""
         image_url = None
-        matched = image_matches.get(image_ref)
+        matched = image_matches.get(image_ref) or row.get("__embedded_image")
         if matched:
             try:
                 row_index = int(row["row_index"])
@@ -304,7 +312,7 @@ async def create_product_bulk_batch(
             ProductBulkItem(
                 batch_id=batch.id,
                 row_index=int(row["row_index"]),
-                product_name=(row.get("product_name") or "").strip() or "Unnamed product",
+                product_name=(row.get("product_name") or row.get("description") or "").strip() or "Unnamed product",
                 image_ref=image_ref,
                 image_url=image_url,
                 slogan=row.get("slogan"),
