@@ -54,7 +54,8 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suites/{suite_id}/product-bulk", tags=["product-bulk"])
 
-MAX_EXCEL_BYTES = 5 * 1024 * 1024
+MAX_EXCEL_MB = 25
+MAX_EXCEL_BYTES = MAX_EXCEL_MB * 1024 * 1024
 MAX_ZIP_BYTES = 250 * 1024 * 1024
 MAX_PRODUCT_ROWS = 500
 MAX_ZIP_ENTRIES = 1000
@@ -229,7 +230,10 @@ async def create_product_bulk_batch(
     zip_bytes = await images_zip.read()
 
     if len(excel_bytes) > MAX_EXCEL_BYTES:
-        raise HTTPException(status_code=413, detail="Excel file is too large. Maximum is 5 MB.")
+        raise HTTPException(
+            status_code=413,
+            detail=f"Excel file is too large. Maximum is {MAX_EXCEL_MB} MB.",
+        )
     if len(zip_bytes) > MAX_ZIP_BYTES:
         raise HTTPException(status_code=413, detail="Image ZIP file is too large. Maximum is 250 MB.")
 
