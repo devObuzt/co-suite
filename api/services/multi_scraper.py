@@ -103,10 +103,13 @@ async def scrape_website(url: str) -> dict:
     if theme_color:
         colors.insert(0, theme_color)
 
+    heading_candidates = _extract_heading_candidates(soup)
+
     # Body text (strip nav/footer noise)
     for tag in soup(["nav", "footer", "script", "style", "header"]):
         tag.decompose()
-    body_text = " ".join(soup.get_text(" ", strip=True).split())[:5000]
+    body_text = " ".join(soup.get_text(" ", strip=True).split())[:8000]
+    service_candidates = _extract_service_candidates(body_text, heading_candidates)
 
     return {
         "type": "website",
@@ -119,7 +122,9 @@ async def scrape_website(url: str) -> dict:
         "logo_candidates": logo_urls[:3],
         "keywords": keywords,
         "jsonld": jsonld_text[:2000],
-        "body_text": body_text[:3000],
+        "heading_candidates": heading_candidates[:30],
+        "service_candidates": service_candidates,
+        "body_text": body_text[:5000],
     }
 
 
@@ -153,6 +158,96 @@ def _extract_colors_from_html(html: str) -> list[str]:
         if len(colors) >= 10:
             break
     return colors
+
+
+def _extract_heading_candidates(soup: BeautifulSoup) -> list[str]:
+    """Collect visible headings/card titles, which often carry service names."""
+    selectors = [
+        "h1", "h2", "h3", "h4",
+        ".elementor-heading-title",
+        ".elementor-image-box-title",
+        ".elementor-icon-box-title",
+    ]
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for selector in selectors:
+        for node in soup.select(selector):
+            clean = " ".join(node.get_text(" ", strip=True).split())
+            if not clean or len(clean) < 3 or len(clean) > 90:
+                continue
+            key = clean.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(clean)
+    return candidates
+
+
+def _extract_service_candidates(text: str, heading_candidates: list[str] | None = None) -> list[str]:
+    """Pull likely service/product phrases from headings and service-list copy."""
+    if not text and not heading_candidates:
+        return []
+
+    anchors = [
+        "our services", "services", "products", "solutions",
+        "השירותים שלנו", "שירותים", "מוצרים", "פתרונות",
+        "خدماتنا", "الخدمات", "منتجات", "حلول",
+    ]
+    lowered = text.lower()
+    chunks: list[str] = []
+
+    for anchor in anchors:
+        idx = lowered.find(anchor.lower())
+        if idx >= 0:
+            chunks.append(text[idx:idx + 1800])
+
+    chunks.append(text[:2500])
+    candidate_text = " ".join(chunks)
+
+    # Split on sentence-ish boundaries while preserving RTL phrases.
+    parts = re.split(r"[•\n\r\t]|(?:\s{2,})|(?<=[.!?؟])\s+", candidate_text)
+    candidates: list[str] = []
+    seen: set[str] = set()
+    noise = {
+        "home", "about", "contact", "menu", "skip", "privacy",
+        "בית", "דלג", "תוכן", "צרו קשר", "רוצים לדעת עוד",
+        "الرئيسية", "تواصل", "المزيد",
+    }
+
+    heading_candidates = heading_candidates or []
+    offering_words = (
+        "service", "marketing", "branding", "seo", "website", "app", "content", "campaign", "ecommerce",
+        "שיווק", "מיתוג", "פיתוח", "אתר", "אפליק", "קידום", "פרסום", "תוכן", "קמפיינים", "חנות", "אוטומציה",
+        "تسويق", "براند", "تطوير", "موقع", "تطبيق", "محتوى", "حملات", "تصميم", "متجر", "أتمتة",
+    )
+
+    for heading in heading_candidates:
+        lower = heading.lower()
+        if any(w in lower for w in offering_words):
+            seen.add(lower)
+            candidates.append(heading)
+
+    for part in parts:
+        clean = " ".join(part.strip(" -–—:|·*✅⭐").split())
+        if not clean or len(clean) < 4 or len(clean) > 90:
+            continue
+        lower = clean.lower()
+        if any(n in lower for n in noise):
+            continue
+        if not re.search(r"[A-Za-z\u0590-\u05FF\u0600-\u06FF]", clean):
+            continue
+        # Prefer phrases that look like offerings, but keep enough fallback text.
+        if not any(w in lower for w in offering_words) and len(candidates) >= 6:
+            continue
+        key = lower
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(clean)
+        if len(candidates) >= 18:
+            break
+
+    return candidates
 
 
 # ── Social media scraper ──────────────────────────────────────────────────────

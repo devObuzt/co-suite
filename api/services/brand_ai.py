@@ -100,9 +100,15 @@ def _build_sources_context(intel: dict) -> str:
             jsonld = src.get("jsonld", "")
             if jsonld.strip():
                 lines.append(f"Structured data (JSON-LD): {jsonld[:800]}")
+            service_candidates = src.get("service_candidates") or []
+            if service_candidates:
+                lines.append(
+                    "Likely services/products found directly on the website: "
+                    + "; ".join(service_candidates[:15])
+                )
             body = src.get("body_text", "")
             if body:
-                lines.append(f"Page text: {body[:1500]}")
+                lines.append(f"Page text: {body[:3500]}")
 
         elif kind == "instagram":
             lines.append(f"Handle: @{src.get('handle', '')}")
@@ -227,6 +233,7 @@ Extract and return ONLY a valid JSON object with this exact structure:
 Rules:
 - Colors: prefer CSS/theme-color found on their actual website. If not found, suggest colors that fit the industry and tone.
 - services/products: only list things actually mentioned in website text, captions, or bio. Don't invent.
+- If "Likely services/products found directly on the website" exists, prioritize it for services/products.
 - tone: derive from how they write captions — are they formal, casual, humorous, inspirational? Quote style if possible.
 - content_themes: extract directly from what their posts are actually about (not generic). Use caption topics.
 - target_audience: infer from the content, hashtags, language used in captions, and business category.
