@@ -370,15 +370,18 @@ async def suggest_brand_assets(brand: dict, generate: list[str], user_language: 
     if "fonts" in generate:
         lang_note = ""
         if user_language == "ar":
-            lang_note = "IMPORTANT: Suggest Arabic-compatible Google Fonts (e.g. Cairo, Tajawal, Noto Kufi Arabic, Almarai). "
+            lang_note = "IMPORTANT: Suggest Arabic-compatible Google Fonts. Do not always default to Cairo/Tajawal; choose based on the business category and brand personality. "
         elif user_language == "he":
-            lang_note = "IMPORTANT: Suggest Hebrew-compatible Google Fonts (e.g. Rubik, Assistant, Heebo, Frank Ruhl Libre). "
+            lang_note = "IMPORTANT: Suggest Hebrew-compatible Google Fonts. Choose based on the business category and brand personality. "
         prompt = (
             f"Brand: {brand.get('name', 'Unknown')}, "
+            f"Industry: {brand.get('industry') or brand.get('niche') or ''}, "
+            f"Audience: {brand.get('target_audience') or ''}, "
             f"Tone: {brand.get('tone', 'professional')}.\n"
             f"{lang_note}"
-            "Suggest 2 Google Font names that fit this brand. "
-            'Return ONLY valid JSON: {"fonts":["FontName1","FontName2"]}'
+            "Suggest 2 currently available Google Font names that fit the brand from a branding/design-system perspective. "
+            "Pick a heading/display font and a body/UI font. Avoid generic repetition unless it is truly the best fit. "
+            'Return ONLY valid JSON: {"fonts":["HeadingFont","BodyFont"],"reasoning":"short reason"}'
         )
         try:
             raw = await call_text_ai(

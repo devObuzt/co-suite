@@ -1,3 +1,4 @@
+import io
 import logging
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -206,8 +207,9 @@ async def save_brand_step(
 @router.post("/upload-brand-asset")
 async def upload_brand_asset(
     suite_id: str = Form(...),
-    asset_type: str = Form(...),   # "logo" | "font"
+    asset_type: str = Form(...),   # "logo" | "font" | "persona"
     language: str = Form(default=""),  # language code for fonts (e.g. "ar", "en")
+    persona_name: str = Form(default=""),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -225,7 +227,7 @@ async def upload_brand_asset(
     filename = file.filename or "upload"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
-    if asset_type == "logo" and ext not in ("png", "jpg", "jpeg", "svg", "webp"):
+    if asset_type in ("logo", "persona") and ext not in ("png", "jpg", "jpeg", "svg", "webp"):
         raise HTTPException(status_code=400, detail="Logo must be PNG, JPG, SVG, or WebP")
     if asset_type == "font" and ext not in ("ttf", "otf", "woff", "woff2"):
         raise HTTPException(status_code=400, detail="Font must be TTF, OTF, WOFF, or WOFF2")
@@ -252,8 +254,17 @@ async def upload_brand_asset(
     brand = dict(suite.brand) if suite.brand else {}
 
     if asset_type == "logo":
+        meta = _analyze_image_asset(content, ext)
         brand["logo_url"] = url
         brand["logo_source"] = "uploaded"
+        logos = list(brand.get("brand_logos") or [])
+        logos.append({
+            "name": filename,
+            "url": url,
+            "format": ext,
+            **meta,
+        })
+        brand["brand_logos"] = logos
     elif asset_type == "font":
         fonts_by_lang = dict(brand.get("fonts_by_language") or {})
         lang_key = language or "all"
@@ -262,10 +273,43 @@ async def upload_brand_asset(
             existing = existing + [{"name": filename.rsplit(".", 1)[0], "url": url, "format": ext}]
         fonts_by_lang[lang_key] = existing
         brand["fonts_by_language"] = fonts_by_lang
+    elif asset_type == "persona":
+        characters = list(brand.get("brand_personas") or [])
+        name = (persona_name or "Presenter").strip()
+        existing_idx = next((i for i, p in enumerate(characters) if p.get("name") == name), -1)
+        image = {"name": filename, "url": url, "format": ext, **_analyze_image_asset(content, ext)}
+        if existing_idx >= 0:
+            images = list(characters[existing_idx].get("images") or [])
+            images.append(image)
+            characters[existing_idx]["images"] = images
+        else:
+            characters.append({"name": name, "role": "", "images": [image]})
+        brand["brand_personas"] = characters
 
     suite.brand = brand
     await db.commit()
     return {"url": url, "brand": brand}
+
+
+def _analyze_image_asset(content: bytes, ext: str) -> dict:
+    """Best-effort dimensions/shape/background analysis for uploaded brand assets."""
+    if ext == "svg":
+        return {"width": None, "height": None, "shape": "vector", "background": "unknown"}
+    try:
+        from PIL import Image
+        image = Image.open(io.BytesIO(content))
+        width, height = image.size
+        ratio = width / height if height else 1
+        shape = "square" if 0.85 <= ratio <= 1.18 else "horizontal" if ratio > 1.18 else "vertical"
+        has_alpha = image.mode in ("RGBA", "LA") or ("transparency" in image.info)
+        return {
+            "width": width,
+            "height": height,
+            "shape": shape,
+            "background": "transparent" if has_alpha else "unknown",
+        }
+    except Exception:
+        return {"width": None, "height": None, "shape": "unknown", "background": "unknown"}
 
 
 @router.post("/generate-brand-assets")
