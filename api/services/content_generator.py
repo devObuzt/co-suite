@@ -758,9 +758,9 @@ def _language_counts(languages: list[str], count: int) -> list[tuple[str, int]]:
     return [(lang, base + (1 if idx < extra else 0)) for idx, lang in enumerate(selected)]
 
 
-def _emit_progress(progress: Optional[ProgressCallback], **event):
-    if progress:
-        progress(event)
+def _emit_progress(callback: Optional[ProgressCallback], **event):
+    if callback:
+        callback(event)
 
 
 async def generate_content_for_suite(

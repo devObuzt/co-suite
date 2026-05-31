@@ -1,7 +1,6 @@
 """Unit tests for the strategy generator service."""
-import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 
 # ── _is_arabic ────────────────────────────────────────────────────────────────
@@ -73,15 +72,10 @@ async def test_generate_strategy_returns_required_keys():
         },
         "marketing_message": "Test message",
     }
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=json.dumps(mock_payload))]
-
     with patch("api.services.strategy_generator.research_competitors", new_callable=AsyncMock) as mock_rc, \
-         patch("api.services.strategy_generator.anthropic.AsyncAnthropic") as mock_cls:
+         patch("api.services.strategy_generator.call_text_ai", new_callable=AsyncMock) as mock_call:
         mock_rc.return_value = {}
-        mock_instance = AsyncMock()
-        mock_instance.messages.create = AsyncMock(return_value=mock_response)
-        mock_cls.return_value = mock_instance
+        mock_call.return_value = __import__("json").dumps(mock_payload)
 
         from api.services.strategy_generator import generate_strategy
         result = await generate_strategy({
@@ -104,15 +98,11 @@ async def test_generate_strategy_returns_required_keys():
 @pytest.mark.asyncio
 async def test_generate_strategy_detects_arabic_language():
     mock_payload = {"marketing_plan": {}, "marketing_message": "رسالة"}
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=json.dumps(mock_payload))]
 
     with patch("api.services.strategy_generator.research_competitors", new_callable=AsyncMock) as mock_rc, \
-         patch("api.services.strategy_generator.anthropic.AsyncAnthropic") as mock_cls:
+         patch("api.services.strategy_generator.call_text_ai", new_callable=AsyncMock) as mock_call:
         mock_rc.return_value = {}
-        mock_instance = AsyncMock()
-        mock_instance.messages.create = AsyncMock(return_value=mock_response)
-        mock_cls.return_value = mock_instance
+        mock_call.return_value = __import__("json").dumps(mock_payload)
 
         from api.services.strategy_generator import generate_strategy
         result = await generate_strategy({
