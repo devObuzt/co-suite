@@ -195,6 +195,9 @@ Extract and return ONLY a valid JSON object with this exact structure:
   "services": ["list of actual services/offerings found"],
   "products": ["list of products if it's a product business"],
   "target_audience": "specific description of who they serve",
+  "audience_interests": ["specific interests that fit this business and market, suitable for ad targeting"],
+  "audience_behaviors": ["specific audience behaviors inferred from the business, market, services, captions, and buying journey"],
+  "audience_social_statuses": ["specific social/demographic/customer segments that fit this business"],
   "tone": "brand voice: professional / friendly / playful / luxury / bold / calm / etc.",
   "colors": {{
     "primary": "#hex — most dominant brand color found",
@@ -237,6 +240,9 @@ Rules:
 - tone: derive from how they write captions — are they formal, casual, humorous, inspirational? Quote style if possible.
 - content_themes: extract directly from what their posts are actually about (not generic). Use caption topics.
 - target_audience: infer from the content, hashtags, language used in captions, and business category.
+- audience_interests: suggest 5-8 business-specific interests. Use the output language. Prefer values close to Meta Ads interest language when possible, but make them understandable to the user.
+- audience_behaviors: suggest 4-7 behaviors that are specifically relevant to this business and buying journey. Do not use generic fixed defaults unless they truly fit.
+- audience_social_statuses: suggest 4-7 relevant customer segments/social statuses/demographics. Examples: parents, engaged couples, business owners, doctors, students, homeowners, pet owners — but only when relevant.
 - top_hashtags: include the hashtags they actually use — these help with future content generation.
 - missing_info: be honest — list things like "logo file", "brand colors", "product catalog" if they weren't found.
 - If Instagram captions are in Arabic, extract language/dialect used (e.g. "Palestinian Arabic", "Gulf Arabic", "MSA").
@@ -309,6 +315,9 @@ Return ONLY a valid JSON object matching this structure exactly:
   "services": [],
   "products": [],
   "target_audience": "suggested target audience",
+  "audience_interests": ["specific suggested interests for ad targeting"],
+  "audience_behaviors": ["specific suggested audience behaviors"],
+  "audience_social_statuses": ["specific suggested customer/social segments"],
   "tone": "suggested brand voice",
   "colors": {{
     "primary": "#hex",
