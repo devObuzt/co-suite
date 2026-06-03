@@ -114,7 +114,7 @@ async def extract_brand(
             raise HTTPException(status_code=503, detail="The AI service is temporarily busy. Please try again in a few seconds.")
         raise HTTPException(status_code=500, detail="Brand research failed. Please try again.")
 
-    return {"brand": brand}
+    return {"brand": brand, "research_debug": (brand or {}).get("research_debug")}
 
 
 @router.post("/save-brand")

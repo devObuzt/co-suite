@@ -579,11 +579,48 @@ async def gather_all_sources(
     # Fire all scrapes in parallel
     results = await asyncio.gather(*tasks, return_exceptions=True)
     sources = []
-    for r in results:
+    source_reports = []
+    for (kind, url), r in zip(metadata, results):
         if isinstance(r, Exception):
-            log.warning("Scrape failed: %s", r)
+            error = str(r)
+            log.warning("Scrape failed for %s (%s): %s", url, kind, error)
+            source_reports.append({
+                "url": url,
+                "kind": kind,
+                "status": "failed",
+                "error": error,
+                "text_chars": 0,
+                "service_candidates": 0,
+                "recent_posts": 0,
+                "captions_chars": 0,
+            })
         else:
             sources.append(r)
+            error = r.get("error")
+            body_text = r.get("body_text") or r.get("text") or ""
+            captions = r.get("captions_sample") or ""
+            report = {
+                "url": url,
+                "kind": r.get("type") or kind,
+                "status": "failed" if error else "ok",
+                "error": error or "",
+                "title": r.get("title") or r.get("og_title") or r.get("full_name") or r.get("handle") or "",
+                "text_chars": len(body_text),
+                "description_chars": len(r.get("description") or r.get("og_description") or r.get("bio") or ""),
+                "service_candidates": len(r.get("service_candidates") or []),
+                "recent_posts": len(r.get("recent_posts") or []),
+                "captions_chars": len(captions),
+            }
+            if not error and not any([
+                report["title"],
+                report["text_chars"],
+                report["description_chars"],
+                report["service_candidates"],
+                report["recent_posts"],
+                report["captions_chars"],
+            ]):
+                report["status"] = "empty"
+            source_reports.append(report)
 
     # Web search for extra intel
     search_snippets = ""
@@ -603,4 +640,12 @@ async def gather_all_sources(
         "sources": sources,
         "search_snippets": search_snippets,
         "business_name_hint": business_name or "",
+        "debug": {
+            "source_reports": source_reports,
+            "sources_requested": len(metadata),
+            "sources_ok": sum(1 for item in source_reports if item.get("status") == "ok"),
+            "sources_failed": sum(1 for item in source_reports if item.get("status") == "failed"),
+            "sources_empty": sum(1 for item in source_reports if item.get("status") == "empty"),
+            "search_snippets_chars": len(search_snippets or ""),
+        },
     }
