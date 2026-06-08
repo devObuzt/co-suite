@@ -104,12 +104,16 @@ async def scrape_website(url: str) -> dict:
         colors.insert(0, theme_color)
 
     heading_candidates = _extract_heading_candidates(soup)
+    catalog_candidates = _extract_catalog_candidates(soup)
 
     # Body text (strip nav/footer noise)
     for tag in soup(["nav", "footer", "script", "style", "header"]):
         tag.decompose()
     body_text = " ".join(soup.get_text(" ", strip=True).split())[:8000]
-    service_candidates = _extract_service_candidates(body_text, heading_candidates)
+    service_candidates = _extract_service_candidates(
+        body_text,
+        [*heading_candidates, *catalog_candidates],
+    )
 
     return {
         "type": "website",
@@ -123,6 +127,7 @@ async def scrape_website(url: str) -> dict:
         "keywords": keywords,
         "jsonld": jsonld_text[:2000],
         "heading_candidates": heading_candidates[:30],
+        "catalog_candidates": catalog_candidates[:30],
         "service_candidates": service_candidates,
         "body_text": body_text[:5000],
     }
@@ -183,6 +188,61 @@ def _extract_heading_candidates(soup: BeautifulSoup) -> list[str]:
     return candidates
 
 
+def _extract_catalog_candidates(soup: BeautifulSoup) -> list[str]:
+    """Collect product/category names from ecommerce menus and product grids."""
+    link_hints = (
+        "product", "product-category", "product_cat", "category", "shop", "catalog",
+        "מוצר", "קטגור", "חנות", "עגלה", "עגלות", "טיולון", "תינוק", "צעצוע",
+        "منتج", "تصنيف", "متجر", "عربة", "طفل", "ألعاب",
+    )
+    text_noise = {
+        "ראשי", "אודותינו", "תקנון", "יצירת קשר", "בלוג", "עגלת הקניות",
+        "רשימת משאלות", "חפש", "תפריט", "קנה עכשיו", "מבצע", "רגיל",
+        "home", "about", "contact", "blog", "cart", "wishlist", "search",
+        "الرئيسية", "من نحن", "تواصل", "السلة", "بحث", "اشتري الآن",
+    }
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    selectors = [
+        "a",
+        ".product-category",
+        ".woocommerce-loop-category__title",
+        ".woocommerce-loop-product__title",
+        ".product-title",
+        ".menu-item",
+    ]
+    for selector in selectors:
+        for node in soup.select(selector):
+            text = " ".join(node.get_text(" ", strip=True).split())
+            href = str(node.get("href") or "")
+            classes = " ".join(node.get("class") or [])
+            haystack = f"{href} {classes} {text}".lower()
+            if not any(hint.lower() in haystack for hint in link_hints):
+                continue
+            text = re.sub(r"\s*\(\d+\)\s*$", "", text)
+            text = re.sub(r"\s+\d+(?:[,.]\d+)?\s*₪.*$", "", text)
+            text = " ".join(text.strip(" -–—:|·*✅⭐").split())
+            if len(text) < 3 or len(text) > 70:
+                continue
+            lower = text.lower()
+            if (
+                lower in text_noise
+                or lower.startswith(("עגלת הקניות", "cart", "السلة"))
+                or any(noise in lower for noise in ["₪", "coupon", "קופון"])
+            ):
+                continue
+            if not re.search(r"[A-Za-z\u0590-\u05FF\u0600-\u06FF]", text):
+                continue
+            if lower in seen:
+                continue
+            seen.add(lower)
+            candidates.append(text)
+            if len(candidates) >= 30:
+                return candidates
+    return candidates
+
+
 def _extract_service_candidates(text: str, heading_candidates: list[str] | None = None) -> list[str]:
     """Pull likely service/product phrases from headings and service-list copy."""
     if not text and not heading_candidates:
@@ -210,19 +270,25 @@ def _extract_service_candidates(text: str, heading_candidates: list[str] | None 
     seen: set[str] = set()
     noise = {
         "home", "about", "contact", "menu", "skip", "privacy",
-        "בית", "דלג", "תוכן", "צרו קשר", "רוצים לדעת עוד",
-        "الرئيسية", "تواصل", "المزيد",
+        "cart", "coupon", "wishlist", "search", "buy now",
+        "בית", "דלג", "תוכן", "צרו קשר", "רוצים לדעת עוד", "קופון", "עגלה", "קנה עכשיו",
+        "الرئيسية", "تواصل", "المزيد", "السلة", "كوبون", "اشتري الآن",
     }
 
     heading_candidates = heading_candidates or []
     offering_words = (
         "service", "marketing", "branding", "seo", "website", "app", "content", "campaign", "ecommerce",
+        "baby", "stroller", "feeding", "nursing", "car seat", "toy", "furniture", "garden",
         "שיווק", "מיתוג", "פיתוח", "אתר", "אפליק", "קידום", "פרסום", "תוכן", "קמפיינים", "חנות", "אוטומציה",
+        "תינוק", "עגלה", "עגלות", "טיולון", "האכלה", "הנקה", "בטיחות", "סלקל", "כיסא", "צעצוע", "ריהוט", "גן",
         "تسويق", "براند", "تطوير", "موقع", "تطبيق", "محتوى", "حملات", "تصميم", "متجر", "أتمتة",
+        "أطفال", "طفل", "عربة", "رضاعة", "ألعاب", "كرسي", "أمان", "أثاث",
     )
 
     for heading in heading_candidates:
         lower = heading.lower()
+        if lower in noise or lower.startswith(("עגלת הקניות", "cart", "السلة")):
+            continue
         if any(w in lower for w in offering_words):
             seen.add(lower)
             candidates.append(heading)

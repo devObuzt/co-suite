@@ -205,6 +205,34 @@ def _fallback_services_from_sources(intel: dict) -> list[str]:
     return services
 
 
+def _looks_like_product_business(intel: dict) -> bool:
+    """Detect stores/catalog businesses so source fallbacks land in products."""
+    text_parts: list[str] = []
+    for src in intel.get("sources", []) or []:
+        text_parts.extend([
+            src.get("title") or "",
+            src.get("description") or "",
+            src.get("keywords") or "",
+            src.get("body_text") or "",
+            " ".join(src.get("service_candidates") or []),
+            " ".join(src.get("catalog_candidates") or []),
+        ])
+    haystack = " ".join(text_parts).lower()
+    product_markers = (
+        "product", "products", "shop", "store", "catalog", "cart", "price", "sale",
+        "מוצר", "מוצרים", "חנות", "עגלה", "קנה עכשיו", "מחיר", "מבצע", "₪",
+        "منتج", "منتجات", "متجر", "سلة", "اشتري", "سعر", "خصم",
+    )
+    service_markers = (
+        "service", "services", "agency", "consulting", "booking",
+        "שירות", "שירותים", "סוכנות", "ייעוץ",
+        "خدمة", "خدمات", "وكالة", "استشارة",
+    )
+    product_score = sum(1 for marker in product_markers if marker in haystack)
+    service_score = sum(1 for marker in service_markers if marker in haystack)
+    return product_score >= 2 and product_score >= service_score
+
+
 def _fallback_industry_from_sources(intel: dict) -> str:
     text_parts: list[str] = []
     for src in intel.get("sources", []) or []:
@@ -223,6 +251,8 @@ def _fallback_industry_from_sources(intel: dict) -> str:
         return "Restaurant"
     if any(word in haystack for word in ["fashion", "clothing", "أزياء", "אופנה"]):
         return "Fashion Retail"
+    if any(word in haystack for word in ["baby", "stroller", "toy", "תינוק", "עגלה", "טיולון", "צעצוע", "أطفال", "عربة", "ألعاب"]):
+        return "Baby Products Retail"
     if any(word in haystack for word in ["real estate", "נדלן", "נדל", "عقارات"]):
         return "Real Estate"
     return ""
@@ -235,8 +265,12 @@ def _apply_source_fallbacks(brand: dict, intel: dict) -> dict:
     applied: list[str] = []
 
     if fallback_services and not ((brand.get("services") or []) or (brand.get("products") or [])):
-        brand["services"] = fallback_services
-        applied.append("services_from_source_candidates")
+        if _looks_like_product_business(intel):
+            brand["products"] = fallback_services
+            applied.append("products_from_source_candidates")
+        else:
+            brand["services"] = fallback_services
+            applied.append("services_from_source_candidates")
 
     if not (brand.get("industry") or brand.get("niche")):
         industry = _fallback_industry_from_sources(intel)
@@ -249,6 +283,18 @@ def _apply_source_fallbacks(brand: dict, intel: dict) -> dict:
         debug = dict(brand.get("research_debug") or {})
         debug["fallbacks_applied"] = applied
         brand["research_debug"] = debug
+
+    debug = dict(brand.get("research_debug") or {})
+    debug["final_output"] = {
+        "has_name": bool((brand or {}).get("name")),
+        "industry": (brand or {}).get("industry") or "",
+        "niche": (brand or {}).get("niche") or "",
+        "services_count": len((brand or {}).get("services") or []),
+        "products_count": len((brand or {}).get("products") or []),
+        "content_themes_count": len((brand or {}).get("content_themes") or []),
+        "audience_interests_count": len((brand or {}).get("audience_interests") or []),
+    }
+    brand["research_debug"] = debug
     return brand
 
 
