@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>co-Suite Visual - Limited Generation Without Suite</title>
+  <style>
+    :root {
+      --ink: #0b0b0b;
+      --paper: #f7f6f2;
+      --panel: #ffffff;
+      --line: #dedbd2;
+      --muted: #6d6a62;
+      --brand: #efcc18;
+      --marketing: #ef4f92;
+      --dev: #1e88e5;
+      --ok: #168a55;
+      --warn: #c07600;
+      --shadow: 0 18px 55px rgba(16, 14, 10, .14);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(239,204,24,.08) 0 28%, transparent 28%),
+        var(--paper);
+      color: var(--ink);
+      font-family: "Avenir Next", "Helvetica Neue", Arial, sans-serif;
+    }
+
+    .page {
+      min-height: 100vh;
+      padding: 34px;
+    }
+
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 26px;
+    }
+
+    .brandmark {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      direction: ltr;
+    }
+
+    .logo {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      background: var(--ink);
+      color: var(--paper);
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      letter-spacing: -.04em;
+      position: relative;
+    }
+
+    .logo::after {
+      content: "";
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--brand);
+      right: -4px;
+      top: -4px;
+      border: 2px solid var(--paper);
+    }
+
+    .brandmark strong {
+      font-size: 22px;
+      letter-spacing: -.03em;
+    }
+
+    .stage {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 28px;
+      align-items: start;
+    }
+
+    .hero {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      padding: 28px;
+      min-height: 610px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fbfaf6;
+    }
+
+    .eyebrow span {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--brand);
+      display: inline-block;
+    }
+
+    h1 {
+      margin: 22px 0 8px;
+      max-width: 760px;
+      font-size: clamp(34px, 5vw, 72px);
+      line-height: .98;
+      letter-spacing: -.055em;
+    }
+
+    .sub {
+      max-width: 680px;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.7;
+      margin-bottom: 28px;
+    }
+
+    .creator {
+      display: grid;
+      grid-template-columns: 1.15fr .85fr;
+      gap: 18px;
+    }
+
+    .prompt {
+      border: 2px solid var(--ink);
+      border-radius: 20px;
+      padding: 18px;
+      background: #fffdf8;
+      min-height: 285px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .prompt label {
+      display: block;
+      font-size: 13px;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+
+    .textarea {
+      min-height: 150px;
+      color: #2d2a23;
+      font-size: 20px;
+      line-height: 1.6;
+    }
+
+    .promptbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }
+
+    .button {
+      border: 0;
+      background: var(--ink);
+      color: white;
+      border-radius: 14px;
+      padding: 13px 18px;
+      font-weight: 800;
+      font-size: 15px;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .options {
+      display: grid;
+      gap: 12px;
+    }
+
+    .option {
+      border: 1px solid var(--line);
+      background: #fbfaf6;
+      border-radius: 18px;
+      padding: 15px;
+    }
+
+    .option.active {
+      border-color: var(--ink);
+      box-shadow: inset 0 0 0 2px var(--ink);
+    }
+
+    .option strong { display: block; margin-bottom: 5px; }
+    .option small { color: var(--muted); line-height: 1.5; display: block; }
+
+    .brand-toggle {
+      margin-top: 18px;
+      border: 1px dashed #bdb7a8;
+      background: #f0eee7;
+      color: #777165;
+      border-radius: 16px;
+      padding: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .switch {
+      width: 42px;
+      height: 24px;
+      border-radius: 999px;
+      background: #c8c2b4;
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .switch::before {
+      content: "";
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: white;
+      left: 3px;
+      top: 3px;
+    }
+
+    .feed {
+      margin-top: 22px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .job {
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #fbfaf6;
+      padding: 15px;
+      min-height: 138px;
+    }
+
+    .job .pill {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 5px 8px;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 28px;
+    }
+
+    .pill.running { background: rgba(30,136,229,.12); color: var(--dev); }
+    .pill.ready { background: rgba(22,138,85,.12); color: var(--ok); }
+    .pill.waiting { background: rgba(239,204,24,.2); color: #8a6d00; }
+
+    .side {
+      display: grid;
+      gap: 18px;
+    }
+
+    .phone {
+      background: #111;
+      border-radius: 38px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+      border: 8px solid #262626;
+    }
+
+    .phone-screen {
+      background: #f8f7f1;
+      border-radius: 26px;
+      min-height: 610px;
+      padding: 18px;
+      overflow: hidden;
+    }
+
+    .mobile-card {
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+
+    .mobile-prompt {
+      height: 164px;
+      border: 2px solid var(--ink);
+      border-radius: 16px;
+      padding: 12px;
+      font-size: 16px;
+      line-height: 1.5;
+      background: #fffdf8;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 14px 0;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      background: white;
+      border-radius: 999px;
+      padding: 8px 11px;
+      font-size: 13px;
+    }
+
+    .chip.hot {
+      background: var(--ink);
+      color: white;
+      border-color: var(--ink);
+    }
+
+    .note {
+      background: #fff4c9;
+      border: 1px solid #ecd470;
+      border-radius: 18px;
+      padding: 16px;
+      color: #5c4a00;
+      line-height: 1.6;
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 18px;
+      direction: ltr;
+    }
+
+    .legend div {
+      height: 9px;
+      border-radius: 999px;
+    }
+
+    .yellow { background: var(--brand); }
+    .pink { background: var(--marketing); }
+    .blue { background: var(--dev); }
+
+    @media (max-width: 960px) {
+      .page { padding: 18px; }
+      .stage, .creator { grid-template-columns: 1fr; }
+      .feed { grid-template-columns: 1fr; }
+      .side { order: -1; }
+      h1 { font-size: 42px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="top">
+      <div class="brandmark">
+        <div class="logo">co</div>
+        <strong>co-Suite</strong>
+      </div>
+      <div class="eyebrow"><span></span> Visual before coding · DEV-D-01</div>
+    </header>
+
+    <section class="stage">
+      <div class="hero">
+        <div class="eyebrow"><span></span> تجربة توليد بدون Suite كامل</div>
+        <h1>جرّب توليد محتوى الآن. أكمل السوت عندما تريد ذاكرة البراند.</h1>
+        <p class="sub">
+          هذه الشاشة تعطي المستخدم قيمة مباشرة بعد التسجيل، بدون أن نعده بالنشر أو التحليلات أو استخدام البراند قبل أن يبني Suite كامل.
+        </p>
+
+        <div class="creator">
+          <div class="prompt">
+            <div>
+              <label>ماذا تريد أن تنشئ؟</label>
+              <div class="textarea">اكتب بوست قصير يشرح كيف تساعد أدوات الذكاء الاصطناعي صاحب مصلحة صغيرة على توفير وقت في التسويق اليومي.</div>
+            </div>
+            <div class="promptbar">
+              <button class="button">توليد الآن</button>
+              <span class="meta">بدون نشر · بدون براند · قابل للتعديل</span>
+            </div>
+          </div>
+
+          <div class="options">
+            <div class="option active">
+              <strong>Quick Post / Ad</strong>
+              <small>نص + صورة واحدة إذا كانت الميديا متاحة.</small>
+            </div>
+            <div class="option">
+              <strong>Create Image</strong>
+              <small>صورة مستقلة مع caption جاهز.</small>
+            </div>
+            <div class="option">
+              <strong>Carousel</strong>
+              <small>فكرة تعليمية من عدة slides.</small>
+            </div>
+            <div class="brand-toggle">
+              <span><strong>Use brand</strong><br><small>متاح بعد بناء Suite</small></span>
+              <span class="switch"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="feed">
+          <div class="job">
+            <span class="pill running">running</span>
+            <strong>يتم توليد الفكرة</strong>
+            <p class="meta">Claude يكتب الفكرة والكابشن.</p>
+          </div>
+          <div class="job">
+            <span class="pill waiting">media pending</span>
+            <strong>الصورة بالانتظار</strong>
+            <p class="meta">إذا المزود مشغول، تظهر حالة انتظار واضحة.</p>
+          </div>
+          <div class="job">
+            <span class="pill ready">ready</span>
+            <strong>جاهز للمراجعة</strong>
+            <p class="meta">يمكن نسخه أو تعديله. النشر يحتاج Suite.</p>
+          </div>
+        </div>
+      </div>
+
+      <aside class="side">
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="brandmark">
+              <div class="logo">co</div>
+              <strong>co-Suite</strong>
+            </div>
+            <div class="mobile-card">
+              <div class="eyebrow"><span></span> تجربة سريعة</div>
+              <h2 style="font-size: 26px; line-height: 1.05; margin: 16px 0;">ابدأ بفكرة واحدة</h2>
+              <div class="mobile-prompt">اكتب إعلان قصير لمصلحة محلية تريد جذب زبائن جدد هذا الأسبوع.</div>
+              <div class="chips">
+                <span class="chip hot">Post</span>
+                <span class="chip">Image</span>
+                <span class="chip">Carousel</span>
+              </div>
+              <button class="button" style="width: 100%;">توليد</button>
+            </div>
+            <div class="note" style="margin-top: 14px;">
+              أكمل بناء Suite حتى نستخدم شعارك، ألوانك، جمهورك، ونشر المحتوى على قنواتك.
+            </div>
+          </div>
+        </div>
+
+        <div class="note">
+          <strong>قرار UX:</strong> هذه ليست dashboard. هي نقطة دخول خفيفة تعطي قيمة، ثم تقود المستخدم لبناء Suite بدون ضغط.
+        </div>
+      </aside>
+    </section>
+
+    <div class="legend">
+      <div class="yellow"></div>
+      <div class="pink"></div>
+      <div class="blue"></div>
+    </div>
+  </main>
+</body>
+</html>

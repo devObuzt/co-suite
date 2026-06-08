@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>co-Suite Owner Review</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 22mm 18mm;
+    }
+    body {
+      direction: rtl;
+      text-align: right;
+      font-family: Arial, "Helvetica Neue", "Noto Sans Arabic", sans-serif;
+      color: #141414;
+      background: #ffffff;
+      line-height: 1.75;
+      font-size: 14px;
+    }
+    .cover {
+      border-bottom: 3px solid #111;
+      padding-bottom: 18px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      font-size: 30px;
+      margin: 0 0 10px;
+      font-weight: 800;
+    }
+    h2 {
+      font-size: 19px;
+      margin: 24px 0 8px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid #ddd;
+    }
+    p {
+      margin: 8px 0;
+    }
+    ul {
+      margin: 8px 0 12px;
+      padding-right: 22px;
+      padding-left: 0;
+    }
+    li {
+      margin: 4px 0;
+    }
+    code {
+      direction: ltr;
+      unicode-bidi: embed;
+      background: #f2f2f2;
+      border: 1px solid #e5e5e5;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    .meta {
+      color: #555;
+      font-size: 13px;
+    }
+    .status {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid #ddd;
+      border-right: 5px solid #111;
+      background: #fafafa;
+    }
+    .footer {
+      margin-top: 32px;
+      padding-top: 12px;
+      border-top: 1px solid #ddd;
+      color: #666;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <h1>مراجعة المالك - co-Suite</h1>
+    <p class="meta"><strong>التاريخ والساعة:</strong> 2026-06-07 17:23:34</p>
+    <p class="meta"><strong>الموضوع:</strong> أين وصلنا بعد تشغيل أقسام العمل والـ agents</p>
+  </section>
+
+  <h2>وين إحنا الآن</h2>
+  <p>تم تشغيل أقسام الشركة كـ agents داخل المشروع:</p>
+  <ul>
+    <li>Product Manager</li>
+    <li>Architecture</li>
+    <li>DevOps / Infra</li>
+    <li>Design</li>
+    <li>QA</li>
+    <li>Developers Manager</li>
+  </ul>
+  <p>كل قسم بدأ يشتغل على مسؤوليته، وأنا أعمل كـ Project Manager / Integrator: أوزع المهام، أراجع النتائج، أوثق القرارات، وأتوجه لك فقط عندما نحتاج قرار مالك، صلاحيات، credentials، أو تدخل بشري.</p>
+
+  <h2>ما الذي تم تنفيذه تقنياً</h2>
+  <p>تم تنفيذ أول شريحة تقنية من Milestone 1:</p>
+  <ul>
+    <li>إضافة عقد واضح لـ Suite Memory.</li>
+    <li>تحسين حالات generation jobs حتى تظهر queued / running / failed / completed بشكل أوضح.</li>
+    <li>إضافة media readiness حتى نعرف إذا الصورة أو الفيديو جاهزين للنشر كرابط عام.</li>
+    <li>تحسين واجهة Create و Content Review لعرض حالات الشغل والميديا.</li>
+    <li>تحسين مبدئي لقائمة Suite على الموبايل.</li>
+    <li>إضافة تحرير مبدئي لـ Brand/Profile.</li>
+  </ul>
+
+  <h2>إصلاح مهم في النشر</h2>
+  <ul>
+    <li>لا يتم نشر بوست ميديا إذا الصور أو الفيديوهات غير جاهزة كرابط public HTTPS.</li>
+    <li>إذا كانت الميديا local-only أو missing أو failed، يرجع النظام رسالة واضحة بدل ما يعطي انطباع أن النشر نجح.</li>
+    <li>Facebook text-only مسموح فقط إذا المستخدم اختاره صراحة.</li>
+    <li>إذا نجحت منصة وفشلت منصة أخرى، لا يتم تعليم البوست كله كـ published؛ يرجع status مثل partially_published ويتم حفظ تفاصيل كل منصة.</li>
+  </ul>
+
+  <h2>نتائج التحقق</h2>
+  <ul>
+    <li>Backend regression tests: <strong>26 passed</strong>.</li>
+    <li>Web TypeScript: <strong>passed</strong>.</li>
+    <li>Web production build: <strong>passed</strong> بعد تنظيف <code>.next</code> وتشغيل build نظيف خارج sandbox.</li>
+    <li>QA verdict: التطبيق <strong>ليس جاهزاً للإصدار النهائي بعد</strong>.</li>
+  </ul>
+  <p>سبب قرار QA: ما زال يلزم smoke test فعلي على تجربة login / suite / mobile / RTL، وما زالت اختبارات AI / R2 / Meta / Google تعتمد على env وcredentials حقيقية.</p>
+
+  <h2>الوضع الإداري والتوثيق</h2>
+  <p>كل شيء موثق في:</p>
+  <p><code>docs/software-company/projects/cosuite</code></p>
+  <p>تم إنشاء وتحديث ملفات task board وstatus log وarchitecture review وQA findings وrelease readiness وimplementation slices.</p>
+  <p>لم يتم عمل <code>git add</code> أو <code>git commit</code> أو <code>git push</code>، حسب طلبك.</p>
+
+  <h2>قرار Product Manager</h2>
+  <p>Product Manager أكد أن Milestone 1 يجب أن يثبت الأساس بدل التوسع الكبير الآن.</p>
+  <p>لكن أضاف تصحيح مهم: يجب أن يستطيع المستخدم المسجل توليد محتوى محدود بدون أن يفتح Suite كامل.</p>
+  <ul>
+    <li>بدون brand memory.</li>
+    <li>بدون نشر.</li>
+    <li>بدون analytics.</li>
+    <li>بدون scheduling.</li>
+    <li><code>Use brand</code> مطفي أو غير متاح.</li>
+    <li>حالات job / error / media واضحة.</li>
+    <li>يوجد مسار واضح يدعو المستخدم لإكمال بناء Suite حتى يحصل على تجربة كاملة.</li>
+  </ul>
+
+  <h2>الأولوية التالية</h2>
+  <p>الأولوية التالية التي حددها Developers Manager:</p>
+  <p><strong>DEV-D-01: limited account-level generation without Suite</strong></p>
+  <p>يعني: المستخدم بعد التسجيل يستطيع تجربة توليد سريع من prompt بدون setup كامل.</p>
+  <ul>
+    <li>صفحة أو flow بسيط للتوليد السريع.</li>
+    <li>إدخال prompt.</li>
+    <li>اختيار نوع المحتوى أو format.</li>
+    <li>عرض job status.</li>
+    <li>عرض media status.</li>
+    <li>منع نشر أو جدولة أو analytics بدون Suite.</li>
+    <li>CTA واضح: أكمل بناء Suite حتى نستخدم البراند وننشر ونحلل.</li>
+  </ul>
+
+  <h2>ما المطلوب من المالك الآن</h2>
+  <p>حالياً لا يوجد طلب فوري منك.</p>
+  <p>قريباً قد نحتاج منك صلاحيات Railway/env، أو credentials لحسابات Meta / Google / R2 / AI providers، أو قرار حول قبول queue غير durable مؤقتاً في M1، أو قرار لاحق حول pricing / tokens / plans.</p>
+
+  <h2>الحالة الحالية</h2>
+  <div class="status">
+    <p><strong>الوضع الحالي:</strong> تقدم جيد، لكن ليس Release Ready بعد.</p>
+    <p>الكود بدأ يصبح أكثر صدقاً واستقراراً: لا يدعي نجاح النشر إذا الميديا غير جاهزة، لا يخفي أخطاء AI/job، لا يعرض analytics صفرية كأنها حقيقة إذا البيانات غير جاهزة، ويبدأ بتنظيم Suite بشكل أوضح للموبايل.</p>
+  </div>
+
+  <p class="footer">ملف مراجعة تلقائي للمالك - محفوظ داخل owner review.</p>
+</body>
+</html>

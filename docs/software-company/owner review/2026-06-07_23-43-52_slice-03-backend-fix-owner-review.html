@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>Slice 03 Backend Fix Pass</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { margin: 0; color: #222; font-family: "Cairo", "Assistant", "Arial", sans-serif; line-height: 1.75; direction: rtl; }
+    .page { max-width: 900px; margin: 0 auto; }
+    .cover { border: 2px solid #333; border-radius: 18px; padding: 28px; margin-bottom: 24px; background: linear-gradient(135deg, #fff 0%, #fff9c7 100%); }
+    .eyebrow { color: #666; font-size: 13px; }
+    h1 { margin: 4px 0 10px; font-size: 32px; }
+    h2 { font-size: 21px; margin: 24px 0 8px; padding-bottom: 6px; border-bottom: 2px solid #ffd800; }
+    ul { padding-right: 24px; }
+    li { margin: 5px 0; }
+    .ok { display: inline-block; background: #333; color: #ffd800; border-radius: 999px; padding: 6px 12px; font-weight: 700; }
+    .note { border-right: 5px solid #1e88e5; background: #f3f9ff; padding: 14px 16px; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="cover">
+      <div class="eyebrow">Owner Review · Rami Saleh · 2026-06-07 23:43</div>
+      <h1>Slice 03 Backend Fix Pass</h1>
+      <span class="ok">completed</span>
+      <p>تم تنفيذ أول جزء من Slice 03 الخاص بـ backend lifecycle durability وSuite brand/profile merge.</p>
+    </section>
+    <h2>التغييرات</h2>
+    <ul>
+      <li>حفظ سبب الرفض داخل metadata مع history.</li>
+      <li>منع حذف البوست الأصلي عند regenerate قبل نجاح البديل.</li>
+      <li>حفظ طلب regeneration داخل metadata.</li>
+      <li>حفظ نتيجة محاولة النشر حتى لو فشلت كل المنصات.</li>
+      <li>تحديث brand/profile صار merge آمن بدل استبدال كامل للـ JSON.</li>
+    </ul>
+    <h2>التحقق</h2>
+    <ul>
+      <li>Targeted backend contract tests: 15 passed.</li>
+      <li>Broader M1 backend test set: 30 passed.</li>
+    </ul>
+    <h2>الخطوة القادمة</h2>
+    <div class="note">الانتقال مباشرة إلى design hardening: light/dark theme، suite shell/navigation i18n، RTL/mobile checks، وProduct Bulk reject feedback consistency.</div>
+  </main>
+</body>
+</html>

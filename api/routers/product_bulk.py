@@ -69,6 +69,10 @@ class RegenerateAssetRequest(BaseModel):
     feedback: str | None = None
 
 
+class RejectAssetRequest(BaseModel):
+    feedback: str | None = None
+
+
 async def get_owned_suite(db: AsyncSession, suite_id: str, user: User) -> Suite:
     result = await db.execute(select(Suite).where(Suite.id == suite_id))
     suite = result.scalar_one_or_none()
@@ -537,17 +541,24 @@ async def reject_asset(
     suite_id: str,
     batch_id: str,
     asset_id: str,
+    data: RejectAssetRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     batch = await get_batch(db, suite_id, batch_id, current_user)
     asset = await get_asset(db, batch.id, asset_id)
+    feedback = ((data.feedback if data else None) or "").strip()
     asset.status = ProductBulkAssetStatus.rejected
+    asset.feedback = feedback or asset.feedback
+    asset.ai_metadata = {
+        **(asset.ai_metadata or {}),
+        "rejection_feedback": feedback,
+    }
     item = next((product for product in batch.items if product.id == asset.item_id), None)
     if item:
         item.status = ProductBulkItemStatus.rejected
     await db.commit()
-    return {"ok": True, "asset_id": asset.id, "status": "rejected"}
+    return {"ok": True, "asset_id": asset.id, "status": "rejected", "feedback": feedback}
 
 
 @router.post("/{batch_id}/assets/{asset_id}/regenerate", status_code=202)

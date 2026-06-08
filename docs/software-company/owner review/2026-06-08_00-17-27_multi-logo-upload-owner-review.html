@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>ملخص للمالك - Multi-Logo Upload</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; color: #111; line-height: 1.75; max-width: 820px; margin: 0 auto; }
+    h1 { font-size: 28px; margin: 0 0 6px; }
+    h2 { font-size: 18px; margin: 24px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+    p, li { font-size: 13.5px; }
+    ul { padding-right: 22px; }
+    .meta { color: #555; font-size: 12px; margin-bottom: 22px; }
+    code { direction: ltr; unicode-bidi: embed; background: #f3f3f3; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>ملخص للمالك - Multi-Logo Upload</h1>
+  <div class="meta">التاريخ: 2026-06-08 00:17 · المسؤول: Noa Barak / Rami Saleh</div>
+  <h2>ماذا أنجزنا</h2>
+  <p>قوّينا رفع اللوجوهات بحيث يدعم أكثر من صورة، ويحافظ على منطق واضح للرئيسي والبدائل.</p>
+  <h2>التعديلات</h2>
+  <ul>
+    <li>خطوة Brand في onboarding تقبل رفع عدة ملفات مرة واحدة.</li>
+    <li>الباكند لم يعد يستبدل <code>logo_url</code> مع كل ملف في المجموعة.</li>
+    <li>أول لوجو مرفوع يبقى اللوجو الرئيسي.</li>
+    <li>باقي اللوجوهات تُحفظ داخل <code>brand_logos</code> كبدائل.</li>
+    <li>كل لوجو يحصل على metadata: format، width/height، shape، background.</li>
+    <li>صفحة Brand/Profile بعد إنشاء السوت صارت تقبل رفع عدة لوجوهات مرة واحدة.</li>
+  </ul>
+  <h2>لماذا هذا مهم</h2>
+  <p>العميل قد يملك نسخة مربعة للسوشيال، أفقية للموقع، شفافة، ونسخة لخلفية فاتحة أو داكنة. النظام الآن يخزن هذه الملفات كبدائل قابلة للاستخدام لاحقًا في توليد المحتوى.</p>
+  <h2>التحقق</h2>
+  <ul>
+    <li>اختبارات باكند مركزة: 11 passed.</li>
+    <li>Build الويب: نجح.</li>
+  </ul>
+  <h2>حدود هذه الجولة</h2>
+  <p>لا يوجد بعد UI لاختيار اللوجو الرئيسي يدويًا من بين البدائل. حاليًا أول لوجو في الرفع هو الرئيسي.</p>
+  <h2>الخطوة المقترحة التالية</h2>
+  <p>إضافة اختيار primary logo يدويًا لاحقًا، ثم عمل QA/polish لشاشات onboarding على الموبايل.</p>
+</body>
+</html>

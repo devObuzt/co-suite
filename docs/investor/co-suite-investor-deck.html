@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>co-Suite Investor Deck</title>
+  <style>
+    @page { size: 16in 9in; margin: 0; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #050505;
+      color: #f7f7f2;
+      font-family: Inter, Arial, Helvetica, sans-serif;
+      line-height: 1.25;
+    }
+    .slide {
+      width: 16in;
+      height: 9in;
+      page-break-after: always;
+      padding: 0.68in 0.82in;
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 88% 12%, rgba(41, 135, 255, 0.18), transparent 24%),
+        linear-gradient(145deg, #080808 0%, #111113 58%, #070707 100%);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .slide.light {
+      background: #f8f7f2;
+      color: #0b0b0b;
+    }
+    .kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.12in;
+      color: #d7ff21;
+      text-transform: uppercase;
+      font-size: 0.16in;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+    }
+    .logo {
+      position: absolute;
+      top: 0.46in;
+      right: 0.58in;
+      font-size: 0.22in;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    .logo span { color: #d7ff21; }
+    h1 {
+      margin: 0.42in 0 0.22in;
+      font-size: 0.72in;
+      line-height: 0.95;
+      letter-spacing: 0;
+      max-width: 10.5in;
+    }
+    h2 {
+      margin: 0.2in 0 0.24in;
+      font-size: 0.42in;
+      line-height: 1.05;
+      letter-spacing: 0;
+      max-width: 11.2in;
+    }
+    p {
+      font-size: 0.23in;
+      color: #c9c9c5;
+      max-width: 10.5in;
+      margin: 0.16in 0;
+    }
+    .light p { color: #3a3a35; }
+    .lead {
+      font-size: 0.31in;
+      max-width: 10.7in;
+      color: #eeeeea;
+    }
+    .light .lead { color: #121212; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.22in;
+      margin-top: 0.45in;
+    }
+    .grid.two { grid-template-columns: repeat(2, 1fr); }
+    .card {
+      border: 1px solid rgba(255,255,255,0.13);
+      background: rgba(255,255,255,0.055);
+      border-radius: 0.12in;
+      padding: 0.25in;
+      min-height: 1.55in;
+    }
+    .light .card {
+      border-color: rgba(0,0,0,0.12);
+      background: rgba(0,0,0,0.035);
+    }
+    .card strong {
+      display: block;
+      font-size: 0.24in;
+      margin-bottom: 0.12in;
+      color: #fff;
+    }
+    .light .card strong { color: #090909; }
+    .card p, li {
+      font-size: 0.19in;
+      color: #d9d9d5;
+    }
+    .light .card p, .light li { color: #30302c; }
+    ul {
+      margin: 0.18in 0 0;
+      padding-left: 0.28in;
+      max-width: 11in;
+    }
+    li { margin: 0.09in 0; }
+    .accent-yellow { color: #d7ff21; }
+    .accent-pink { color: #ff4fa3; }
+    .accent-blue { color: #2f80ff; }
+    .band {
+      position: absolute;
+      bottom: 0.55in;
+      left: 0.82in;
+      right: 0.82in;
+      height: 0.08in;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 0.08in;
+    }
+    .band div:nth-child(1) { background: #d7ff21; }
+    .band div:nth-child(2) { background: #ff4fa3; }
+    .band div:nth-child(3) { background: #2f80ff; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 0.38in;
+      font-size: 0.18in;
+    }
+    th, td {
+      border-bottom: 1px solid rgba(255,255,255,0.14);
+      padding: 0.14in 0.12in;
+      text-align: left;
+      vertical-align: top;
+    }
+    .light th, .light td { border-color: rgba(0,0,0,0.14); }
+    th { color: #d7ff21; font-size: 0.17in; text-transform: uppercase; letter-spacing: 0.04em; }
+    .metric {
+      font-size: 0.54in;
+      font-weight: 850;
+      color: #fff;
+      line-height: 1;
+    }
+    .light .metric { color: #0a0a0a; }
+    .note {
+      position: absolute;
+      left: 0.82in;
+      bottom: 0.28in;
+      color: #777;
+      font-size: 0.13in;
+    }
+  </style>
+</head>
+<body>
+  <section class="slide">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Confidential investor narrative · June 2026</div>
+    <h1>The AI marketing operating system for every business</h1>
+    <p class="lead">co-Suite turns a business's website, social pages, brand assets, products, audience, and connected ad accounts into a living marketing workspace.</p>
+    <div class="band"><div></div><div></div><div></div></div>
+  </section>
+
+  <section class="slide light">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Problem</div>
+    <h2>Small businesses do not have a marketing operating system.</h2>
+    <div class="grid">
+      <div class="card"><strong>Too expensive</strong><p>Hiring a full marketing team is out of reach before the business proves growth.</p></div>
+      <div class="card"><strong>Too generic</strong><p>AI tools generate content, but do not understand the business, language, brand, audience, or market.</p></div>
+      <div class="card"><strong>Too fragmented</strong><p>Work is scattered across social apps, ad managers, design tools, calendars, spreadsheets, and chat.</p></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Insight</div>
+    <h2>The bottleneck is not content generation. It is business understanding.</h2>
+    <p class="lead">Generic AI can create a post. It cannot reliably know what this business sells, who the audience is, what language to use, what the brand looks like, or what the user approved last time.</p>
+    <div class="grid two">
+      <div class="card"><strong>Without memory</strong><p>Every prompt starts from zero. Quality depends on how well the user explains the business again.</p></div>
+      <div class="card"><strong>With Suite Memory</strong><p>Every post, image, video, campaign, and schedule is grounded in the business profile, brand, audience, and feedback history.</p></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Solution</div>
+    <h2>One suite per business. One memory. Many workflows.</h2>
+    <div class="grid">
+      <div class="card"><strong class="accent-yellow">Business brain</strong><p>Business profile, category, services, products, audience, USP, ESP, and marketing message.</p></div>
+      <div class="card"><strong class="accent-pink">Brand brain</strong><p>Logos, colors, fonts, visual rules, personas, content tone, language rules, and feedback learnings.</p></div>
+      <div class="card"><strong class="accent-blue">Operating brain</strong><p>Connected platforms, analytics, generated content, calendars, campaigns, product bulk jobs, publishing status.</p></div>
+    </div>
+  </section>
+
+  <section class="slide light">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Product flow</div>
+    <h2>From onboarding to daily marketing operations.</h2>
+    <div class="grid two">
+      <div class="card"><strong>1. Build the Suite</strong><p>User provides website and social links. co-Suite reads sources, extracts business intelligence, and guides profile confirmation step by step.</p></div>
+      <div class="card"><strong>2. Operate the Suite</strong><p>User generates, reviews, edits, approves, schedules, publishes, analyzes, and improves future rules from feedback.</p></div>
+      <div class="card"><strong>3. Expand workflows</strong><p>Product creatives, carousels, videos, sponsored campaigns, social calendar loops, and agency multi-client operations.</p></div>
+      <div class="card"><strong>4. Keep learning</strong><p>Every approval, rejection, upload, campaign, and platform connection strengthens the Suite Memory.</p></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Why now</div>
+    <h2>AI creation is becoming cheap. Context and workflow are the defensible layer.</h2>
+    <ul>
+      <li>Text, image, and video generation models are improving quickly.</li>
+      <li>Small businesses still need control, approvals, scheduling, platform connections, and analytics.</li>
+      <li>Multilingual local markets need Arabic, Hebrew, English, and additional languages as native product experiences.</li>
+      <li>The winning product is not one model. It is the operating layer around many models and platforms.</li>
+    </ul>
+  </section>
+
+  <section class="slide light">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Wedge</div>
+    <h2>Start with multilingual SMBs and agencies in Israel and nearby markets.</h2>
+    <div class="grid">
+      <div class="card"><strong>SMBs</strong><p>Need consistent content, simple campaigns, clear analytics, and brand discipline without hiring a full team.</p></div>
+      <div class="card"><strong>Creators</strong><p>Need voice, persona references, video/carousel output, and rules for what to say or avoid.</p></div>
+      <div class="card"><strong>Agencies</strong><p>Need faster onboarding, bulk generation, review flows, and multi-client operations.</p></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Differentiation</div>
+    <h2>co-Suite is not a post generator.</h2>
+    <table>
+      <tr><th>Generic AI tools</th><th>co-Suite</th></tr>
+      <tr><td>Prompt-by-prompt</td><td>Persistent Suite Memory</td></tr>
+      <tr><td>Mostly English-first</td><td>Native multilingual product and generation</td></tr>
+      <tr><td>Detached from platforms</td><td>Meta, Instagram, Google Ads, storage, publishing</td></tr>
+      <tr><td>One-off outputs</td><td>Pending, approved, scheduled, published lifecycle</td></tr>
+      <tr><td>No business setup</td><td>AI-assisted business and brand profile</td></tr>
+      <tr><td>Weak feedback loop</td><td>Rejection and edits become rules</td></tr>
+    </table>
+  </section>
+
+  <section class="slide">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Capabilities</div>
+    <h2>The platform already spans the core marketing workflow.</h2>
+    <div class="grid">
+      <div class="card"><strong>Onboarding intelligence</strong><p>Reads websites/social pages and extracts business category, services, audience, language, and brand signals.</p></div>
+      <div class="card"><strong>Generation</strong><p>Ideas, captions, images, carousels, videos, product bulk creatives, and regeneration with feedback.</p></div>
+      <div class="card"><strong>Connections</strong><p>Meta/Facebook/Instagram, Meta Ads, Google Ads, R2 media storage, publishing and analytics foundations.</p></div>
+    </div>
+  </section>
+
+  <section class="slide light">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Business model</div>
+    <h2>Subscription plus usage-based AI and media generation.</h2>
+    <div class="grid">
+      <div class="card"><strong>Subscription</strong><p>Monthly pricing per Suite, with agency tier for multiple client Suites and team seats.</p></div>
+      <div class="card"><strong>Usage credits</strong><p>Variable AI cost covered through credits for images, videos, bulk jobs, and premium generation.</p></div>
+      <div class="card"><strong>Add-ons</strong><p>Campaign builder, automation loops, advanced analytics, agency operations, and managed workflows.</p></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Moat</div>
+    <h2>The moat is compound memory plus workflow distribution.</h2>
+    <p class="lead">The product improves every time the user approves, edits, rejects, connects, uploads, publishes, or analyzes.</p>
+    <div class="grid">
+      <div class="card"><strong>Data asset</strong><p>Business profile, product catalog, brand assets, language rules, and audience definitions.</p></div>
+      <div class="card"><strong>Workflow lock-in</strong><p>Content lifecycle, campaign surfaces, calendars, publishing, analytics, and feedback rules.</p></div>
+      <div class="card"><strong>Local advantage</strong><p>Arabic, Hebrew, English, and multilingual market behavior as first-class assumptions.</p></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Architecture</div>
+    <h2>Built as a Suite-centric AI workflow platform.</h2>
+    <div class="grid two">
+      <div class="card"><strong>Current stack</strong><p>Next.js web app, FastAPI backend, Suite/ContentPost/GenerationJob/ProductBulk models, R2 storage, Meta and Google integrations.</p></div>
+      <div class="card"><strong>Architecture direction</strong><p>Every workflow reads from Suite Memory through a canonical context builder and writes back artifacts, analytics, and feedback learnings.</p></div>
+    </div>
+  </section>
+
+  <section class="slide light">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Roadmap</div>
+    <h2>From rich prototype to scalable operating system.</h2>
+    <div class="grid">
+      <div class="card"><strong>Near term</strong><p>Harden onboarding diagnostics, generation jobs, provider limits, editing, approvals, schedule, publish, and mobile UX.</p></div>
+      <div class="card"><strong>Next</strong><p>Social Calendar Builder, Sponsored Campaign Builder, better product bulk workflows, analytics surfaces, agency workspace.</p></div>
+      <div class="card"><strong>Platform</strong><p>Native iOS/Android companion apps, more ad platforms, vertical templates, deeper automation loops.</p></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">Investment use</div>
+    <h2>Funding accelerates product stability, integrations, and go-to-market.</h2>
+    <div class="grid">
+      <div class="card"><strong>Engineering</strong><p>Job queues, provider orchestration, testing, security, scaling, and reliability.</p></div>
+      <div class="card"><strong>Product</strong><p>Polished onboarding, mobile approvals, calendar builder, campaign builder, and agency flows.</p></div>
+      <div class="card"><strong>GTM</strong><p>Pilot agencies, SMB verticals, onboarding playbooks, customer success, and pricing validation.</p></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="logo">co-<span>Suite</span></div>
+    <div class="kicker">The ask</div>
+    <h2>We are building the marketing operating system for the AI-native business era.</h2>
+    <p class="lead">co-Suite sits at the intersection of SMB marketing pain, multilingual local markets, AI media generation, ad platform workflows, and agency production bottlenecks.</p>
+    <p>We are looking for strategic capital and partners who understand that the next wave is not just generating content, but operating marketing systems around business memory.</p>
+    <div class="band"><div></div><div></div><div></div></div>
+  </section>
+</body>
+</html>

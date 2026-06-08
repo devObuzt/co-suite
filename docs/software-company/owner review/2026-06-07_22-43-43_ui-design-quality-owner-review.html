@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>co-Suite Owner Review - UI Design Quality</title>
+  <style>
+    @page { size: A4; margin: 22mm 18mm; }
+    body {
+      direction: rtl;
+      text-align: right;
+      font-family: Arial, "Helvetica Neue", "Noto Sans Arabic", sans-serif;
+      color: #141414;
+      line-height: 1.75;
+      font-size: 14px;
+    }
+    h1 { font-size: 28px; margin: 0 0 10px; font-weight: 800; border-bottom: 3px solid #111; padding-bottom: 14px; }
+    h2 { font-size: 18px; margin: 22px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
+    h3 { font-size: 15px; margin: 16px 0 6px; }
+    ul, ol { margin: 8px 0 12px; padding-right: 22px; padding-left: 0; }
+    li { margin: 4px 0; }
+    code {
+      direction: ltr;
+      unicode-bidi: embed;
+      background: #f2f2f2;
+      border: 1px solid #e5e5e5;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    .box {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid #ddd;
+      border-right: 5px solid #111;
+      background: #fafafa;
+    }
+  </style>
+</head>
+<body>
+  <h1>كيف نحسن مستوى تصميم الـ UI؟</h1>
+  <p><strong>التاريخ والساعة:</strong> 2026-06-07 22:43:43</p>
+
+  <h2>القسم المسؤول</h2>
+  <p>القسم المسؤول الأساسي هو <strong>Design Department</strong>.</p>
+  <p>لكن جودة الواجهة لا تأتي من Design وحده. Product يحدد الهدف، Design يصمم التجربة، Frontend ينفذها كمكونات، Architecture يحافظ على design system، QA يفحصها، وProject Manager يمنع انتقال الشاشة للإصدار قبل gates واضحة.</p>
+
+  <h2>كيف نرفع المستوى؟</h2>
+  <h3>1. Design System حقيقي</h3>
+  <ul>
+    <li>ألوان رئيسية وثانوية.</li>
+    <li>typography لكل لغة.</li>
+    <li>spacing scale.</li>
+    <li>button styles.</li>
+    <li>cards, panels, forms.</li>
+    <li>mobile rules.</li>
+    <li>RTL/LTR rules.</li>
+    <li>dark/light tokens.</li>
+  </ul>
+
+  <h3>2. Visual قبل الكود</h3>
+  <p>أي شاشة مؤثرة يجب أن تمر بواحد من wireframe أو HTML mockup أو screenshot أو design note أو component contract قبل coding.</p>
+
+  <h3>3. Design QA Checklist</h3>
+  <ul>
+    <li>هل النصوص مناسبة للغة المستخدم؟</li>
+    <li>هل RTL صحيح؟</li>
+    <li>هل mobile 320px/360px شغال؟</li>
+    <li>هل dark/light متناسق؟</li>
+    <li>هل الأزرار واضحة؟</li>
+    <li>هل الحالات الفارغة والانتظار والفشل مفهومة؟</li>
+    <li>هل الشاشة تقود المستخدم للفعل بدل أن تشرح النظام؟</li>
+  </ul>
+
+  <h3>4. Component Library</h3>
+  <p>نثبت مكتبة مكونات مثل Shell, Sidebar, Suite navigation, Form field, Select, Status badge, Job status panel, Media card, Content card, Empty state, Error state.</p>
+
+  <h3>5. UI Review Gate</h3>
+  <p>لا نعتمد شاشة فيها hard-coded English في عربية/عبرية، أو hard-coded colors تكسر الثيم، أو mobile غير مفحوص، أو نص يفيض، أو error/empty state غير مفهوم.</p>
+
+  <h2>من يقود هذا عملياً؟</h2>
+  <p>نحتاج agent داخلي اسمه <strong>Design Lead / Design System Agent</strong>.</p>
+  <p>مسؤوليته: design direction، review قبل الكود، ملفات design specs، consistency، component contracts، ورفض الشاشات الضعيفة قبل دخولها للتنفيذ.</p>
+
+  <h2>القرار المقترح</h2>
+  <p>نبدأ بـ <strong>co-Suite UI Quality Pass</strong> على أهم 5 شاشات:</p>
+  <ol>
+    <li>Signup / onboarding</li>
+    <li>Suite dashboard</li>
+    <li>Create & Generate</li>
+    <li>Content Review</li>
+    <li>Brand/Profile</li>
+  </ol>
+  <p>لكل شاشة نعمل UX goal، visual mockup، mobile version، RTL check، component contract، وQA checklist.</p>
+
+  <div class="box">
+    <p><strong>الخلاصة:</strong> تحسين UI ليس تغيير ألوان وخطوط فقط. هو نظام عمل: Product يحدد لماذا، Design يحدد كيف، Frontend ينفذ، QA يفحص، Architecture يحافظ على النظام، وProject Manager يمنع الفوضى.</p>
+  </div>
+</body>
+</html>

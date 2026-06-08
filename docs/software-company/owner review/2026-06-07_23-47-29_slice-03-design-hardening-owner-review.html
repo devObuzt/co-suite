@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>Slice 03 Design Hardening</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { margin: 0; color: #222; font-family: "Cairo", "Assistant", "Arial", sans-serif; line-height: 1.75; direction: rtl; }
+    .page { max-width: 900px; margin: 0 auto; }
+    .cover { border: 2px solid #333; border-radius: 18px; padding: 28px; margin-bottom: 24px; background: linear-gradient(135deg, #fff 0%, #fff9c7 100%); }
+    .eyebrow { color: #666; font-size: 13px; }
+    h1 { margin: 4px 0 10px; font-size: 32px; }
+    h2 { font-size: 21px; margin: 24px 0 8px; padding-bottom: 6px; border-bottom: 2px solid #ffd800; }
+    ul { padding-right: 24px; }
+    li { margin: 5px 0; }
+    .ok { display: inline-block; background: #333; color: #ffd800; border-radius: 999px; padding: 6px 12px; font-weight: 700; }
+    .note { border-right: 5px solid #ef4f92; background: #fff5fa; padding: 14px 16px; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="cover">
+      <div class="eyebrow">Owner Review · Noa Barak / Rami Saleh · 2026-06-07 23:47</div>
+      <h1>Slice 03 Design Hardening</h1>
+      <span class="ok">completed</span>
+      <p>تم تنفيذ تمريرة M1 design hardening محدودة بدون إعادة تصميم كبيرة.</p>
+    </section>
+    <h2>التغييرات</h2>
+    <ul>
+      <li>زر الرجوع في Suite shell صار يستخدم i18n.</li>
+      <li>Suite navigation صار يستخدم i18n للإنجليزية والعربية والعبرية.</li>
+      <li>Product Bulk main shell صار أقل اعتماداً على dark-only classes في المناطق الأساسية.</li>
+      <li>Product Bulk asset rejection صار يطلب feedback قبل الرفض حتى لا نفقد سبب الرفض.</li>
+    </ul>
+    <h2>التحقق</h2>
+    <ul><li>Web production build passed.</li></ul>
+    <h2>الخطوة القادمة</h2>
+    <div class="note">الانتقال إلى DEV-D-01: limited account-level generation without Suite.</div>
+  </main>
+</body>
+</html>

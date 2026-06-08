@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>مراجعة المالك - نظام العمل القابل للتكرار</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #222;
+      background: #fff;
+      font-family: "Cairo", "Assistant", "Arial", sans-serif;
+      line-height: 1.75;
+      direction: rtl;
+    }
+    .page {
+      max-width: 920px;
+      margin: 0 auto;
+    }
+    .cover {
+      border: 2px solid #333;
+      border-radius: 18px;
+      padding: 28px;
+      margin-bottom: 24px;
+      background: linear-gradient(135deg, #fff 0%, #fff8bf 100%);
+    }
+    .eyebrow {
+      color: #555;
+      font-size: 13px;
+      letter-spacing: 0;
+      margin-bottom: 8px;
+    }
+    h1 {
+      font-size: 34px;
+      line-height: 1.25;
+      margin: 0 0 12px;
+      color: #111;
+    }
+    h2 {
+      font-size: 21px;
+      margin: 26px 0 8px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #ffd800;
+      color: #111;
+    }
+    p { margin: 8px 0 12px; }
+    ul { margin: 8px 0 14px; padding-right: 24px; }
+    li { margin: 4px 0; }
+    code {
+      direction: ltr;
+      unicode-bidi: embed;
+      background: #f4f4f4;
+      padding: 2px 5px;
+      border-radius: 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 22px;
+      direction: rtl;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px 12px;
+      vertical-align: top;
+      text-align: right;
+    }
+    th {
+      background: #333;
+      color: #fff;
+      font-weight: 700;
+    }
+    tr:nth-child(even) td { background: #fafafa; }
+    .note {
+      border-right: 5px solid #ef4f92;
+      background: #fff5fa;
+      padding: 14px 16px;
+      border-radius: 10px;
+      margin: 18px 0;
+    }
+    .footer {
+      margin-top: 30px;
+      color: #666;
+      font-size: 12px;
+      border-top: 1px solid #ddd;
+      padding-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="cover">
+      <div class="eyebrow">Owner Review · 2026-06-07 23:03</div>
+      <h1>نظام العمل القابل للتكرار</h1>
+      <p>تم تثبيت طريقة العمل كشركة سوفتوير قابلة لإعادة الاستخدام، وليس كعملية خاصة بمشروع OneShare فقط.</p>
+    </section>
+
+    <h2>الخلاصة</h2>
+    <p>أي مشروع جديد يجب أن يمر بنفس المنظومة: إدارة منتج، فحص براند، تصميم قبل الكود، هندسة، تنفيذ، QA، ومراجعة نهائية.</p>
+
+    <h2>ما تم توثيقه</h2>
+    <ul>
+      <li>تم إضافة ملف مدراء الأقسام: <code>docs/software-company/department-managers.md</code>.</li>
+      <li>تم إضافة Workflow جديد: <code>docs/software-company/workflows/brand-and-design-intake.md</code>.</li>
+      <li>تم تحديث <code>docs/software-company/operating-model.md</code> حتى يدخل فحص البراند والتصميم قبل أي شغل UI.</li>
+      <li>تم تحديث <code>docs/software-company/README.md</code> حتى يوضح أن هذا النظام قابل لإعادة الاستخدام لمشاريع أخرى.</li>
+      <li>تم إضافة اسم مدير داخل كل Agent قسم.</li>
+    </ul>
+
+    <h2>المدراء المعتمدون</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>القسم</th>
+          <th>المدير</th>
+          <th>المسؤولية</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Project Management</td><td>Layla Haddad</td><td>تشغيل سير العمل، التنسيق، المراجعات، والـ owner review.</td></tr>
+        <tr><td>Product Management</td><td>Omar Nassar</td><td>تحديد المنتج، الأسئلة، نطاق العمل، وقائمة متطلبات البراند.</td></tr>
+        <tr><td>Architecture</td><td>Mira Cohen</td><td>النظام، التوسع، الحدود، الـ queues، والمراجعة بعد التنفيذ.</td></tr>
+        <tr><td>Design / Design System</td><td>Noa Barak</td><td>الهوية البصرية، التصميم، RTL/LTR، تعدد اللغات، وجودة الواجهة.</td></tr>
+        <tr><td>DevOps / Infra</td><td>Kareem Mansour</td><td>التشغيل، الأسرار، التخزين، المراقبة، والجاهزية للضغط.</td></tr>
+        <tr><td>Developers Manager</td><td>Daniel Farah</td><td>تقسيم العمل الهندسي وتوزيع المهام.</td></tr>
+        <tr><td>Developers</td><td>Rami Saleh</td><td>التنفيذ، الاختبارات، والتحقق المحلي.</td></tr>
+        <tr><td>QA</td><td>Lina Saad</td><td>الفحص، تسجيل المشاكل، وإعادة الفحص حتى الإغلاق.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>قاعدة مهمة للمشاريع القادمة</h2>
+    <p>إذا بدأنا مشروع جديد وفيه واجهة أو موقع أو تطبيق، لازم Product Manager يسأل عن ملف البراند إذا مش موجود:</p>
+    <ul>
+      <li>لوجوهات.</li>
+      <li>ألوان HEX/RGB.</li>
+      <li>خطوط.</li>
+      <li>Brand book.</li>
+      <li>أيقونات أو شخصيات.</li>
+      <li>أمثلة تصميم.</li>
+      <li>لغات وأسواق مستهدفة.</li>
+    </ul>
+    <div class="note">إذا ما في براند، يتم توثيق هذا الشي بوضوح، والتصميم يقترح هوية مؤقتة أو Starter identity بدل ما نبلش كود على افتراضات مخفية.</div>
+
+    <h2>قاعدة الملخصات</h2>
+    <p>أي ملف Owner Review لاحق لازم يكون منسوب للأقسام:</p>
+    <ul>
+      <li>تغييرات المنتج يكتبها Omar.</li>
+      <li>تغييرات التصميم تكتبها Noa.</li>
+      <li>تغييرات الهندسة تكتبها Mira.</li>
+      <li>تغييرات التشغيل يكتبها Kareem.</li>
+      <li>التنفيذ يكتبه Daniel/Rami.</li>
+      <li>الفحص تكتبه Lina.</li>
+      <li>التنسيق العام تكتبه Layla.</li>
+    </ul>
+
+    <h2>ملاحظات للتطوير لاحقا</h2>
+    <ul>
+      <li>يمكن إضافة محادثة أو Thread خاص لكل قسم.</li>
+      <li>يمكن ربط كل Owner Review بتوقيع المدير المسؤول.</li>
+      <li>يمكن لكل مشروع جديد أن يرث هذا النظام ثم يغير فقط اسم المشروع، السوق، البراند، والقيود التقنية.</li>
+    </ul>
+
+    <div class="footer">OneShare Software Company OS · Owner Review</div>
+  </main>
+</body>
+</html>

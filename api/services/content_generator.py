@@ -899,6 +899,8 @@ async def generate_content_for_suite(
                     generated_video_count += 1
         except Exception as e:
             log.warning("Media generation for post %s failed: %s", post_id, e)
+            idea["media_generation_failed"] = True
+            idea["media_error"] = "media_generation_failed"
 
         post = ContentPost(
             id=post_id,

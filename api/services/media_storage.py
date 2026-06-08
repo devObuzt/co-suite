@@ -8,6 +8,7 @@ from typing import Optional
 import httpx
 
 from ..core.config import settings
+from ..models.content import ContentPost, PostFormat
 
 log = logging.getLogger(__name__)
 
@@ -217,3 +218,73 @@ def upload_static_path(static_path: str, content_type: Optional[str] = None) -> 
     media_type = content_type or guessed_type or "application/octet-stream"
     key = f"posts/legacy/{local.name}"
     return upload_bytes(key, local.read_bytes(), media_type)
+
+
+def _media_item(url: str) -> dict:
+    public = url.startswith("https://")
+    if public:
+        backend = "r2" if settings.r2_public_url and url.startswith(settings.r2_public_url.rstrip("/")) else "remote"
+    elif url.startswith("/static/"):
+        backend = "local"
+    else:
+        backend = "unsupported"
+    return {
+        "url": url,
+        "backend": backend,
+        "public": public,
+        "publish_ready": public,
+    }
+
+
+def media_readiness_for_post(post: ContentPost) -> dict:
+    meta = post.ai_metadata or {}
+    requires_media = meta.get("requires_media")
+    if requires_media is None:
+        requires_media = meta.get("content_type") != "text" and post.format in {
+            PostFormat.image,
+            PostFormat.carousel,
+            PostFormat.video,
+        }
+
+    urls = [url for url in (post.media_urls or []) if isinstance(url, str) and url]
+    items = [_media_item(url) for url in urls]
+
+    if not requires_media:
+        return {
+            "state": "not_required",
+            "publish_ready": True,
+            "reason": None,
+            "items": items,
+        }
+    if not urls:
+        failed = bool(meta.get("media_error") or meta.get("media_generation_failed"))
+        return {
+            "state": "failed" if failed else "missing",
+            "publish_ready": False,
+            "reason": (
+                "Media generation failed. You can retry generation or publish as text only where supported."
+                if failed
+                else "No generated media is attached to this post."
+            ),
+            "items": [],
+        }
+    if all(item["public"] for item in items):
+        return {
+            "state": "ready",
+            "publish_ready": True,
+            "reason": None,
+            "items": items,
+        }
+    if any(item["backend"] == "local" for item in items):
+        return {
+            "state": "local-only",
+            "publish_ready": False,
+            "reason": "Media is stored locally and is not available as a durable public HTTPS URL.",
+            "items": items,
+        }
+    return {
+        "state": "unsupported",
+        "publish_ready": False,
+        "reason": "Media URL is not a supported public HTTPS URL.",
+        "items": items,
+    }

@@ -1,12 +1,15 @@
 # co-Suite Architecture Brief
 
-Date: 2026-06-03
+Date: 2026-06-03  
+Last updated: 2026-06-06
 
 ## Architecture Goal
 
 co-Suite يجب أن يتطور من prototype غني بالميزات إلى platform منظم وقابل للتوسع. الهدف المعماري هو أن كل شيء يدور حول Suite Memory واضحة، وأن تكون عمليات التوليد، النشر، الحملات، التحليلات، والجدولة مبنية كـ workflows/jobs مستقلة بدل منطق موزع داخل صفحات الواجهة.
 
 هذه الوثيقة تشرح architecture المطلوبة من منظور عملي: ما الذي نملك اليوم، ما الحدود التي يجب تثبيتها، وما المسار الهندسي الذي يجعل المنتج يكبر بدون أن يصبح fragile.
+
+المعيار الأساسي: التطبيق يجب أن يكون جاهزًا لاستخدام كبير ومتزامن، وجاهزًا أن يتوسع بقدرات ومنتجات جديدة بدون rewrites كبيرة. أي تصميم لا يتحمل concurrency أو يربط feature جديدة بمنطق خاص داخل صفحة واحدة سيؤخر المنتج لاحقًا.
 
 ## Current High-Level Shape
 
@@ -53,6 +56,18 @@ Suite Memory تشمل:
 - Platform Connections Summary.
 
 أي AI generation يجب أن يمر عبر `SuiteContextBuilder` يبني context واحد واضح بدل أن كل service يقرأ `suite.brand` بطريقته.
+
+### Scale and Extensibility are First-Class Requirements
+
+القابلية للتوسع ليست مرحلة لاحقة فقط. يجب أن تكون جزءًا من كل workflow:
+
+- API services يجب أن تبقى stateless قدر الإمكان.
+- الأعمال الطويلة يجب أن تكون jobs/worker، وليس request lifecycle.
+- كل workflow جديد يجب أن يملك contract موحد: input, validation, job, artifacts, status, billing, audit.
+- لا يجب ربط product جديد بصفحة واحدة أو provider واحد.
+- provider adapters يجب أن تسمح بتبديل AI/platform provider بدون تغيير المنتج.
+- كل feature كبيرة يجب أن تقبل feature flags وrollout تدريجي.
+- النظام يجب أن يعرف متى يبطئ، ينتظر، يعيد المحاولة، أو يطلب تدخل admin.
 
 ## Recommended Domain Boundaries
 
@@ -595,9 +610,126 @@ StoredAsset
 CalendarPlan
 CalendarItem
 LanguageRule
+SubscriptionPlan
+UserSubscription
+CreditTransaction
+MarketingBudgetTransaction
 ```
 
 Do not add all at once. Add when the feature needs durable state.
+
+## Billing, Credits, and Marketing Budget Domain
+
+co-Suite يحتاج فصل محاسبي ومعماري واضح بين الاشتراك، توكنز التوليد، وميزانية الإعلانات. هذه ليست نفس الرصيد.
+
+### Billing Concepts
+
+```txt
+Subscription
+  monthly/yearly membership
+  plan type
+  renewal date
+  included generation allowance
+  seats/suites entitlement
+
+GenerationCreditLedger
+  credits granted by subscription
+  purchased token packs
+  usage debits
+  refunds/reversals
+  expiration rules
+
+MarketingBudgetLedger
+  deposits for ad spend
+  reserved campaign budgets
+  actual platform spend
+  refunds/unspent balance
+  management fees if applicable
+```
+
+### Product Rule
+
+Generation credits and marketing budget must never be mixed.
+
+- توليد صورة/فيديو/كاروسيل يخصم من `GenerationCreditLedger`.
+- إطلاق حملة على Meta/Google يخصم أو يحجز من `MarketingBudgetLedger`.
+- الاشتراك الشهري يعطي entitlement وcredits، لكنه ليس ميزانية إعلانات.
+- رصيد الإعلان يمكن أن يبقى حتى لو تغيرت باقة الاشتراك، حسب شروط الدفع.
+
+### Recommended Entities
+
+```txt
+SubscriptionPlan
+  id
+  name
+  monthly_price
+  yearly_price
+  included_credits
+  limits
+
+UserSubscription
+  user_id
+  plan_id
+  status
+  billing_period
+  renews_at
+  seats
+
+CreditTransaction
+  user_id
+  suite_id nullable
+  source: subscription_grant/token_pack/refund/manual_adjustment
+  type: grant/debit/refund/expire
+  amount
+  balance_after
+  linked_job_id
+  created_at
+
+MarketingBudgetTransaction
+  user_id
+  suite_id
+  source: deposit/campaign_reserve/platform_spend/refund/manual_adjustment
+  amount
+  balance_after
+  linked_campaign_id
+  platform
+  created_at
+```
+
+### Campaign Budget Flow
+
+Sponsored campaigns require explicit budget handling:
+
+```txt
+CampaignDraft
+  -> user confirms budget
+  -> reserve amount from MarketingBudgetLedger
+  -> launch campaign through provider
+  -> sync actual spend
+  -> release or refund unused balance
+```
+
+No campaign launch should happen if:
+
+- marketing budget balance is insufficient.
+- user did not confirm budget.
+- platform connection lacks ads_write_ready.
+- payment/ledger state is inconsistent.
+
+### User-Facing Balances
+
+The app should show three balances/statuses separately:
+
+- Subscription plan and renewal.
+- Generation token balance.
+- Marketing budget balance.
+
+Admin should see:
+
+- credit grants/debits by provider/job.
+- marketing deposits/reserves/spend by campaign.
+- failed payment events.
+- negative or inconsistent ledger states.
 
 ## Queue and Scalability
 
@@ -618,6 +750,219 @@ For production, consider:
 - Redis/RQ/Celery/Arq or managed queue.
 - Railway worker service.
 - DB-backed queue short-term if traffic is low.
+
+### Concurrent Usage Requirements
+
+المنظومة يجب أن تتحمل عدد كبير من المستخدمين والطلبات في نفس الوقت. هذا يعني:
+
+- لا يوجد AI/image/video call طويل داخل request مباشر بدون job record.
+- كل request expensive يجب أن يكون idempotent أو له idempotency key عندما يكون مناسبًا.
+- DB connections يجب ألا تبقى مفتوحة أثناء انتظار AI providers.
+- worker concurrency يجب أن يكون محدودًا حسب provider/model/cost.
+- rate limiting على مستوى user/account/suite/provider.
+- backpressure واضح: queue length, waiting state, retry_after.
+- media uploads/generation يجب أن تستخدم object storage وليس local disk في الإنتاج.
+- polling endpoints يجب أن تكون خفيفة ومهيأة لكثرة الطلبات.
+
+Recommended runtime split:
+
+```txt
+web service
+api service
+worker service: text/light jobs
+worker service: image/video/heavy jobs
+scheduler service
+database
+object storage
+queue/broker
+admin/observability surface
+```
+
+يمكن البدء بـ worker واحد، لكن التصميم يجب أن يسمح بفصل العمال حسب نوع workload لاحقًا.
+
+### Product Expansion Contract
+
+أي منتج جديد داخل co-Suite يجب أن يلتزم بعقد معماري موحد:
+
+```txt
+ProductWorkflow
+  type
+  input_schema
+  required_context
+  required_connections
+  credit_cost_estimator
+  job_or_sync_mode
+  artifact_schema
+  review_actions
+  publish_or_export_actions
+  admin_observability
+```
+
+هذا ينطبق على:
+
+- Quick generation.
+- Image/video/carousel.
+- Product Bulk.
+- Campaign Builder.
+- Social Calendar Builder.
+- SEO tools.
+- Email/WhatsApp tools.
+- Future TikTok/CRM/reviews products.
+
+الهدف أن المنتجات الجديدة تضيف capabilities فوق نفس البنية: SuiteContextBuilder, Billing/Credits, GenerationJob, Artifact storage, Feedback rules, Connections, Observability.
+
+### Operational Readiness Targets
+
+قبل أي إطلاق واسع، يجب توفر:
+
+- dashboard داخلي للـ queues/jobs/provider incidents.
+- metrics: job duration, failure rate, queue depth, provider wait time, cost per job.
+- alerts عند ارتفاع failures أو انتظار provider.
+- graceful degradation عند ضغط AI أو نفاد quota.
+- admin ability to pause a provider/model/workflow.
+- admin ability to retry/release stuck jobs.
+- per-plan/user rate limits.
+- audit log للأحداث المالية والنشر والحملات.
+
+## AI Provider Capacity, Limits, and Waiting States
+
+co-Suite يعتمد على طلبات خارجية لموديلات AI: OpenAI, Anthropic, Google image/video models وغيرها لاحقًا. هذه الخدمات ليست موارد لا نهائية. ممكن يحصل:
+
+- rate limit.
+- quota exhausted.
+- model overload.
+- provider timeout.
+- temporary outage.
+- insufficient credits/billing issue.
+- safety/content rejection.
+- slow long-running video/image job.
+
+لذلك النظام يجب أن يتعامل مع AI كـ capacity-constrained provider layer، وليس كـ function call مضمون.
+
+### Required Provider Response Handling
+
+كل AI adapter يجب أن يحول أخطاء المزود إلى تصنيف داخلي موحد:
+
+```txt
+ProviderErrorCategory
+  rate_limited
+  quota_exhausted
+  provider_overloaded
+  timeout
+  authentication_error
+  billing_required
+  safety_rejected
+  invalid_request
+  unknown_provider_error
+```
+
+كل خطأ يجب أن يحفظ:
+
+- provider.
+- model.
+- endpoint/use case.
+- suite_id إن وجد.
+- user_id.
+- request type.
+- retryable: true/false.
+- suggested retry_after.
+- raw provider status/code/message بشكل آمن بدون أسرار.
+- created_at.
+
+### Queue States
+
+GenerationJob يجب أن يدعم حالات انتظار واضحة:
+
+```txt
+queued
+running
+waiting_provider_limit
+waiting_provider_capacity
+waiting_admin_action
+retry_scheduled
+completed
+failed
+cancelled
+```
+
+الفكرة: إذا خلص limit أو المزود مضغوط، لا نظهر للمستخدم “فشل” فورًا إذا الطلب قابل لإعادة المحاولة. نظهر:
+
+```txt
+طلبك بالانتظار بسبب ضغط على مزود الذكاء الاصطناعي. سنكمل تلقائيًا عند توفر السعة.
+```
+
+ويجب أن يرى المستخدم:
+
+- status واضح.
+- ترتيب تقريبي أو وقت تقديري إن أمكن.
+- إمكانية إلغاء الطلب.
+- عدم خصم credits نهائيًا قبل نجاح التوليد أو حسب سياسة واضحة.
+
+### Admin Alerts and Supply Monitoring
+
+النظام يجب أن يعلمنا كـ admin عندما تصبح مشكلة المزود مؤثرة على المستخدمين، وليس فقط تظهر في logs.
+
+Admin alert يجب أن يحتوي:
+
+- provider/model المتأثر.
+- نوع المشكلة: limit, quota, overload, timeout, auth, billing.
+- عدد المستخدمين المتأثرين.
+- عدد الـ Suites المتأثرة.
+- عدد jobs المنتظرة/الفاشلة.
+- أول وآخر وقت ظهور.
+- أمثلة آمنة: user_id, suite_id, job_id, request_type.
+- raw provider message مختصر وآمن.
+- هل المشكلة retryable.
+- هل تحتاج تدخل: زيادة credits، تبديل model، تعطيل feature، أو التواصل مع provider.
+
+Recommended entities:
+
+```txt
+ProviderIncident
+  id
+  provider
+  model
+  category
+  status: open/resolved/ignored
+  affected_users_count
+  affected_suites_count
+  affected_jobs_count
+  first_seen_at
+  last_seen_at
+  latest_message
+  action_required
+
+ProviderIncidentEvent
+  incident_id
+  user_id
+  suite_id
+  job_id
+  request_type
+  provider_status
+  provider_code
+  safe_message
+  retryable
+  created_at
+```
+
+Admin UI يجب أن يعرض:
+
+- قائمة incidents المفتوحة.
+- jobs المنتظرة بسبب provider.
+- impact حسب المستخدم/السوت.
+- زر retry أو release queue بعد حل المشكلة.
+- خيار fail gracefully مع رسالة للمستخدمين إذا المشكلة طويلة.
+
+### Fallback and Degradation Strategy
+
+عند فشل مزود AI:
+
+- إذا كان الطلب text reasoning: يمكن التحويل من OpenAI إلى Anthropic أو العكس عندما يكون ذلك آمنًا.
+- إذا كان image/video model limit: يمكن وضع الطلب في queue أو اقتراح model أرخص/أسرع.
+- إذا كان prompt invalid/safety rejected: لا نعيد المحاولة تلقائيًا، بل نطلب تعديل واضح من المستخدم.
+- إذا كان quota/billing exhausted: ينتقل job إلى `waiting_admin_action`.
+
+لا يجب عمل fallback صامت يغيّر جودة أو طبيعة الناتج بدون توضيح داخلي على الأقل. المستخدم يمكن أن يرى رسالة بسيطة، لكن النظام يجب أن يحفظ الحقيقة كاملة في job/admin logs.
 
 ## Security and Compliance
 
@@ -676,6 +1021,8 @@ api service
 worker service
 database
 object storage
+queue/broker
+admin observability
 ```
 
 Do not put long generation work only in web/API request lifecycle.
@@ -756,6 +1103,8 @@ Meta analytics permission missing. Reconnect Facebook with pages_read_engagement
 8. Mobile UX must be considered in every workflow.
 9. No silent zeros in analytics.
 10. No paid campaign launch without explicit confirmation.
+11. No expensive provider call should depend on a single synchronous request.
+12. Every new product capability must use shared workflow, billing, artifact, and observability contracts.
 
 ## Architect Questions
 

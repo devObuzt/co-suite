@@ -255,15 +255,18 @@ async def upload_brand_asset(
 
     if asset_type == "logo":
         meta = _analyze_image_asset(content, ext)
-        brand["logo_url"] = url
-        brand["logo_source"] = "uploaded"
         logos = list(brand.get("brand_logos") or [])
-        logos.append({
+        if not logos:
+            brand["logo_url"] = url
+            brand["logo_source"] = "uploaded"
+        logo_item = {
             "name": filename,
             "url": url,
             "format": ext,
             **meta,
-        })
+        }
+        if not any(item.get("url") == url for item in logos):
+            logos.append(logo_item)
         brand["brand_logos"] = logos
     elif asset_type == "font":
         fonts_by_lang = dict(brand.get("fonts_by_language") or {})

@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OneShare UI Direction</title>
+  <style>
+    @font-face {
+      font-family: "Montserrat";
+      src: url("file:///private/tmp/oneshare-brand-review/Brand%20+%20icons%20/Brand%20guidline/Fonts/English/Montserrat/Montserrat-VariableFont_wght.ttf") format("truetype");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Cairo";
+      src: url("file:///private/tmp/oneshare-brand-review/Brand%20+%20icons%20/Brand%20guidline/Fonts/Arabic/Cairo-VariableFont_slnt,wght.ttf") format("truetype");
+      font-weight: 200 1000;
+    }
+    @font-face {
+      font-family: "Assistant";
+      src: url("file:///private/tmp/oneshare-brand-review/Brand%20+%20icons%20/Brand%20guidline/Fonts/Hebrew/Assistant-VariableFont_wght.ttf") format("truetype");
+      font-weight: 200 800;
+    }
+
+    :root {
+      --ink: #333333;
+      --black: #080808;
+      --paper: #f8f7f1;
+      --panel: #ffffff;
+      --line: #dedbd2;
+      --muted: #716d64;
+      --yellow: #ffd800;
+      --pink: #ef4f92;
+      --blue: #1e88e5;
+      --green: #10a66a;
+      --shadow: 0 28px 80px rgba(15, 13, 8, .16);
+      --radius: 18px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(255,216,0,.12) 0 20%, transparent 20%),
+        radial-gradient(circle at 88% 8%, rgba(30,136,229,.11), transparent 28%),
+        var(--paper);
+      color: var(--ink);
+      font-family: Montserrat, Arial, sans-serif;
+    }
+
+    .page { padding: 34px; }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 28px;
+    }
+
+    .wordmark {
+      font-size: 40px;
+      font-weight: 860;
+      letter-spacing: -.055em;
+      color: var(--ink);
+      line-height: 1;
+      position: relative;
+      display: inline-block;
+    }
+    .wordmark::after {
+      content: "";
+      position: absolute;
+      width: .32em;
+      height: .32em;
+      border-radius: 50%;
+      background: var(--yellow);
+      left: .47em;
+      top: .42em;
+      box-shadow: 0 0 0 4px rgba(255,216,0,.22);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.7);
+      border-radius: 999px;
+      padding: 8px 12px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--yellow); }
+
+    .hero {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      padding: 34px;
+      margin-bottom: 24px;
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 30px;
+      align-items: end;
+    }
+
+    h1 {
+      margin: 18px 0 12px;
+      font-size: clamp(44px, 6vw, 88px);
+      line-height: .92;
+      letter-spacing: -.07em;
+      max-width: 840px;
+    }
+    .lead {
+      max-width: 720px;
+      color: var(--muted);
+      line-height: 1.75;
+      font-size: 18px;
+      font-family: Cairo, Assistant, Montserrat, sans-serif;
+    }
+
+    .tokens {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .token {
+      min-height: 94px;
+      border-radius: 18px;
+      padding: 14px;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .token.yellow { background: var(--yellow); color: var(--black); }
+    .token.black { background: var(--ink); }
+    .token.pink { background: var(--pink); }
+    .token.blue { background: var(--blue); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 24px;
+    }
+    .screen {
+      background: #111;
+      color: #fff;
+      border-radius: 28px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+      min-height: 560px;
+    }
+    .screen.light {
+      background: #fff;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    .screen-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+    .mini-logo {
+      font-weight: 860;
+      letter-spacing: -.055em;
+      font-size: 24px;
+      position: relative;
+    }
+    .mini-logo::after {
+      content: "";
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--yellow);
+      left: 9px;
+      top: 10px;
+    }
+    .nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .nav span {
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.06);
+      color: rgba(255,255,255,.74);
+      border-radius: 999px;
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+    .light .nav span {
+      border-color: var(--line);
+      background: #faf9f4;
+      color: var(--muted);
+    }
+
+    .dash {
+      display: grid;
+      grid-template-columns: 210px 1fr;
+      gap: 16px;
+    }
+    .sidebar {
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 22px;
+      padding: 14px;
+      display: grid;
+      gap: 9px;
+      align-content: start;
+    }
+    .side-item {
+      border-radius: 13px;
+      padding: 11px;
+      color: rgba(255,255,255,.7);
+      font-size: 13px;
+    }
+    .side-item.active { background: var(--yellow); color: var(--black); font-weight: 800; }
+    .work {
+      display: grid;
+      gap: 14px;
+    }
+    .card {
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 22px;
+      padding: 18px;
+    }
+    .light .card {
+      background: #faf9f4;
+      border-color: var(--line);
+    }
+    .card h3 { margin: 0 0 8px; font-size: 19px; }
+    .card p { color: rgba(255,255,255,.65); margin: 0; line-height: 1.6; font-size: 13px; }
+    .light .card p { color: var(--muted); }
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .metric strong { font-size: 30px; display: block; letter-spacing: -.04em; }
+    .metric small { color: rgba(255,255,255,.58); }
+
+    .create-wrap {
+      display: grid;
+      gap: 14px;
+    }
+    .prompt {
+      border: 2px solid var(--ink);
+      background: #fffdf7;
+      border-radius: 22px;
+      padding: 18px;
+      min-height: 190px;
+      font-family: Cairo, Assistant, Montserrat, sans-serif;
+      font-size: 18px;
+      line-height: 1.65;
+    }
+    .formats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .format {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 13px;
+      background: #fff;
+      font-size: 13px;
+      min-height: 80px;
+    }
+    .format.hot {
+      background: var(--black);
+      color: white;
+      border-color: var(--black);
+    }
+    .button {
+      background: var(--yellow);
+      color: var(--black);
+      border: 0;
+      border-radius: 16px;
+      padding: 14px 18px;
+      font-weight: 850;
+      font-family: Montserrat, sans-serif;
+      width: fit-content;
+    }
+    .language-strip {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      direction: ltr;
+      margin-top: 16px;
+    }
+    .language-strip span {
+      border: 1px solid var(--line);
+      background: white;
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .rtl-sample {
+      font-family: Cairo, Assistant, sans-serif;
+      direction: rtl;
+      text-align: right;
+      border-radius: 18px;
+      background: #fffdf7;
+      border: 1px solid var(--line);
+      padding: 16px;
+      margin-top: 14px;
+      line-height: 1.7;
+    }
+    .rtl-sample strong { display: block; margin-bottom: 6px; }
+
+    @media (max-width: 1100px) {
+      .hero, .grid, .dash { grid-template-columns: 1fr; }
+      .tokens, .metric-row, .formats { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 620px) {
+      .page { padding: 18px; }
+      h1 { font-size: 48px; }
+      .hero { padding: 22px; }
+      .tokens, .metric-row, .formats { grid-template-columns: 1fr; }
+      .screen { padding: 13px; border-radius: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="top">
+      <div class="wordmark">OneShare</div>
+      <div class="badge"><span class="dot"></span> Brand-derived UI direction</div>
+    </header>
+
+    <section class="hero">
+      <div>
+        <div class="badge"><span class="dot"></span> From Connec brand to OneShare product</div>
+        <h1>Sharper. Cleaner. Still human.</h1>
+        <p class="lead">
+          OneShare should inherit Connec’s confident black/yellow identity, use Montserrat for the English wordmark,
+          Cairo for Arabic, Assistant for Hebrew, and stay ready for 10+ languages through tokenized typography and layout direction.
+        </p>
+      </div>
+      <div class="tokens">
+        <div class="token black"><span>Core ink</span><strong>#333333</strong></div>
+        <div class="token yellow"><span>Brand signal</span><strong>#FFD800</strong></div>
+        <div class="token pink"><span>Marketing</span><strong>#EF4F92</strong></div>
+        <div class="token blue"><span>Development</span><strong>#1E88E5</strong></div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="screen">
+        <div class="screen-head">
+          <div class="mini-logo">OneShare</div>
+          <div class="nav"><span>Dashboard</span><span>Create</span><span>Analytics</span></div>
+        </div>
+        <div class="dash">
+          <aside class="sidebar">
+            <div class="side-item active">Today</div>
+            <div class="side-item">Connections</div>
+            <div class="side-item">Brand profile</div>
+            <div class="side-item">Campaigns</div>
+            <div class="side-item">Calendar</div>
+          </aside>
+          <div class="work">
+            <div class="card">
+              <h3>Connec is ready to publish</h3>
+              <p>Media storage, Meta connection, and content approval are visible as state, not hidden assumptions.</p>
+            </div>
+            <div class="metric-row">
+              <div class="card metric"><strong>12</strong><small>ready assets</small></div>
+              <div class="card metric"><strong>3</strong><small>need review</small></div>
+              <div class="card metric"><strong>2</strong><small>connections</small></div>
+            </div>
+            <div class="card">
+              <h3>Next best action</h3>
+              <p>Finish the brand profile so OneShare can generate in the business voice across Arabic, Hebrew, English, and more.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="screen light">
+        <div class="screen-head">
+          <div class="mini-logo">OneShare</div>
+          <div class="badge"><span class="dot"></span> Create</div>
+        </div>
+        <div class="create-wrap">
+          <div class="prompt" dir="rtl">
+            اكتب إعلان قصير لمصلحة محلية تريد جذب زبائن جدد هذا الأسبوع، بلغة واضحة وقريبة من الجمهور.
+          </div>
+          <div class="formats">
+            <div class="format hot"><strong>Quick Post</strong><br>Text + media</div>
+            <div class="format"><strong>Image</strong><br>Single visual</div>
+            <div class="format"><strong>Carousel</strong><br>Educational set</div>
+          </div>
+          <button class="button">Generate draft</button>
+          <div class="language-strip">
+            <span>English</span><span>العربية</span><span>עברית</span><span>Русский</span><span>Français</span><span>Español</span><span>Türkçe</span><span>中文</span><span>+ more</span>
+          </div>
+          <div class="rtl-sample">
+            <strong>RTL/LTR readiness</strong>
+            كل شاشة يجب أن تعمل بنفس الجودة بالعربية والعبرية، وتسمح بإضافة لغات جديدة من registry واحد.
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

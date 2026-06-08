@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>تقرير مراجعة المالك - تحسين رسائل أفعال المحتوى</title>
+  <style>
+    body { margin: 0; background: #f6f3ea; color: #111; font-family: Arial, "Noto Sans Arabic", sans-serif; line-height: 1.8; }
+    main { width: min(860px, calc(100% - 48px)); margin: 48px auto; background: #fff; border: 1px solid #ded8c8; border-radius: 18px; padding: 40px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.08); }
+    h1 { margin: 0 0 12px; font-size: 30px; }
+    h2 { margin-top: 32px; font-size: 21px; border-bottom: 1px solid #eee4d3; padding-bottom: 8px; }
+    .meta { color: #666; margin-bottom: 28px; }
+    li { margin: 8px 0; }
+    code { background: #f1ede4; border-radius: 6px; padding: 2px 6px; direction: ltr; unicode-bidi: embed; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>تقرير مراجعة المالك - تحسين رسائل أفعال المحتوى</h1>
+    <div class="meta">التاريخ: 2026-06-08 01:35<br />المسؤولون: Samer Nassar / Developers Manager، Noor Barakat / QA Manager</div>
+
+    <h2>ماذا أنجزنا</h2>
+    <ul>
+      <li>فحصنا كرت Recent Content وأفعال المستخدم عليه.</li>
+      <li>أضفنا feedback واضح داخل الكرت بعد حفظ التعديل، نسخ الكابشن، الجدولة، النشر، تحديد المحتوى كمستخدم خارج التطبيق، ورفض المحتوى.</li>
+      <li>أضفنا معالجة أخطاء مرئية لهذه العمليات حتى لا يفشل الزر بصمت.</li>
+      <li>عدلنا منطق reject حتى لا يغلق صندوق سبب الرفض إذا فشلت العملية.</li>
+    </ul>
+
+    <h2>لماذا هذا مهم</h2>
+    <p>الكرت هو مكان العمل اليومي للمستخدم. المستخدم يراجع، يوافق، يرفض، يعدل، ينسخ، يجدول، وينشر من هنا. أي عملية صامتة أو غير مفهومة تخلق إحساس أن التطبيق غير ثابت. الرسائل الصغيرة هنا ترفع الثقة بالتجربة.</p>
+
+    <h2>التحقق</h2>
+    <ul>
+      <li>تم تشغيل <code>npm run build</code> بنجاح.</li>
+      <li>لا يوجد كسر TypeScript أو Next build بعد التعديل.</li>
+    </ul>
+
+    <h2>الخطوة المقترحة التالية</h2>
+    <ul>
+      <li>فحص حالة media preview للفيديو والصور، خصوصاً عندما يكون الرابط محلي أو R2 غير جاهز.</li>
+      <li>بعدها فحص Product Bulk Studio flow لأنه ما زال من أهم المنتجات العملية داخل التطبيق.</li>
+    </ul>
+  </main>
+</body>
+</html>

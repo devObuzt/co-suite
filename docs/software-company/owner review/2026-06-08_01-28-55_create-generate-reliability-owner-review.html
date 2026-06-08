@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>تقرير مراجعة المالك - تحسين موثوقية Create & Generate</title>
+  <style>
+    body { margin: 0; background: #f6f3ea; color: #111; font-family: Arial, "Noto Sans Arabic", sans-serif; line-height: 1.8; }
+    main { width: min(860px, calc(100% - 48px)); margin: 48px auto; background: #fff; border: 1px solid #ded8c8; border-radius: 18px; padding: 40px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.08); }
+    h1 { margin: 0 0 12px; font-size: 30px; }
+    h2 { margin-top: 32px; font-size: 21px; border-bottom: 1px solid #eee4d3; padding-bottom: 8px; }
+    .meta { color: #666; margin-bottom: 28px; }
+    li { margin: 8px 0; }
+    code { background: #f1ede4; border-radius: 6px; padding: 2px 6px; direction: ltr; unicode-bidi: embed; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>تقرير مراجعة المالك - تحسين موثوقية Create &amp; Generate</h1>
+    <div class="meta">التاريخ: 2026-06-08 01:28<br />المسؤولون: Samer Nassar / Developers Manager، Layla Haddad / Design Manager</div>
+
+    <h2>ماذا أنجزنا</h2>
+    <ul>
+      <li>فحصنا صفحة Create &amp; Generate داخل السوت.</li>
+      <li>تأكدنا أن الخيارات الأساسية تمر فعلياً للباكند: <code>mode</code>، <code>content_type</code>، <code>aspect_ratio</code>، <code>model_tier</code>، <code>use_brand</code>.</li>
+      <li>أضفنا رسالة خطأ واضحة إذا فشل طلب التوليد بدل أن يبدو الزر وكأنه لم يفعل شيئاً.</li>
+      <li>منعنا Campaign Builder من إرسال طلب توليد مضلل حالياً، لأنه ظاهر كمنتج قريب لكنه ليس جاهزاً كإنشاء حملة كاملة.</li>
+      <li>أضفنا رسالة توضح للمستخدم أن Campaign Builder في التحضير، وأن خيارات Quick Post/Ad وContent Set وImage وVideo وCarousel هي الجاهزة حالياً.</li>
+    </ul>
+
+    <h2>لماذا هذا مهم</h2>
+    <p>الاستقرار ليس فقط أن الكود لا يكسر. الاستقرار أيضاً أن المستخدم يفهم ماذا حدث. إذا فشل طلب AI أو كان منتج ما غير جاهز، يجب أن يرى المستخدم رسالة واضحة بدل الفراغ أو الصمت.</p>
+
+    <h2>التحقق</h2>
+    <ul>
+      <li>تم تشغيل <code>npm run build</code> بنجاح.</li>
+      <li>لا يوجد كسر TypeScript أو Next build بعد التعديل.</li>
+    </ul>
+
+    <h2>الخطوة المقترحة التالية</h2>
+    <ul>
+      <li>فحص Recent Content filters/actions.</li>
+      <li>التأكد أن approve/reject/regenerate/edit/schedule/publish تعطي feedback واضح ولا تترك المستخدم في حالة صامتة.</li>
+    </ul>
+  </main>
+</body>
+</html>

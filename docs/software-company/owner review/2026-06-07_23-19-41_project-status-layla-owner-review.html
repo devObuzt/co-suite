@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>مراجعة المالك - أين نحن الآن؟</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #222;
+      background: #fff;
+      font-family: "Cairo", "Assistant", "Arial", sans-serif;
+      line-height: 1.75;
+      direction: rtl;
+    }
+    .page { max-width: 920px; margin: 0 auto; }
+    .cover {
+      border: 2px solid #333;
+      border-radius: 18px;
+      padding: 28px;
+      margin-bottom: 24px;
+      background: linear-gradient(135deg, #fff 0%, #fff9c7 100%);
+    }
+    .eyebrow { color: #666; font-size: 13px; margin-bottom: 8px; }
+    h1 { font-size: 34px; line-height: 1.25; margin: 0 0 12px; color: #111; }
+    h2 {
+      font-size: 21px;
+      margin: 26px 0 8px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #ffd800;
+      color: #111;
+    }
+    h3 { font-size: 16px; margin: 18px 0 4px; color: #333; }
+    p { margin: 8px 0 12px; }
+    ul, ol { margin: 8px 0 14px; padding-right: 24px; }
+    li { margin: 4px 0; }
+    code {
+      direction: ltr;
+      unicode-bidi: embed;
+      background: #f4f4f4;
+      padding: 2px 5px;
+      border-radius: 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+    .status {
+      display: inline-block;
+      background: #333;
+      color: #ffd800;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-weight: 700;
+      margin: 8px 0 12px;
+    }
+    .note {
+      border-right: 5px solid #ef4f92;
+      background: #fff5fa;
+      padding: 14px 16px;
+      border-radius: 10px;
+      margin: 18px 0;
+    }
+    .footer {
+      margin-top: 30px;
+      color: #666;
+      font-size: 12px;
+      border-top: 1px solid #ddd;
+      padding-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="cover">
+      <div class="eyebrow">Owner Review · Layla Haddad · 2026-06-07 23:19</div>
+      <h1>أين نحن الآن؟</h1>
+      <div class="status">Milestone 1: Production Stabilization</div>
+      <p>نحن في مرحلة تثبيت المنتج الموجود حتى يصبح صالحاً للتوسع، وليس في مرحلة إضافة ميزات كبيرة بشكل عشوائي.</p>
+    </section>
+
+    <h2>الخلاصة التنفيذية</h2>
+    <p>الهدف الآن هو تثبيت التسجيل، السويت، onboarding، التوليد، مراجعة المحتوى، media readiness، connections، analytics، mobile/RTL/theme، وتجهيز الطريق لاحقاً للويب والـ SEO والتطبيقات.</p>
+
+    <h2>تم تأسيس نظام الشركة</h2>
+    <ul>
+      <li>تم إنشاء Software Company Operating System.</li>
+      <li>تم تعيين مدراء لكل قسم.</li>
+      <li>تم إنشاء workflows للتطوير، QA، architecture review، brand intake، UX style intake، quote lifecycle، release lifecycle.</li>
+      <li>تم اعتماد owner review PDF لكل ملخص مهم.</li>
+    </ul>
+
+    <h2>تم فتح Project Room</h2>
+    <p>المسار: <code>docs/software-company/projects/cosuite/</code></p>
+    <p>يحتوي على task board, status log, handoff log, milestone scope, product acceptance, architecture baseline, design baseline, devops readiness, QA smoke matrix, و implementation slices.</p>
+
+    <h2>حالة Milestone 1</h2>
+    <p>تم إنجاز أو تجهيز Product acceptance, Architecture baseline, DevOps baseline, Design UX baseline, QA smoke matrix, Developers Manager slices, Product direction re-check, Brand/design intake, و UX style intake.</p>
+
+    <h2>الشغل الموجود الآن في المراجعة</h2>
+    <ul>
+      <li>Backend Suite Memory, generation job status, media readiness.</li>
+      <li>Frontend Create & Content Review states.</li>
+      <li>Mobile Suite nav, Brand/Profile, Connections/Analytics states.</li>
+      <li>Publishing preflight and partial publish state.</li>
+    </ul>
+    <div class="note">هذه المهام وصلت إلى needs_review، وهذا يعني أنها ليست release-ready قبل Architecture/Design/QA review.</div>
+
+    <h2>لم يبدأ بعد</h2>
+    <ul>
+      <li>Limited account-level generation without Suite.</li>
+      <li>Native-language/RTL and theme polish for new Suite screens.</li>
+      <li>Post-slice QA smoke test.</li>
+    </ul>
+
+    <h2>القرار الإداري الحالي</h2>
+    <p>لا نبدأ موجة كود كبيرة جديدة قبل:</p>
+    <ol>
+      <li>Architecture re-check للـ backend/media/job contracts.</li>
+      <li>Design review للشاشات الحالية، خصوصاً mobile/RTL/theme.</li>
+      <li>QA smoke على المسارات الأساسية.</li>
+      <li>Developers Manager يفتح slice صغير جديد بناءً على نتائج المراجعة.</li>
+    </ol>
+
+    <h2>ما أحتاجه من المالك الآن؟</h2>
+    <p>حالياً لا يوجد طلب مباشر منك. قد نحتاج لاحقاً موافقة لاستخدام حسابات اختبار، Railway/env access، provider keys، أو ملفات brand إضافية إذا دخلنا تصميم شاشة فعلية.</p>
+
+    <h2>الخطوة التالية المقترحة</h2>
+    <ol>
+      <li>Mira Cohen - Architecture: re-check.</li>
+      <li>Noa Barak - Design: مراجعة UX/mobile/RTL/theme.</li>
+      <li>Lina Saad - QA: smoke plan/result.</li>
+      <li>Daniel Farah - Developers Manager: يقرر أول slice تنفيذ جديد.</li>
+    </ol>
+
+    <div class="footer">OneShare Software Company OS · Project Management Status</div>
+  </main>
+</body>
+</html>

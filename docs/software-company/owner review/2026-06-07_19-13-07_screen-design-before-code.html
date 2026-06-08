@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>co-Suite Owner Review - Screen Design Before Code</title>
+  <style>
+    @page { size: A4; margin: 22mm 18mm; }
+    body {
+      direction: rtl;
+      text-align: right;
+      font-family: Arial, "Helvetica Neue", "Noto Sans Arabic", sans-serif;
+      color: #141414;
+      line-height: 1.75;
+      font-size: 14px;
+    }
+    .cover { border-bottom: 3px solid #111; padding-bottom: 16px; margin-bottom: 22px; }
+    h1 { font-size: 28px; margin: 0 0 10px; font-weight: 800; }
+    h2 { font-size: 18px; margin: 22px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
+    h3 { font-size: 15px; margin: 16px 0 6px; }
+    p { margin: 8px 0; }
+    ul { margin: 8px 0 12px; padding-right: 22px; padding-left: 0; }
+    li { margin: 4px 0; }
+    code {
+      direction: ltr;
+      unicode-bidi: embed;
+      background: #f2f2f2;
+      border: 1px solid #e5e5e5;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    .box {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid #ddd;
+      border-right: 5px solid #111;
+      background: #fafafa;
+    }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <h1>هل نصمم الشاشات قبل الكود؟</h1>
+    <p><strong>التاريخ والساعة:</strong> 2026-06-07 19:13:07</p>
+    <p><strong>الجواب المختصر:</strong> نعم، للشاشات المهمة لازم نصمم قبل الكود. لكن مش لازم نعمل تصميم ثقيل لكل زر صغير.</p>
+  </section>
+
+  <h2>كيف راح نشتغل؟</h2>
+
+  <h3>1. Product Brief</h3>
+  <ul>
+    <li>مين المستخدم؟</li>
+    <li>شو بده يعمل؟</li>
+    <li>شو أول شيء لازم يفهمه؟</li>
+    <li>شو القرار أو الفعل المطلوب منه؟</li>
+    <li>شو البيانات المطلوبة من backend؟</li>
+    <li>شو الأخطاء والحالات الفارغة والانتظار؟</li>
+  </ul>
+
+  <h3>2. UX Flow</h3>
+  <ul>
+    <li>من أين يدخل؟</li>
+    <li>ماذا يرى أولاً؟</li>
+    <li>ماذا يحدث عند الضغط؟</li>
+    <li>كيف يرجع خطوة؟</li>
+    <li>كيف تظهر حالات loading, empty, failed, success؟</li>
+  </ul>
+
+  <h3>3. Wireframe سريع</h3>
+  <ul>
+    <li>أماكن الأقسام.</li>
+    <li>ترتيب الأولويات.</li>
+    <li>أزرار أساسية وثانوية.</li>
+    <li>mobile وdesktop.</li>
+    <li>RTL/LTR من البداية.</li>
+  </ul>
+
+  <h3>4. Visual Direction</h3>
+  <ul>
+    <li>أبيض وأسود كأساس.</li>
+    <li>أصفر للـ branding.</li>
+    <li>زهري للتسويق.</li>
+    <li>أزرق للتطوير.</li>
+    <li>دعم dark/light.</li>
+    <li>لغة المستخدم واتجاهها.</li>
+  </ul>
+
+  <h3>5. Component Contract</h3>
+  <ul>
+    <li>ما هي المكونات؟</li>
+    <li>ما هي props/data المطلوبة؟</li>
+    <li>من أين تأتي البيانات؟</li>
+    <li>ماذا يحدث إذا البيانات ناقصة؟</li>
+    <li>ما الذي يحتاج API جديد؟</li>
+  </ul>
+
+  <h3>6. Build Slice</h3>
+  <ul>
+    <li>component</li>
+    <li>API integration</li>
+    <li>states</li>
+    <li>tests أو type checks</li>
+    <li>QA smoke</li>
+  </ul>
+
+  <h2>متى نصمم ومتى نكود مباشرة؟</h2>
+  <p>نصمم قبل الكود عندما تكون الشاشة جزءاً من onboarding، dashboard، navigation، create/generate flow، content review، billing/tokens، campaign builder، social calendar loop، أو أي شاشة موبايل/RTL حساسة.</p>
+  <p>نكود مباشرة فقط عندما تكون المهمة إصلاح backend صغير، validation بسيط، API field، copy/status واضح، أو bug fix محدود لا يغير تجربة المستخدم.</p>
+
+  <h2>الأدوات العملية</h2>
+  <p>راح نوثق كل شاشة مهمة في:</p>
+  <p><code>docs/software-company/projects/cosuite/design/</code></p>
+  <p>ولكل شاشة ممكن يكون عندها brief، wireframe notes، UX states، component contract، وQA checklist.</p>
+
+  <h2>القرار المقترح</h2>
+  <p>للخطوة القادمة <code>DEV-D-01</code>، وهي التوليد المحدود بدون Suite، لازم نعمل تصميم مختصر قبل الكود.</p>
+  <ul>
+    <li>أين تظهر التجربة بعد التسجيل.</li>
+    <li>ما الذي يستطيع المستخدم توليده بدون Suite.</li>
+    <li>كيف نوضح أن <code>Use brand</code> غير متاح.</li>
+    <li>كيف ندفعه لإكمال Suite بدون إزعاج.</li>
+    <li>كيف تظهر حالات job/media/error.</li>
+  </ul>
+
+  <div class="box">
+    <p><strong>الخلاصة:</strong> نعم، سنصمم الشاشات قبل الكود عندما تكون مؤثرة على تجربة المستخدم أو المنتج. هذا يمنع بناء واجهات عشوائية ويجعل التطوير أسرع لأن المطور يعرف ماذا يبني، وQA يعرف ماذا يفحص، والمالك يعرف ماذا يراجع.</p>
+  </div>
+</body>
+</html>

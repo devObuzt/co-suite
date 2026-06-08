@@ -11,6 +11,7 @@ from ..models.suite import Suite, SuiteMember, SuiteStatus, MemberRole
 from ..services.media_storage import storage_status, test_public_storage
 from ..services.multi_scraper import search_market_content
 from ..services.meta_ads_library import fetch_meta_ads_inspiration
+from ..services.suite_memory import build_suite_memory_v0, merge_suite_brand
 
 router = APIRouter(prefix="/suites", tags=["suites"])
 
@@ -35,6 +36,7 @@ class SuiteResponse(BaseModel):
     status: str
     brand: Optional[dict] = None
     strategy: Optional[dict] = None
+    suite_memory: Optional[dict] = None
 
     class Config:
         from_attributes = True
@@ -51,13 +53,29 @@ class SocialLoopRequest(BaseModel):
     notes: Optional[str] = None
 
 
+def serialize_suite(suite: Suite) -> dict:
+    return {
+        "id": suite.id,
+        "name": suite.name,
+        "slug": suite.slug,
+        "status": suite.status.value if suite.status else None,
+        "brand": suite.brand,
+        "strategy": suite.strategy,
+        "suite_memory": build_suite_memory_v0(suite.brand, suite.strategy, suite.connections),
+    }
+
+
 @router.get("/", response_model=list[SuiteResponse])
 async def list_suites(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Suite).where(Suite.owner_id == current_user.id))
-    return result.scalars().all()
+    return [
+        serialize_suite(suite)
+        for suite in result.scalars().all()
+        if not (suite.brand or {}).get("account_level_draft")
+    ]
 
 
 @router.post("/", response_model=SuiteResponse, status_code=status.HTTP_201_CREATED)
@@ -84,7 +102,22 @@ async def create_suite(
     db.add(member)
     await db.commit()
     await db.refresh(suite)
-    return suite
+    return serialize_suite(suite)
+
+
+@router.get("/{suite_id}/memory")
+async def get_suite_memory(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite:
+        raise HTTPException(status_code=404, detail="Suite not found")
+    if suite.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return build_suite_memory_v0(suite.brand, suite.strategy, suite.connections)
 
 
 @router.get("/{suite_id}", response_model=SuiteResponse)
@@ -99,7 +132,7 @@ async def get_suite(
         raise HTTPException(status_code=404, detail="Suite not found")
     if suite.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
-    return suite
+    return serialize_suite(suite)
 
 
 @router.get("/{suite_id}/storage-status")
@@ -140,7 +173,7 @@ async def update_brand(
     if not suite or suite.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Suite not found")
 
-    suite.brand = brand
+    suite.brand = merge_suite_brand(suite.brand, brand)
     if suite.status == SuiteStatus.onboarding:
         suite.status = SuiteStatus.active
     await db.commit()

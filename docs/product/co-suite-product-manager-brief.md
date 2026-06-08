@@ -1,6 +1,7 @@
 # co-Suite Product Manager Brief
 
-Date: 2026-06-03
+Date: 2026-06-03  
+Last updated: 2026-06-06
 
 ## One-Liner
 
@@ -20,6 +21,8 @@ co-Suite هو تطبيق AI marketing operating system لكل مصلحة، صا�
 - نشر وجدولة.
 - بناء حملات ممولة.
 - لاحقًا إدارة loop تسويقي شبه تلقائي.
+
+المنتج يجب أن يكون جاهزًا لاستخدام كبير بنفس الوقت، وليس فقط demo يعمل لمستخدم واحد. التجربة يجب أن تتحمل عدد كبير من المستخدمين والطلبات المتزامنة بدون انهيار أو انتظار غامض. وفي نفس الوقت يجب أن يكون المنتج قابلًا للتوسع بقدرات ومنتجات جديدة بدون إعادة بناء المنظومة من الصفر.
 
 ## Target Users
 
@@ -71,6 +74,43 @@ co-Suite هو تطبيق AI marketing operating system لكل مصلحة، صا�
 - Analytics.
 
 السوت لازم يحس مثل “مكتب التسويق الخاص بهذا البزنس”، وليس مجرد صفحة.
+
+## Access Model: Account First, Suite When Needed
+
+ليس كل استخدام داخل co-Suite يجب أن يبدأ بفتح Suite كامل. المستخدم يمكنه التسجيل بإيميل فقط أو تسجيل أساسي، ثم استخدام بعض منتجات التوليد السريعة بدون بناء بروفايل بزنس كامل.
+
+هذا مهم لثلاثة أسباب:
+
+- يقلل الاحتكاك في أول تجربة.
+- يسمح للمستخدم بفحص جودة التوليد قبل الالتزام ببناء Suite.
+- يفتح باب self-serve acquisition من أدوات بسيطة ومباشرة.
+
+المنتجات التي يمكن أن تكون متاحة بدون Suite:
+
+- Quick Post / Ad بسيط.
+- Create Image.
+- Create Video.
+- Carousel أو Content Set محدود.
+- بعض أدوات product creative إذا رفع المستخدم الملفات المطلوبة مباشرة.
+
+في هذه الحالة:
+
+- زر `Use brand` يكون مطفي أو غير متاح.
+- التوليد يعتمد على prompt المستخدم والملفات المرفوعة فقط.
+- لا يوجد Suite Memory عميق.
+- يمكن حفظ النتائج على مستوى الحساب.
+- التطبيق يقترح لاحقًا: “حوّل هذا إلى Suite لتحصل على براند، جمهور، جدولة، نشر، وتحليلات”.
+
+الـ Suite يصبح مطلوبًا عندما يحتاج المستخدم:
+
+- brand memory.
+- audience/language/profile memory.
+- connected platforms.
+- publishing/scheduling.
+- analytics.
+- campaign builder.
+- social calendar loops.
+- product bulk workflows طويلة الأمد.
 
 ## Key Product Principles
 
@@ -145,6 +185,42 @@ co-Suite هو تطبيق AI marketing operating system لكل مصلحة، صا�
 
 الصور، الفيديو، الكاروسيل، والحملات يجب أن تعرف الوجهة والسياق.
 
+### 5. Scale-Ready from the Product Layer
+
+co-Suite يجب أن يتصرف كمنصة جاهزة للنمو من البداية:
+
+- المستخدم يرى حالة واضحة لكل عملية طويلة: queued, running, waiting, failed, completed.
+- لا يوجد button يعلق بصمت.
+- لا يوجد توليد طويل يوقف تجربة المستخدم.
+- يمكن للمستخدم مغادرة الصفحة والرجوع لاحقًا ليرى النتيجة.
+- كل منتج توليد له limits/credits/status واضحة.
+- النظام يشرح للمستخدم إذا الطلب ينتظر مزود AI، رصيد، أو موافقة.
+- تجربة المستخدم يجب أن تبقى مفهومة حتى في أوقات الضغط.
+
+### 6. Expandable Product Platform
+
+المنتج يجب أن يكبر كـ platform وليس feature pile. أي قدرة جديدة يجب أن تدخل ضمن نفس المنطق:
+
+- نوع product/workflow واضح.
+- input واضح.
+- credits/cost واضح.
+- job/status واضح.
+- artifacts واضحة.
+- review/approve/edit/publish/schedule عندما يكون مناسبًا.
+- قابل للحفظ داخل Suite Memory إذا كان مرتبطًا بالبزنس.
+
+أمثلة منتجات يمكن إضافتها لاحقًا:
+
+- SEO content generator.
+- landing page builder.
+- WhatsApp campaign assistant.
+- email campaign builder.
+- TikTok content/campaign workflows.
+- reputation/reviews assistant.
+- CRM/lead follow-up automation.
+
+الهدف أن كل منتج جديد يستفيد من Suite Memory، Billing/Credits، Queue، Media Storage، وConnections بدل بناء نظام منفصل لكل منتج.
+
 ## Primary User Journey
 
 ### Phase 1: Signup
@@ -161,6 +237,11 @@ co-Suite هو تطبيق AI marketing operating system لكل مصلحة، صا�
 - الأسئلة في setup.
 - الافتراضات الخاصة بالجمهور.
 - طريقة عرض dashboard.
+
+بعد التسجيل، يجب أن يستطيع المستخدم الوصول إلى مساحة استخدام أساسية حتى لو لم يفتح Suite بعد. هذه المساحة تعرض أدوات توليد سريعة مع توضيح الفرق:
+
+- بدون Suite: توليد سريع، prompt-driven، بدون ذاكرة براند.
+- مع Suite: توليد مبني على بروفايل بزنس، براند، جمهور، لغات، اتصالات، وجدولة.
 
 ### Phase 2: Create Suite
 
@@ -219,9 +300,130 @@ co-Suite هو تطبيق AI marketing operating system لكل مصلحة، صا�
 - Social Calendar Builder.
 - Sponsored Campaign Builder.
 
+### Phase 0 / Optional: Basic Generation Without Suite
+
+قبل إنشاء Suite أو بدونها، يمكن للمستخدم استخدام أدوات توليد محدودة من داخل الحساب:
+
+- كتابة prompt حر.
+- رفع صورة أو ملف كمرجع عند الحاجة.
+- اختيار نوع الناتج: post/ad/image/video/carousel.
+- اختيار لغة الناتج الأساسية.
+- اختيار format/aspect ratio عندما يكون ذلك مطلوبًا.
+
+هذه التجربة يجب أن تكون مفيدة بحد ذاتها، لكنها تقود طبيعيًا إلى Suite:
+
+- “احفظ هذه القواعد داخل Suite”.
+- “اربط Instagram/Facebook/Google Ads للنشر والتحليل”.
+- “ارفع اللوجوهات والخطوط لتحسين النتائج”.
+- “ابنِ بروفايل بزنس للحصول على اقتراحات أدق”.
+
 ## Feature Areas
 
-## 1. Business Profile and Brand Profile
+## 0. Standalone Generation Tools
+
+هذه أدوات acquisition وutility سريعة. لا تعتمد على Suite، لكنها يجب أن تكون قابلة للترقية إلى Suite workflow.
+
+المطلوب:
+
+- تعمل بعد تسجيل أساسي فقط.
+- لها limits أو credits واضحة.
+- لا تتطلب business onboarding.
+- لا تفترض brand/profile data غير موجودة.
+- تسمح بحفظ الناتج على مستوى الحساب.
+- تعرض CTA واضح لإنشاء Suite عند الحاجة للبراند، النشر، الجدولة، أو التحليلات.
+
+التمييز في الواجهة:
+
+- `Use brand`: مطفي إذا لا يوجد Suite.
+- `Save to Suite`: يظهر فقط إذا عند المستخدم Suite أو بعد إنشائه.
+- `Create Suite from this`: ينقل prompt/الناتج كبداية لملف السوت.
+
+## 1. Subscription, Tokens, and Marketing Budget
+
+نظام الدفع يجب أن يفصل بين ثلاثة أشياء مختلفة:
+
+1. الانتساب الشهري/السنوي للمنصة.
+2. توكنز/credits التوليد واستخدام منتجات AI.
+3. رصيد ميزانية التسويق المدفوعة على منصات مثل Meta وGoogle Ads.
+
+### Subscription
+
+المستخدم يدفع اشتراك شهري أو سنوي. مثال أولي:
+
+- Basic plan: `14.99$` شهريًا.
+- يمكن تقديم خصم للاشتراك السنوي.
+- الباقة تعطي رصيد توكنز شهري أو usage allowance.
+
+مثال usage داخل باقة أساسية:
+
+- معدل توليد صورة تقريبًا كل يوم.
+- معدل توليد فيديو تقريبًا كل 3 أيام.
+- حدود إضافية حسب تكلفة كل model ونوع التوليد.
+
+هذه الأرقام ليست contract نهائي، لكنها تمثل منطق المنتج: الباقة الأساسية تعطي استخدام مستمر وخفيف، وليس استخدام غير محدود.
+
+### Generation Tokens / Credits
+
+كل منتج توليد يستهلك توكنز/credits حسب التكلفة:
+
+- text/caption/idea: تكلفة منخفضة.
+- image: تكلفة متوسطة.
+- carousel: حسب عدد السلايدات والصيغ.
+- video: تكلفة عالية.
+- product bulk: حسب عدد المنتجات والقوالب والصيغ.
+
+المستخدم يمكنه:
+
+- استخدام الرصيد الشهري المرفق بالباقة.
+- شراء token packs إضافية.
+- الترقية إلى باقة أعلى لاستخدام بوتيرة أكبر.
+
+الواجهة يجب أن تعرض:
+
+- رصيد التوكنز الحالي.
+- الاستهلاك المتوقع قبل بدء التوليد.
+- هل الطلب سيستخدم رصيد الباقة أو رصيد tokens مشتراة.
+- تحذير إذا الرصيد لا يكفي.
+
+### Upgrade and Token Packs
+
+طرق زيادة الاستخدام:
+
+- Upgrade to higher plan.
+- Buy one-time token pack.
+- Agency/Team plan مع رصيد أكبر.
+- Add-ons للـ video/product bulk/campaign automation.
+
+القرار المنتج:
+
+- الترقية مناسبة لمن يستخدم المنتج بشكل متكرر.
+- token packs مناسبة لاستخدام موسمي أو حملة مؤقتة.
+
+### Marketing Budget Balance
+
+ميزانية الإعلان ليست توكنز AI. يجب أن تكون ledger منفصل.
+
+عندما يطلب المستخدم فتح حملات على Meta, Google Ads أو غيرها:
+
+- يدفع أو يودع رصيد ميزانية تسويق.
+- هذا الرصيد مخصص للإنفاق الإعلاني والمنصات.
+- لا يخلط مع توكنز التوليد.
+- يظهر للمستخدم كـ `Marketing Budget Balance`.
+
+المستخدم يجب أن يرى دائمًا:
+
+- Subscription plan.
+- Generation token balance.
+- Marketing budget balance.
+- الإنفاق الإعلاني الجاري.
+- الرصيد المتبقي.
+- أي رسوم منصة/إدارة إذا وجدت.
+
+### Product Rule
+
+لا يجوز تشغيل حملة مدفوعة أو استخدام ميزانية تسويق بدون confirmation واضح من المستخدم. AI يمكنه بناء campaign draft، لكن launch/activation يحتاج موافقة صريحة.
+
+## 2. Business Profile and Brand Profile
 
 هذه هي ذاكرة السوت.
 
@@ -249,7 +451,7 @@ co-Suite هو تطبيق AI marketing operating system لكل مصلحة، صا�
 - قابل لإعادة التوليد بالـ AI.
 - يحتفظ بسجل واضح لما تم اختياره.
 
-## 2. Connections
+## 3. Connections
 
 الربط الحالي والمطلوب:
 
@@ -267,7 +469,7 @@ Connections يجب أن تكون شاشة مستقلة وواضحة، مع statu
 - storage ready.
 - needs review.
 
-## 3. Create & Generate
+## 4. Create & Generate
 
 هذه ليست مجرد “Generate 3 posts”. هذه command center.
 
@@ -294,7 +496,7 @@ Connections يجب أن تكون شاشة مستقلة وواضحة، مع statu
 - Model/tier لاحقًا.
 - Language/audience language.
 
-## 4. Content Review System
+## 5. Content Review System
 
 كل محتوى يولد يصبح item قابل للإدارة:
 
@@ -313,7 +515,7 @@ Connections يجب أن تكون شاشة مستقلة وواضحة، مع statu
 
 مهم: regenerate لا يجب أن يكون أعمى. يجب أن يسأل: لماذا رفضت؟ ثم يحفظ الملاحظة كتعلم للسوت.
 
-## 5. Product Bulk Studio
+## 6. Product Bulk Studio
 
 للمتاجر والكتالوغات.
 
@@ -339,7 +541,7 @@ Connections يجب أن تكون شاشة مستقلة وواضحة، مع statu
 - السعر والاسم واضحين.
 - output مناسب للسوشيال والإعلانات.
 
-## 6. Content Generation Quality
+## 7. Content Generation Quality
 
 المطلوب أن نغلق الفجوة مع `connec-content-engine`.
 
@@ -359,7 +561,7 @@ Connections يجب أن تكون شاشة مستقلة وواضحة، مع statu
 
 الفكرة الأساسية: المحتوى يجب أن يكون لغة موحدة. لا صورة بالعربي وكابشن بالإنجليزي إلا إذا المستخدم طلب.
 
-## 7. Social Calendar Builder
+## 8. Social Calendar Builder
 
 الهدف: بناء جدول محتوى قابل للعمل.
 
@@ -382,7 +584,7 @@ Connections يجب أن تكون شاشة مستقلة وواضحة، مع statu
 
 هذه تبقى tasks للمستخدم.
 
-## 8. Sponsored Campaign Builder
+## 9. Sponsored Campaign Builder
 
 الهدف: حملة تسويقية كاملة وليس إعلان واحد.
 
@@ -409,7 +611,7 @@ Connections يجب أن تكون شاشة مستقلة وواضحة، مع statu
 - budget logic.
 - landing page/CTA.
 
-## 9. Analytics
+## 10. Analytics
 
 التحليلات يجب أن تكون actionable.
 
@@ -425,7 +627,7 @@ Connections يجب أن تكون شاشة مستقلة وواضحة، مع statu
 
 الأهم: لا نعرض أصفار صامتة. إذا Meta permissions ناقصة، نقول ذلك بوضوح.
 
-## 10. Market and Competitors
+## 11. Market and Competitors
 
 الهدف:
 
@@ -490,6 +692,8 @@ SEO مهم لأنه المنتج نفسه موجه لأصحاب مصالح يب�
 5. Media storage يجب أن يكون مضبوطًا، وإلا الصور/الفيديو لا تنشر بشكل موثوق.
 6. Meta/Google permissions ممكن تعطي أصفار أو errors إذا لم تكن الصلاحيات كاملة.
 7. بدون فصل واضح بين “brand memory” و“generation”, الجودة ستبقى متذبذبة.
+8. بدون readiness لاستخدام متزامن كبير، أول حملة تسويقية ناجحة ممكن تكشف bottlenecks في AI providers, queues, DB, storage, أو واجهة status.
+9. بدون product platform contract، كل منتج جديد سيزيد التعقيد بدل أن يضيف قيمة مركبة.
 
 ## Near-Term Priorities
 
@@ -535,7 +739,7 @@ SEO مهم لأنه المنتج نفسه موجه لأصحاب مصالح يب�
 ## Open Questions for You
 
 1. هل co-Suite في المرحلة الأولى لازم يخدم أصحاب مصالح مباشرة، أم وكالات التسويق أولًا؟
-2. هل الدفع سيكون per suite، per seat، usage-based، أم باقات شهرية مع credits؟
+2. ما السعر النهائي لكل باقة، وكم token allowance دقيق لكل نوع توليد؟
 3. هل نريد المستخدم العادي يقدر يعمل campaign launch فعليًا، أم بالبداية campaign draft فقط؟
 4. هل Product Bulk Studio جزء من الخطة الأساسية لكل مستخدم، أم feature مخصص للمتاجر/وكالات؟
 5. هل نريد content approval mandatory قبل النشر، أم يمكن تفعيل auto-publish بعد ثقة معينة؟

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>مراجعة المالك - UX Style Intake</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #222;
+      background: #fff;
+      font-family: "Cairo", "Assistant", "Arial", sans-serif;
+      line-height: 1.75;
+      direction: rtl;
+    }
+    .page { max-width: 920px; margin: 0 auto; }
+    .cover {
+      border: 2px solid #333;
+      border-radius: 18px;
+      padding: 28px;
+      margin-bottom: 24px;
+      background: linear-gradient(135deg, #fff 0%, #fff9c7 100%);
+    }
+    .eyebrow { color: #666; font-size: 13px; margin-bottom: 8px; }
+    h1 { font-size: 34px; line-height: 1.25; margin: 0 0 12px; color: #111; }
+    h2 {
+      font-size: 21px;
+      margin: 26px 0 8px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #ffd800;
+      color: #111;
+    }
+    h3 { font-size: 16px; margin: 18px 0 4px; color: #333; }
+    p { margin: 8px 0 12px; }
+    ul { margin: 8px 0 14px; padding-right: 24px; }
+    li { margin: 4px 0; }
+    code {
+      direction: ltr;
+      unicode-bidi: embed;
+      background: #f4f4f4;
+      padding: 2px 5px;
+      border-radius: 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin: 14px 0 18px;
+    }
+    .card {
+      border: 1px solid #ddd;
+      border-radius: 14px;
+      padding: 14px;
+      background: #fafafa;
+    }
+    .note {
+      border-right: 5px solid #1e88e5;
+      background: #f3f9ff;
+      padding: 14px 16px;
+      border-radius: 10px;
+      margin: 18px 0;
+    }
+    .footer {
+      margin-top: 30px;
+      color: #666;
+      font-size: 12px;
+      border-top: 1px solid #ddd;
+      padding-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="cover">
+      <div class="eyebrow">Owner Review · 2026-06-07 23:06</div>
+      <h1>UX Style Intake</h1>
+      <p>تم تثبيت قاعدة جديدة: تجربة الاستخدام نفسها لازم تكون قرار واضح قبل التصميم والكود.</p>
+    </section>
+
+    <h2>الخلاصة</h2>
+    <p>لا يكفي أن نسأل عن البراند والألوان؛ لازم نسأل العميل أو صاحب المشروع: كيف بدك التطبيق يحس للمستخدم؟</p>
+
+    <h2>القرار</h2>
+    <p>أي مشروع جديد فيه واجهة، تطبيق، لوحة تحكم، أو استخدام طويل داخل النظام، لازم يمر بمرحلة UX Style Intake.</p>
+    <ul>
+      <li>هادئ ومركز.</li>
+      <li>حيوي ولعوب.</li>
+      <li>فاخر وتحريري.</li>
+      <li>عملي وكثيف للمستخدمين المتكررين.</li>
+    </ul>
+
+    <h2>اتجاه OneShare الافتراضي</h2>
+    <ul>
+      <li>مريح للعمل لفترات طويلة.</li>
+      <li>عصري وجذاب بدون إزعاج بصري.</li>
+      <li>واضح وقوي في عرض الشيء الذي يعمل عليه المستخدم الآن.</li>
+      <li>يستخدم animation خفيف فقط عندما يخدم الفهم أو التقدم أو التأكيد.</li>
+      <li>لا يستخدم حركة مستمرة أو مؤثرات تشتت المستخدم.</li>
+      <li>يعرض المهم الآن، ويخفي التفاصيل المتقدمة حتى يحتاجها المستخدم.</li>
+    </ul>
+
+    <h2>مساهمة الأقسام</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Product - Omar Nassar</h3>
+        <p>يسأل العميل عن إحساس الـ UX المطلوب، أو يقترح اتجاهات ويسجل القرار ومدة الجلسات المتوقعة.</p>
+      </div>
+      <div class="card">
+        <h3>Design - Noa Barak</h3>
+        <p>تترجم القرار إلى وضوح، hierarchy، progressive disclosure، حركة خفيفة، ودعم RTL/LTR.</p>
+      </div>
+      <div class="card">
+        <h3>QA - Lina Saad</h3>
+        <p>تفحص الراحة، قابلية القراءة، حالات الانتظار، والحركة خلال جلسات استخدام أطول.</p>
+      </div>
+    </div>
+
+    <h2>الملفات التي تم تحديثها</h2>
+    <ul>
+      <li><code>docs/software-company/workflows/ux-style-intake.md</code></li>
+      <li><code>docs/software-company/workflows/brand-and-design-intake.md</code></li>
+      <li><code>docs/software-company/departments/product-manager/agent.md</code></li>
+      <li><code>docs/software-company/departments/design/agent.md</code></li>
+      <li><code>docs/software-company/departments/qa/agent.md</code></li>
+      <li><code>docs/software-company/operating-model.md</code></li>
+      <li><code>docs/software-company/README.md</code></li>
+    </ul>
+
+    <div class="note">بالنسبة لـ OneShare، الاتجاه واضح: تطبيق عمل يومي طويل، مريح، واضح، ذكي، وحركته خفيفة.</div>
+
+    <div class="footer">OneShare Software Company OS · Owner Review</div>
+  </main>
+</body>
+</html>

@@ -13,13 +13,49 @@ ACTIVE_STATUSES = {
     GenerationJobStatus.running,
     GenerationJobStatus.retrying,
 }
+TERMINAL_STATUSES = {
+    GenerationJobStatus.completed,
+    GenerationJobStatus.failed,
+    GenerationJobStatus.cancelled,
+    GenerationJobStatus.timeout,
+}
+STALE_UPDATE_SECONDS = 30 * 60
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def serialize_job(job: Optional[GenerationJob], suite_id: Optional[str] = None) -> dict:
+def _as_aware(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _age_seconds(value: Optional[datetime], now: datetime) -> Optional[int]:
+    value = _as_aware(value)
+    if value is None:
+        return None
+    return max(0, int((now - value).total_seconds()))
+
+
+def safe_generation_error(error: Optional[str]) -> Optional[str]:
+    if not error:
+        return None
+    text = str(error).lower()
+    if "rate limit" in text or "429" in text or "quota" in text or "resource exhausted" in text:
+        return "The AI provider is currently rate limited. Please wait and retry."
+    if "api key" in text or "token" in text or "secret" in text or "credential" in text:
+        return "The AI provider could not complete this request. Please retry."
+    if "timeout" in text or "timed out" in text:
+        return "Generation timed out. Please retry."
+    return str(error)[:240]
+
+
+def serialize_job(job: Optional[GenerationJob], suite_id: Optional[str] = None, now: Optional[datetime] = None) -> dict:
+    now = now or utcnow()
     if job is None:
         return {
             "suite_id": suite_id,
@@ -27,25 +63,62 @@ def serialize_job(job: Optional[GenerationJob], suite_id: Optional[str] = None) 
             "stage": "idle",
             "message": "No generation is running.",
             "progress": 0,
+            "is_active": False,
+            "is_terminal": False,
+            "is_stale": False,
         }
+    created_age = _age_seconds(job.created_at, now)
+    updated_age = _age_seconds(job.updated_at or job.started_at or job.created_at, now)
+    is_active = job.status in ACTIVE_STATUSES
+    is_terminal = job.status in TERMINAL_STATUSES
+    is_stale = bool(is_active and updated_age is not None and updated_age > STALE_UPDATE_SECONDS)
+    wait_state = {
+        "state": job.status.value if job.status in ACTIVE_STATUSES else None,
+        "retry_count": job.retry_count,
+        "max_retries": job.max_retries,
+        "next_retry_at": job.next_retry_at.isoformat() if job.next_retry_at else None,
+        "rate_limit_reset_at": job.rate_limit_reset_at.isoformat() if job.rate_limit_reset_at else None,
+        "estimated_wait_seconds": job.estimated_wait_seconds,
+    }
+    safe_error = safe_generation_error(job.error)
     return {
         "suite_id": job.suite_id,
         "job_id": job.id,
+        "type": job.type.value if job.type else None,
         "status": job.status.value,
         "stage": job.stage,
         "message": job.message,
         "progress": job.progress,
-        "error": job.error,
+        "error": safe_error,
+        "safe_error": safe_error,
         "provider": job.provider,
         "model": job.model,
         "retry_count": job.retry_count,
+        "max_retries": job.max_retries,
         "next_retry_at": job.next_retry_at.isoformat() if job.next_retry_at else None,
         "rate_limit_reset_at": job.rate_limit_reset_at.isoformat() if job.rate_limit_reset_at else None,
         "estimated_wait_seconds": job.estimated_wait_seconds,
+        "wait_state": wait_state,
+        "is_active": is_active,
+        "is_terminal": is_terminal,
+        "is_stale": is_stale,
+        "stale_reason": (
+            "No job update has been recorded recently. Background task execution may have stopped."
+            if is_stale
+            else None
+        ),
+        "age_seconds": created_age,
+        "last_update_age_seconds": updated_age,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         "result": job.result,
+        "execution": {
+            "mode": "fastapi_background_tasks",
+            "durable_queue": False,
+            "warning": "Generation runs in a process-local background task and can become stale after deploys or restarts.",
+        },
     }
 
 

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>تقرير مراجعة المالك - إصلاح عقد Feedback في Product Bulk</title>
+  <style>
+    body { margin: 0; background: #f6f3ea; color: #111; font-family: Arial, "Noto Sans Arabic", sans-serif; line-height: 1.8; }
+    main { width: min(900px, calc(100% - 48px)); margin: 48px auto; background: #fff; border: 1px solid #ded8c8; border-radius: 18px; padding: 40px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.08); }
+    h1 { margin: 0 0 12px; font-size: 30px; }
+    h2 { margin-top: 32px; font-size: 21px; border-bottom: 1px solid #eee4d3; padding-bottom: 8px; }
+    .meta { color: #666; margin-bottom: 28px; }
+    li { margin: 8px 0; }
+    code { background: #f1ede4; border-radius: 6px; padding: 2px 6px; direction: ltr; unicode-bidi: embed; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>تقرير مراجعة المالك - إصلاح عقد Feedback في Product Bulk</h1>
+    <div class="meta">التاريخ: 2026-06-08 01:48<br />المسؤولون: Daniel Farah / Developers Manager، Rami Saleh / Developers</div>
+
+    <h2>ماذا أنجزنا</h2>
+    <ul>
+      <li>فحصنا Product Bulk Studio من الواجهة إلى الباكند.</li>
+      <li>وجدنا فجوة مهمة: الواجهة تطلب feedback قبل رفض asset، لكن الباكند لم يكن يستقبله أو يحفظه.</li>
+      <li>أضفنا <code>RejectAssetRequest</code> في الباكند.</li>
+      <li>صار reject asset يحفظ feedback في <code>asset.feedback</code> و <code>asset.ai_metadata.rejection_feedback</code>.</li>
+      <li>صار frontend API يرسل feedback عند reject.</li>
+      <li>بعد reject أو regenerate، يتم تنظيف feedback input لذلك asset.</li>
+    </ul>
+
+    <h2>لماذا هذا مهم</h2>
+    <p>Product Bulk يعتمد على الموافقة/الرفض/إعادة التوليد. إذا المستخدم كتب ملاحظة ولم تُحفظ، النظام لا يتعلم من الخطأ، وتجربة "Regenerate with feedback" تصبح ناقصة. هذا الإصلاح يغلق جزءاً أساسياً من حلقة التعلم.</p>
+
+    <h2>التحقق</h2>
+    <ul>
+      <li><code>pytest -p no:cacheprovider tests/test_product_bulk_models.py tests/test_product_bulk_parser.py -q</code> مرّ: 8 passed.</li>
+      <li><code>npm run build</code> مرّ بنجاح.</li>
+    </ul>
+
+    <h2>القرار</h2>
+    <p>DEVMGR-03 بدأ فعلياً، وأول gap في Product Bulk stability تم إصلاحه.</p>
+
+    <h2>الخطوة التالية</h2>
+    <ul>
+      <li>فحص عرض assets/generated templates في Product Bulk.</li>
+      <li>التأكد أن المستخدم يرى حالة كل asset بوضوح وأن الأفعال الفردية تعطي feedback كافياً.</li>
+    </ul>
+  </main>
+</body>
+</html>

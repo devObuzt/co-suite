@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>تقرير مراجعة المالك - تفعيل نظام العمل الذاتي للفرق</title>
+  <style>
+    body { margin: 0; background: #f6f3ea; color: #111; font-family: Arial, "Noto Sans Arabic", sans-serif; line-height: 1.8; }
+    main { width: min(900px, calc(100% - 48px)); margin: 48px auto; background: #fff; border: 1px solid #ded8c8; border-radius: 18px; padding: 40px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.08); }
+    h1 { margin: 0 0 12px; font-size: 30px; }
+    h2 { margin-top: 32px; font-size: 21px; border-bottom: 1px solid #eee4d3; padding-bottom: 8px; }
+    .meta { color: #666; margin-bottom: 28px; }
+    li { margin: 8px 0; }
+    code { background: #f1ede4; border-radius: 6px; padding: 2px 6px; direction: ltr; unicode-bidi: embed; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>تقرير مراجعة المالك - تفعيل نظام العمل الذاتي للفرق</h1>
+    <div class="meta">التاريخ: 2026-06-08 01:43<br />المسؤول: Layla Haddad / Project Management</div>
+
+    <h2>ماذا تغيّر</h2>
+    <ul>
+      <li>أضفنا Workflow رسمي باسم <code>Autonomous Delivery Loop</code>.</li>
+      <li>أصبح واضحاً أن الفرق لا تنتظر موافقة المالك بعد كل خطوة صغيرة.</li>
+      <li>مدير المشروع يقرر الاستمرار، الرجوع لإصلاحات، الانتقال، أو طلب قرار من المالك عند الحاجة فقط.</li>
+      <li>تم تحديث <code>next-actions.md</code> و <code>task-board.md</code> حسب حالة OneShare الحالية.</li>
+    </ul>
+
+    <h2>قرار Layla</h2>
+    <p>لا ننتقل بعد من مرحلة Production Stabilization + UX Trust.</p>
+    <p>السبب: ما زال يجب فحص media preview، Product Bulk Studio، QA smoke، وArchitecture re-check.</p>
+
+    <h2>ما الذي يحدث الآن</h2>
+    <ol>
+      <li>QA تفحص media preview.</li>
+      <li>Developers يعالجون أي فجوات واضحة.</li>
+      <li>Developers Manager يحضر slice واضح لـ Product Bulk Studio.</li>
+      <li>QA تعيد الفحص.</li>
+      <li>Architecture تعمل re-check.</li>
+      <li>Layla تقرر الانتقال أو البقاء.</li>
+    </ol>
+
+    <h2>التحقق</h2>
+    <ul>
+      <li>تم تشغيل <code>npm run build</code> بنجاح بعد آخر تغييرات الواجهة.</li>
+    </ul>
+
+    <h2>متى نرجع للمالك</h2>
+    <ul>
+      <li>صلاحيات Railway أو مزود خارجي.</li>
+      <li>مفاتيح API أو حسابات اختبار.</li>
+      <li>قرار بزنس أو قبول مخاطرة.</li>
+      <li>مراجعة نسخة جاهزة للتجربة.</li>
+    </ul>
+  </main>
+</body>
+</html>
