@@ -42,6 +42,10 @@ The loop is not optional. The architect must return after implementation to comp
 - `operating-model.md`: how departments cooperate.
 - `agent-template.md`: standard template for every role agent.
 - `department-managers.md`: named managers for every department and owner-review attribution rules.
+- `templates/project-task-board.md`: reusable project task board for new projects.
+- `templates/agent-cycle-runbook.md`: lightweight runbook for one agent delivery cycle.
+- `templates/manager-responsibilities.md`: portable manager ownership template.
+- `templates/qa-architecture-gates.md`: reusable QA and architecture phase gates.
 - `departments/*/agent.md`: role-specific agent instructions.
 - `workflows/*`: lifecycle workflows.
 - `workflows/brand-and-design-intake.md`: reusable brand/design intake before UI work on any project.
@@ -66,3 +70,19 @@ The operating model should remain stable.
 For future visual products, Product Management must ask for brand assets when they are not provided. Design should create a visual direction before coding starts, including multilingual and RTL/LTR assumptions where relevant.
 
 For future UX-heavy products, Product Management must ask how the experience should feel. If the owner/client is unsure, Product and Design should propose clear UX directions and document the chosen one before coding.
+
+## Starting A New Project
+
+1. Create `docs/software-company/projects/<project>/`.
+2. Copy `templates/project-task-board.md` to `docs/software-company/projects/<project>/task-board.md`.
+3. Add `README.md`, `next-actions.md`, `status-log.md`, and `handoff-log.md` as the project control room grows.
+4. Use `templates/agent-cycle-runbook.md` for each delivery loop.
+5. Use `templates/qa-architecture-gates.md` before phase movement or owner review.
+
+To generate a markdown owner-review from a project board:
+
+```sh
+python3 scripts/software_company/generate_owner_review.py <project>
+```
+
+Use `--dry-run` to print the report without creating a file.

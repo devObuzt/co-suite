@@ -156,3 +156,20 @@ Use consistent status terms:
 - `qa-findings.md`: defects and re-check history.
 - `release-readiness.md`: current release status.
 - `estimation-register.md`: client quote estimates, owner departments, hours, assumptions, and risks.
+
+## Reusable Project Layer
+
+Every future project should start with the templates in `templates/` instead of inventing a new control format.
+
+- `templates/project-task-board.md`: project-local board with active tasks, blockers, recently done work, and cycle notes.
+- `templates/agent-cycle-runbook.md`: one delivery loop from phase selection through QA, architecture re-check, and Project Management decision.
+- `templates/manager-responsibilities.md`: portable department ownership table.
+- `templates/qa-architecture-gates.md`: phase gates for QA and Architecture.
+
+Project Management can create a timestamped markdown owner-review from a project task board with:
+
+```sh
+python3 scripts/software_company/generate_owner_review.py <project>
+```
+
+The script reads `docs/software-company/projects/<project>/task-board.md` and writes to `docs/software-company/owner review/`. It is intentionally local, dependency-free, and safe to run before or after a cycle.
