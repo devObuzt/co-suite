@@ -86,3 +86,61 @@ python3 scripts/software_company/generate_owner_review.py <project>
 ```
 
 Use `--dry-run` to print the report without creating a file.
+
+## Telegram Company Bridge
+
+Telegram is the first live communication channel for department updates, owner reports, and owner requests.
+
+Required environment variables:
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_COMPANY_CHAT_ID`
+- `TELEGRAM_TOPIC_OWNER_REVIEW`
+- `TELEGRAM_TOPIC_PM`
+- `TELEGRAM_TOPIC_PRODUCT`
+- `TELEGRAM_TOPIC_ARCHITECTURE`
+- `TELEGRAM_TOPIC_DESIGN`
+- `TELEGRAM_TOPIC_DEVELOPERS_MANAGER`
+- `TELEGRAM_TOPIC_DEVELOPERS`
+- `TELEGRAM_TOPIC_QA`
+- `TELEGRAM_TOPIC_DEVOPS`
+- `TELEGRAM_TOPIC_INCIDENTS`
+
+After creating a Telegram group, enabling topics, and adding the bot as admin, send one command-style message in each topic so the bot can see it even if Bot Privacy Mode is enabled:
+
+```txt
+/topic_owner_review
+/topic_pm
+/topic_product
+/topic_architecture
+/topic_design
+/topic_developers_manager
+/topic_developers
+/topic_qa
+/topic_devops
+/topic_incidents
+```
+
+Then run:
+
+```sh
+python3 scripts/software_company/telegram_bridge.py updates
+```
+
+To test a message without sending:
+
+```sh
+python3 scripts/software_company/telegram_bridge.py send "Owner review test" --topic owner-review --dry-run
+```
+
+To send the latest owner-review report:
+
+```sh
+python3 scripts/software_company/telegram_bridge.py send-owner-review --project cosuite
+```
+
+To generate a fresh owner-review report and send it in one command:
+
+```sh
+python3 scripts/software_company/generate_owner_review.py cosuite --telegram
+```

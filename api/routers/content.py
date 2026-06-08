@@ -118,6 +118,13 @@ def _apply_rejection_metadata(post: ContentPost, reason: str, user_id: str) -> d
     return rejection
 
 
+def _normalize_rejection_reason(data: Optional[RejectPostRequest]) -> str:
+    reason = ((data.reason if data else None) or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Rejection reason is required")
+    return reason
+
+
 def _mark_regeneration_requested(post: ContentPost, feedback: str, user_id: str) -> dict:
     meta = dict(post.ai_metadata or {})
     request = {
@@ -429,7 +436,7 @@ async def reject_post(
     db: AsyncSession = Depends(get_db),
 ):
     post = await _get_post(suite_id, post_id, current_user, db)
-    reason = ((data.reason if data else None) or "").strip()
+    reason = _normalize_rejection_reason(data)
     _apply_rejection_metadata(post, reason, current_user.id)
     post.status = PostStatus.rejected
     await db.commit()

@@ -18,10 +18,18 @@ Status: active
   - Recent Content action feedback.
 - `npm run build` passed after the latest frontend slices.
 - No owner action is required right now.
+- Telegram company bridge is configured locally and can send Owner Review updates after Railway variable/login verification.
+- The latest autonomous cycle fixed the Content regeneration trust blocker and added Product Bulk batch-specific job visibility.
 
 ## What Happens Next
 
 The next work happens autonomously in review-fix-smoke mode.
+
+Immediate next focus:
+
+1. QA re-checks Content regeneration visibility after the fix.
+2. Developers continue Product Bulk stabilization with generator transition tests and UI gates.
+3. Architecture decides whether the current BackgroundTasks execution model is accepted risk for M1 or needs a DB worker before broad QA.
 
 ## Department Actions
 
@@ -101,6 +109,6 @@ Output required:
 
 The owner should expect the next useful update to be:
 
-> Media preview readiness result, then Product Bulk Studio stability result, then QA smoke recommendation.
+> Content regeneration re-check, then Product Bulk Studio stability result, then queue/worker readiness decision.
 
 No owner action is required right now unless we need Railway/env access, real provider keys, uploaded sample files, or permission to test external publishing/accounts.

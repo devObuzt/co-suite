@@ -11,6 +11,8 @@ from pathlib import Path
 import re
 import sys
 
+from telegram_bridge import send_message
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECTS_DIR = REPO_ROOT / "docs" / "software-company" / "projects"
@@ -141,6 +143,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--board", type=Path, help="Override task board path")
     parser.add_argument("--output-dir", type=Path, default=OWNER_REVIEW_DIR)
     parser.add_argument("--dry-run", action="store_true", help="Print report instead of writing a file")
+    parser.add_argument("--telegram", action="store_true", help="Send the generated report to Telegram Owner Review")
+    parser.add_argument("--telegram-dry-run", action="store_true", help="Print Telegram payload without sending")
     return parser.parse_args()
 
 
@@ -164,6 +168,11 @@ def main() -> int:
     output_path = args.output_dir / f"{stamp}_{args.project}-cycle-owner-review.md"
     output_path.write_text(report, encoding="utf-8")
     print(output_path)
+
+    if args.telegram or args.telegram_dry_run:
+        message = f"Owner Review generated\n\n{report}\n\nLocal file: {output_path}"
+        send_message(message, topic="owner-review", dry_run=args.telegram_dry_run)
+
     return 0
 
 

@@ -155,6 +155,29 @@ async def get_latest_job(db: AsyncSession, suite_id: str) -> Optional[Generation
     return result.scalar_one_or_none()
 
 
+async def get_latest_job_for_input(
+    db: AsyncSession,
+    suite_id: str,
+    input_key: str,
+    input_value: str,
+    job_types: Optional[set[GenerationJobType]] = None,
+) -> Optional[GenerationJob]:
+    query = (
+        select(GenerationJob)
+        .where(GenerationJob.suite_id == suite_id)
+        .order_by(GenerationJob.created_at.desc())
+        .limit(50)
+    )
+    if job_types:
+        query = query.where(GenerationJob.type.in_(job_types))
+
+    result = await db.execute(query)
+    for job in result.scalars().all():
+        if str((job.input or {}).get(input_key) or "") == str(input_value):
+            return job
+    return None
+
+
 async def create_job(
     db: AsyncSession,
     suite_id: str,

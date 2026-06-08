@@ -29,6 +29,7 @@ from ..services.generation_jobs import (
     classify_provider_limit,
     create_job,
     get_active_job,
+    get_latest_job_for_input,
     mark_completed,
     mark_failed,
     mark_progress,
@@ -361,6 +362,31 @@ async def get_product_bulk_batch(
 ):
     batch = await get_batch(db, suite_id, batch_id, current_user)
     return serialize_batch(batch)
+
+
+PRODUCT_BULK_JOB_TYPES = {
+    GenerationJobType.product_bulk_generate_first,
+    GenerationJobType.product_bulk_generate_all,
+    GenerationJobType.product_bulk_regenerate_asset,
+}
+
+
+@router.get("/{batch_id}/generation-status")
+async def get_product_bulk_generation_status(
+    suite_id: str,
+    batch_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_batch(db, suite_id, batch_id, current_user)
+    job = await get_latest_job_for_input(
+        db,
+        suite_id=suite_id,
+        input_key="batch_id",
+        input_value=batch_id,
+        job_types=PRODUCT_BULK_JOB_TYPES,
+    )
+    return serialize_job(job, suite_id=suite_id)
 
 
 def progress_writer(job_id: str):

@@ -950,3 +950,54 @@ Next:
 - Assign Developers to `DEV-D-01`, then `DEV-F-01`; keep Developers available for `DEV-E-01` review fixes.
 - Architecture reviews publish semantics after `DEV-E-01`.
 - Design reviews RTL/theme polish after `DEV-F-01`.
+
+### Autonomous Cycle Update 003 - Telegram Bridge + QA/Architecture/Product Bulk Fix Pass
+
+Date: 2026-06-08
+Status: in_progress_verified
+Owner: Project Management - Layla Haddad
+
+What happened:
+
+- Telegram company bridge was added as a reusable software-company CLI and verified locally.
+- QA re-checked media preview/content actions and found one M1 blocker: content regeneration hid the original card.
+- Architecture re-checked M1 drift and confirmed Product Bulk needs batch-specific job visibility before broad QA.
+- Developers Manager defined the smallest Product Bulk stabilization slice around one batch flow.
+- Developers fixed the Content regeneration trust issue:
+  - original content card remains visible after regenerate request;
+  - UI shows a clear regeneration-requested state;
+  - backend rejects empty rejection reasons with `400`.
+- Developers added Product Bulk batch-specific job status:
+  - backend exposes `GET /suites/{suite_id}/product-bulk/{batch_id}/generation-status`;
+  - frontend polls batch + job state together;
+  - terminal/failed/provider-limit states can remain visible even if batch state lags.
+- Developers tightened Product Bulk UI gates:
+  - first template generation is blocked when batch/product/first image prerequisites are missing;
+  - duplicate first-template generation is blocked once templates exist;
+  - generate-all remains tied to approved template;
+  - missing product images show a pre-generation warning.
+
+Files changed:
+
+- `scripts/software_company/telegram_bridge.py`
+- `scripts/software_company/generate_owner_review.py`
+- `docs/software-company/README.md`
+- `api/routers/content.py`
+- `api/services/generation_jobs.py`
+- `api/routers/product_bulk.py`
+- `tests/test_suite_memory_media_contracts.py`
+- `web/src/components/suite/SuiteLegacyDashboard.tsx`
+- `web/src/lib/api.ts`
+- `web/src/app/(dashboard)/suite/[id]/product-bulk/page.tsx`
+
+Verification:
+
+- `pytest -p no:cacheprovider tests/test_telegram_bridge.py -q`: 3 passed.
+- `pytest -p no:cacheprovider tests/test_generation_jobs.py tests/test_product_bulk_models.py tests/test_product_bulk_parser.py tests/test_suite_memory_media_contracts.py tests/test_telegram_bridge.py -q`: 28 passed.
+- `npm run build`: passed.
+
+Next:
+
+- QA should re-check Content regeneration visibility.
+- Product Bulk next slice should add focused generator state-transition tests and tighten UI gates for missing images/template approval.
+- Architecture should decide whether BackgroundTasks remain accepted risk for M1 or whether DB worker implementation starts before broad QA.

@@ -1,12 +1,15 @@
+import pytest
 from api.models.content import ContentPost, PostFormat, PostStatus
 from api.routers.content import (
     GenerateRequest,
     _apply_rejection_metadata,
     _account_options,
     _mark_regeneration_requested,
+    _normalize_rejection_reason,
     _publish_preflight,
     _record_publish_attempt,
 )
+from fastapi import HTTPException
 from api.services.media_storage import media_readiness_for_post
 from api.services.suite_memory import build_suite_memory_v0, merge_suite_brand
 
@@ -193,6 +196,14 @@ def test_rejection_metadata_persists_reason_and_history():
     assert post.ai_metadata["last_rejection"]["reason"] == "Make it more local"
     assert post.ai_metadata["last_rejection"]["rejected_by"] == "user_1"
     assert post.ai_metadata["rejection_history"][0]["reason"] == "Make it more local"
+
+
+def test_empty_rejection_reason_is_rejected():
+    with pytest.raises(HTTPException) as exc:
+        _normalize_rejection_reason(None)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Rejection reason is required"
 
 
 def test_regeneration_request_preserves_original_post_metadata():
