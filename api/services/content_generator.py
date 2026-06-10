@@ -509,7 +509,12 @@ def _native_slide_prompt(idea: dict, slide: dict, total_slides: int, brand: dict
     )
 
 
-def _generate_image(prompt: str, aspect_ratio: str = "1:1", extra_images: list | None = None) -> Optional[bytes]:
+def _generate_image(
+    prompt: str,
+    aspect_ratio: str = "1:1",
+    extra_images: list | None = None,
+    allow_imagen_fallback: bool = True,
+) -> Optional[bytes]:
     """Generate a single image via Gemini image model (falls back to Imagen 4). Returns PNG bytes or None."""
     if not settings.google_api_key:
         return None
@@ -537,6 +542,14 @@ def _generate_image(prompt: str, aspect_ratio: str = "1:1", extra_images: list |
                     return part.inline_data.data
     except Exception as e:
         log.warning("Gemini image generation failed (%s): %s", settings.google_image_model, e)
+
+    if not allow_imagen_fallback:
+        log.warning(
+            "Skipping Imagen fallback because this image requires native text rendering (%s, aspect=%s)",
+            settings.google_image_model,
+            aspect_ratio,
+        )
+        return None
 
     # Fallback: Imagen 4
     try:
@@ -634,7 +647,12 @@ def _generate_single_image_media(idea: dict, brand: dict) -> dict[str, list[byte
                 "DO NOT render any text in the image. Leave the bottom 25-30% "
                 "relatively clean and uncluttered. We will add title text in post-processing."
             )
-        image_bytes = _generate_image(prompt, aspect, extra_images=references)
+        image_bytes = _generate_image(
+            prompt,
+            aspect,
+            extra_images=references,
+            allow_imagen_fallback=not native_text,
+        )
         if image_bytes and title_ar and not native_text:
             try:
                 image_bytes = _overlay_image_title(image_bytes, platform_idea, title_ar)
@@ -677,7 +695,12 @@ def _generate_carousel_media(idea: dict, brand: dict) -> dict[str, list[bytes]]:
                 "\n\nThe previous image is provided as a visual style reference. "
                 "Match its color grading, lighting, composition style, and overall aesthetic."
             )
-        ig_bytes = _generate_image(prompt, "4:5", extra_images=extras)
+        ig_bytes = _generate_image(
+            prompt,
+            "4:5",
+            extra_images=extras,
+            allow_imagen_fallback=not native_text,
+        )
         if ig_bytes and title_ar and not native_text:
             try:
                 ig_bytes = _overlay_image_title(
@@ -713,7 +736,12 @@ def _generate_carousel_media(idea: dict, brand: dict) -> dict[str, list[bytes]]:
         if previous_ig is not None:
             fb_extras.append(previous_ig)
             fb_prompt += "\n\nUse the provided Instagram slide as style reference while adapting to this Facebook aspect ratio."
-        fb_bytes = _generate_image(fb_prompt, fb_aspect, extra_images=fb_extras)
+        fb_bytes = _generate_image(
+            fb_prompt,
+            fb_aspect,
+            extra_images=fb_extras,
+            allow_imagen_fallback=not native_text,
+        )
         if fb_bytes and title_ar and not native_text:
             try:
                 fb_bytes = _overlay_image_title(
