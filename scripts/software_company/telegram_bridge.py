@@ -182,7 +182,7 @@ def latest_owner_review(project: str | None = None) -> Path:
     if not OWNER_REVIEW_DIR.exists():
         raise FileNotFoundError(f"Owner review directory not found: {OWNER_REVIEW_DIR}")
 
-    pattern = f"*_{project}-cycle-owner-review.md" if project else "*.md"
+    pattern = f"*_{project}*.md" if project else "*.md"
     candidates = sorted(OWNER_REVIEW_DIR.glob(pattern), key=lambda path: path.stat().st_mtime)
     if not candidates:
         raise FileNotFoundError(f"No owner review markdown files found for pattern: {pattern}")
