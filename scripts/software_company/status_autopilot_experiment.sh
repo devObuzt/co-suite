@@ -12,18 +12,20 @@ LOCK_FILE="$ROOT_DIR/docs/software-company/projects/cosuite/.autonomous-runner.l
 screen_list="$(/usr/bin/screen -ls 2>/dev/null || true)"
 if grep -q "$SCREEN_NAME" <<<"$screen_list"; then
   echo "Autopilot experiment running in screen session $SCREEN_NAME"
+  screen_running=1
 else
   echo "Autopilot experiment screen session is not running."
+  screen_running=0
 fi
 
-if [[ -f "$PID_FILE" ]]; then
+if [[ "$screen_running" -eq 0 && -f "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE")"
   if ps -p "$pid" >/dev/null 2>&1; then
     echo "Autopilot experiment running with PID $pid"
   else
     echo "Autopilot experiment PID file exists, but PID $pid is not running."
   fi
-else
+elif [[ "$screen_running" -eq 0 ]]; then
   echo "Autopilot experiment is not running."
 fi
 
