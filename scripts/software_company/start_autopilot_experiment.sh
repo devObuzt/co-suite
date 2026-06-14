@@ -37,7 +37,8 @@ fi
 
 cd "$ROOT_DIR"
 
-/usr/bin/screen -L -Logfile "$SCREEN_LOG" -dmS "$SCREEN_NAME" "$ROOT_DIR/scripts/software_company/run_autopilot_experiment.sh"
+/usr/bin/screen -L -dmS "$SCREEN_NAME" /bin/zsh -lc \
+  "echo \$\$ > '$PID_FILE'; cd '$ROOT_DIR'; '$ROOT_DIR/scripts/software_company/run_autopilot_experiment.sh' >> '$OUT_LOG' 2>> '$ERR_LOG'"
 
 echo "Autopilot experiment started in screen session $SCREEN_NAME"
 echo "Screen log: $SCREEN_LOG"
