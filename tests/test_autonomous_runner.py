@@ -68,6 +68,38 @@ def test_autonomous_runner_skips_ready_handoff_when_actionable_work_exists() -> 
     assert decision.department == "Developers Manager"
 
 
+def test_autonomous_runner_prioritizes_active_product_bulk_ui_over_pm_gate() -> None:
+    board = """
+## Active Tasks
+
+| ID | Milestone | Task | Owner | Status | Acceptance Criteria | Next Handoff |
+| --- | --- | --- | --- | --- | --- | --- |
+| PM-02 | M1 | Autonomous phase control | Project Management | in_progress | Hold RC until gates close. | Developers, QA, Architecture |
+| DEV-I-05 | M1 | Product Bulk UI lifecycle gates | Developers | in_progress | UI copy and controls mirror backend lifecycle rules. | Design, QA |
+| DEV-I-06 | M1 | Product Bulk mapped smoke | QA / Developers | in_progress | Smoke rows are passed, failed, or blocked. | Project Management, Architecture |
+"""
+    decision = choose_next_decision("cosuite", parse_active_tasks(board))
+
+    assert decision.task_id == "DEV-I-05"
+    assert decision.department == "Developers"
+
+
+def test_autonomous_runner_moves_to_product_bulk_smoke_after_ui_gate() -> None:
+    board = """
+## Active Tasks
+
+| ID | Milestone | Task | Owner | Status | Acceptance Criteria | Next Handoff |
+| --- | --- | --- | --- | --- | --- | --- |
+| PM-02 | M1 | Autonomous phase control | Project Management | in_progress | Hold RC until gates close. | Developers, QA, Architecture |
+| DEV-I-05 | M1 | Product Bulk UI lifecycle gates | Developers | done | UI copy and controls mirror backend lifecycle rules. | Design, QA |
+| DEV-I-06 | M1 | Product Bulk mapped smoke | QA / Developers | in_progress | Smoke rows are passed, failed, or blocked. | Project Management, Architecture |
+"""
+    decision = choose_next_decision("cosuite", parse_active_tasks(board))
+
+    assert decision.task_id == "DEV-I-06"
+    assert decision.department == "QA"
+
+
 def test_codex_approval_flag_is_top_level(monkeypatch, tmp_path) -> None:
     command_seen: list[str] = []
 

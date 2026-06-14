@@ -125,19 +125,28 @@ def choose_next_decision(project: str, tasks: list[BoardTask]) -> CycleDecision:
     # The runner itself stays reusable: it reads the board and applies a small
     # decision policy instead of hard-coding source files.
     priority_ids = [
+        # Active implementation/smoke gates go before PM gatekeeping. Without
+        # this, a long autonomous run can keep re-reviewing PM-02 while the
+        # actionable Product Bulk work waits behind it.
+        "DEV-I-05",
+        "DEV-I-06",
+        "ARCH-02",
+        "PM-02",
         "QA-03",
         "DEVMGR-03",
-        "ARCH-02",
         "QA-02",
+        "DEV-D-01",
+        "DEV-F-01",
         "DEV-A-01",
         "DEV-B-01",
         "DEV-C-01",
         "DEV-E-01",
     ]
-    for task_id in priority_ids:
-        task = by_id.get(task_id)
-        if task and task.status in {"needs_review", "in_progress", "not_started"}:
-            return decision_for_task(project, task)
+    for status in ["needs_review", "in_progress", "not_started"]:
+        for task_id in priority_ids:
+            task = by_id.get(task_id)
+            if task and task.status == status:
+                return decision_for_task(project, task)
 
     for status in ["needs_review", "in_progress", "not_started"]:
         for task in tasks:
