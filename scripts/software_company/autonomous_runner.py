@@ -130,6 +130,8 @@ def choose_next_decision(project: str, tasks: list[BoardTask]) -> CycleDecision:
         # actionable Product Bulk work waits behind it.
         "DEV-I-05",
         "DEV-I-06",
+        "DEV-I-07",
+        "ARCH-02B",
         "ARCH-02",
         "PM-02",
         "QA-03",
@@ -227,12 +229,53 @@ Operating rules:
 - Run focused verification for touched surfaces.
 - Update docs/software-company/projects/{project}/status-log.md.
 - Create an owner-review markdown file under docs/software-company/owner review/ for meaningful checkpoints.
+- End your final response with this exact Arabic section for owner Telegram summaries:
+  ## Owner Arabic Summary
+  - ما تم في هذه الدورة: ...
+  - ماذا يجب أن تعمل الدورة القادمة: ...
 
 Current mission:
 Read docs/software-company/projects/{project}/task-board.md and next-actions.md, then handle {task.task_id}.
 If this is a review task, produce findings and exact next developer tasks.
 If this is an implementation task, implement the smallest safe slice, verify it, and document the result.
 """
+
+
+def extract_owner_arabic_summary(codex_output: str | None, decision: CycleDecision) -> str:
+    if not codex_output:
+        return "\n".join(
+            [
+                f"- ما تم في هذه الدورة: تم اختيار مهمة `{decision.task_id}` وتجهيز تقرير الدورة.",
+                "- ماذا يجب أن تعمل الدورة القادمة: سيختار النظام أعلى مهمة نشطة من لوحة العمل بعد هذه الدورة.",
+            ]
+        )
+
+    marker = "## Owner Arabic Summary"
+    if marker in codex_output:
+        summary = codex_output.split(marker, 1)[1].strip()
+        summary_lines = [line.rstrip() for line in summary.splitlines() if line.strip()]
+        if summary_lines:
+            return "\n".join(summary_lines[:8])
+
+    if codex_output.startswith("Codex worker timed out"):
+        done = "تعذر إنهاء عامل Codex ضمن مهلة الدورة، وتم تسجيل timeout في التقرير."
+    elif codex_output.startswith("Codex worker failed"):
+        done = "فشل عامل Codex أثناء تنفيذ الدورة، وتم تسجيل سبب الفشل في التقرير."
+    else:
+        useful_lines = [
+            line.strip(" -*")
+            for line in codex_output.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        excerpt = useful_lines[0] if useful_lines else "انتهت الدورة وتم تسجيل مخرجات العامل في التقرير."
+        done = f"انتهت مهمة `{decision.task_id}` وتم تسجيل المخرجات. أول ملخص من العامل: {excerpt[:260]}"
+
+    return "\n".join(
+        [
+            f"- ما تم في هذه الدورة: {done}",
+            "- ماذا يجب أن تعمل الدورة القادمة: سيختار النظام أعلى مهمة نشطة من لوحة العمل بعد تحديثات هذه الدورة.",
+        ]
+    )
 
 
 def process_is_running(pid: int) -> bool:
@@ -374,15 +417,28 @@ def telegram_messages_for_cycle(
     decision: CycleDecision,
     prompt_path: Path,
     report_path: Path,
+    codex_output: str | None = None,
+    next_decision: CycleDecision | None = None,
 ) -> list[tuple[str, str]]:
+    next_task = (
+        f"{next_decision.department} - {next_decision.task_id}: {next_decision.task}"
+        if next_decision
+        else "سيتم اختيارها من لوحة العمل في بداية الدورة القادمة"
+    )
     owner_message = "\n".join(
         [
-            "Autopilot cycle complete",
-            f"Project: {project}",
-            f"Department: {decision.department}",
-            f"Task: {decision.task_id} - {decision.task}",
-            f"Prompt: {prompt_path}",
-            f"Report: {report_path}",
+            "تقرير دورة الأوتوبايلوت",
+            f"المشروع: {project}",
+            f"القسم: {decision.department}",
+            f"المهمة: {decision.task_id} - {decision.task}",
+            "",
+            "ماذا حدث:",
+            extract_owner_arabic_summary(codex_output, decision),
+            "",
+            f"الدورة القادمة المتوقعة: {next_task}",
+            "",
+            f"ملف البرومبت: {prompt_path}",
+            f"ملف التقرير: {report_path}",
         ]
     )
     department_message = "\n".join(
@@ -440,9 +496,17 @@ def run_once(project: str, execute_codex: bool, send_telegram: bool, timeout_min
             worker_output = run_dir / f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{decision.task_id}_codex-output.md"
             codex_output = run_codex(decision.codex_prompt, worker_output, timeout_minutes)
         prompt_path, report_path = write_cycle_files(project, decision, codex_output=codex_output)
+        next_decision = choose_next_decision(project, load_tasks(project))
 
         if send_telegram:
-            for topic, message in telegram_messages_for_cycle(project, decision, prompt_path, report_path):
+            for topic, message in telegram_messages_for_cycle(
+                project,
+                decision,
+                prompt_path,
+                report_path,
+                codex_output=codex_output,
+                next_decision=next_decision,
+            ):
                 safe_send_message(message, topic)
         return report_path
     finally:
