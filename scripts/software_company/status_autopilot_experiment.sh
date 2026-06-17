@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Users/wisamsholy/Documents/GitHub/Claudeai/oneshare"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PID_FILE="$ROOT_DIR/reports/autopilot-experiment.pid"
 OUT_LOG="$ROOT_DIR/reports/autopilot-experiment.out.log"
 ERR_LOG="$ROOT_DIR/reports/autopilot-experiment.err.log"
