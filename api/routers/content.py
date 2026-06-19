@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, File, Form, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime, timezone
 import asyncio
+import mimetypes
 import re
+import uuid
 
 from ..core.database import get_db, AsyncSessionLocal
 from ..core.security import get_current_user
@@ -13,6 +15,7 @@ from ..models.user import User
 from ..models.suite import Suite, SuiteMember, SuiteStatus, MemberRole
 from ..models.content import ContentPost, PostStatus
 from ..models.generation_job import GenerationJobType
+from ..services.billing import enforce_generation_gate, estimate_content_generation_tokens
 from ..services.content_generator import generate_content_for_suite
 from ..services.generation_jobs import (
     classify_provider_limit,
@@ -26,7 +29,7 @@ from ..services.generation_jobs import (
     mark_running,
     serialize_job,
 )
-from ..services.media_storage import media_readiness_for_post
+from ..services.media_storage import StoredMedia, media_readiness_for_post, r2_configured, store_brand_asset
 from ..services.publisher import publish_post as _publish_post
 
 router = APIRouter(prefix="/content", tags=["content"])
@@ -58,6 +61,7 @@ class GenerateRequest(BaseModel):
     model_tier: Optional[str] = "auto"
     use_brand: bool = True
     language: Optional[str] = None
+    creative_brief: Optional[dict[str, Any]] = None
 
 
 class RegenerateRequest(BaseModel):
@@ -79,6 +83,24 @@ class SchedulePostRequest(BaseModel):
 
 
 ACCOUNT_DRAFT_MARKER = "account_level_draft"
+QUICK_ASSET_KINDS = {"logo", "product", "style", "character", "icon"}
+QUICK_ASSET_EXTENSIONS = {"png", "jpg", "jpeg", "svg", "webp"}
+QUICK_ASSET_MAX_BYTES = 15 * 1024 * 1024
+
+
+def _media_content_type(filename: str, fallback: str | None = None) -> str:
+    guessed, _ = mimetypes.guess_type(filename)
+    return fallback or guessed or "application/octet-stream"
+
+
+def _serialize_stored_media(stored: StoredMedia) -> dict:
+    return {
+        "url": stored.url,
+        "backend": stored.backend,
+        "key": stored.key,
+        "public": stored.public,
+        "content_type": stored.content_type,
+    }
 
 
 def _slugify(value: str) -> str:
@@ -244,6 +266,59 @@ async def _get_or_create_account_draft_suite(current_user: User, db: AsyncSessio
     return suite
 
 
+def _validate_quick_creative_brief(data: GenerateRequest) -> None:
+    if (data.mode or "") != "quick" or not data.creative_brief:
+        return
+    brief = data.creative_brief
+    if not isinstance(brief, dict):
+        raise HTTPException(status_code=422, detail="creative_brief must be an object")
+
+    required_sizes = brief.get("required_sizes") or {}
+    if required_sizes:
+        valid_size_ids = {
+            "image_all",
+            "instagram_post_4_5",
+            "meta_square_1_1",
+            "vertical_story_9_16",
+            "wide_16_9",
+            "google_ads_all",
+            "video_story_reel_9_16",
+            "video_wide_16_9",
+        }
+        ids = required_sizes.get("ids") or []
+        if not isinstance(ids, list) or any(size_id not in valid_size_ids for size_id in ids):
+            raise HTTPException(status_code=422, detail="Unsupported required size in creative brief")
+
+    logo = brief.get("logo") or {}
+    if isinstance(logo, dict) and logo.get("enabled") and logo.get("source") == "uploaded":
+        url = str(logo.get("url") or "")
+        if not url.startswith("https://"):
+            raise HTTPException(status_code=422, detail="Uploaded logo must have a public HTTPS URL before generation")
+
+    for group in brief.get("reference_assets") or []:
+        if not isinstance(group, dict):
+            raise HTTPException(status_code=422, detail="Invalid reference asset group")
+        kind = str(group.get("kind") or "")
+        if kind not in {"product", "style", "character", "icon"}:
+            raise HTTPException(status_code=422, detail="Unsupported reference asset kind")
+        urls = group.get("urls") or []
+        count = int(group.get("count") or 0)
+        if count > 0 and (not isinstance(urls, list) or len(urls) < count):
+            raise HTTPException(status_code=422, detail="Reference assets must be uploaded before generation")
+        if any(not isinstance(url, str) or not url.startswith("https://") for url in urls):
+            raise HTTPException(status_code=422, detail="Reference asset URLs must be public HTTPS URLs")
+
+    text_limits = {
+        "hook": 30,
+        "short_description": 60,
+        "terms": 25,
+    }
+    for field, limit in text_limits.items():
+        value = brief.get(field)
+        if isinstance(value, str) and len(value) > limit:
+            raise HTTPException(status_code=422, detail=f"{field} exceeds {limit} characters")
+
+
 def _account_options(data: GenerateRequest) -> dict:
     language = (data.language or "en").strip() or "en"
     return {
@@ -256,6 +331,7 @@ def _account_options(data: GenerateRequest) -> dict:
         "use_brand": False,
         "account_level": True,
         "language": language,
+        "creative_brief": data.creative_brief,
     }
 
 
@@ -275,12 +351,23 @@ async def generate_account_content(
     suite.brand = brand
     await db.commit()
 
+    _validate_quick_creative_brief(data)
     options = _account_options(data)
     existing = await get_active_job(db, suite.id)
     if existing:
         return serialize_job(existing)
 
     count = max(1, min(data.count or 1, 3))
+    content_type = data.content_type or "mixed"
+    await enforce_generation_gate(
+        suite.id,
+        db,
+        required_tokens=estimate_content_generation_tokens(count, content_type),
+        requested_units=count,
+        allow_free_trial=content_type.lower() != "video",
+        event_type="account_content_generation",
+        metadata={"job_type": GenerationJobType.content_generation.value, "content_type": content_type},
+    )
     job = await create_job(
         db,
         suite_id=suite.id,
@@ -288,7 +375,6 @@ async def generate_account_content(
         user_id=current_user.id,
         input_data={**options, "count": count},
     )
-    background_tasks.add_task(_run_generation, suite.id, job.id, count, options)
     return serialize_job(job)
 
 
@@ -317,6 +403,60 @@ async def list_account_posts(
     return [serialize_post(post) for post in posts_result.scalars().all()]
 
 
+@router.post("/{suite_id}/quick-assets")
+async def upload_quick_asset(
+    suite_id: str,
+    kind: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+
+    clean_kind = (kind or "").strip().lower()
+    if clean_kind not in QUICK_ASSET_KINDS:
+        raise HTTPException(status_code=400, detail="Unsupported quick asset kind")
+    if not r2_configured():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "public_storage_required",
+                "message": "Quick Post/Ad reference uploads require public R2 storage before generation.",
+            },
+        )
+
+    original_name = file.filename or "quick-asset"
+    ext = original_name.rsplit(".", 1)[-1].lower() if "." in original_name else ""
+    if ext not in QUICK_ASSET_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Quick assets must be PNG, JPG, SVG, or WebP")
+
+    content = await file.read(QUICK_ASSET_MAX_BYTES + 1)
+    if len(content) > QUICK_ASSET_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Quick asset is too large. Maximum is 15 MB.")
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded quick asset is empty")
+
+    storage_filename = f"{uuid.uuid4().hex}.{ext}"
+    stored = store_brand_asset(
+        suite_id=suite_id,
+        asset_type=f"quick-{clean_kind}",
+        filename=storage_filename,
+        data=content,
+        content_type=_media_content_type(original_name, file.content_type),
+    )
+    return {
+        "id": uuid.uuid4().hex,
+        "kind": clean_kind,
+        "name": original_name,
+        "url": stored.url,
+        "size": len(content),
+        "storage": _serialize_stored_media(stored),
+    }
+
+
 @router.post("/{suite_id}/generate", status_code=202)
 async def generate_content(
     suite_id: str,
@@ -332,6 +472,8 @@ async def generate_content(
     if not suite.brand:
         raise HTTPException(status_code=400, detail="Complete suite onboarding first")
 
+    _validate_quick_creative_brief(data)
+
     options = {
         "prompt": data.prompt,
         "mode": data.mode,
@@ -340,11 +482,22 @@ async def generate_content(
         "destination": data.destination,
         "model_tier": data.model_tier,
         "use_brand": data.use_brand,
+        "creative_brief": data.creative_brief,
     }
     existing = await get_active_job(db, suite_id)
     if existing:
         return serialize_job(existing)
 
+    content_type = data.content_type or "mixed"
+    await enforce_generation_gate(
+        suite_id,
+        db,
+        required_tokens=estimate_content_generation_tokens(data.count, content_type),
+        requested_units=max(1, int(data.count or 1)),
+        allow_free_trial=content_type.lower() != "video",
+        event_type="suite_content_generation",
+        metadata={"job_type": GenerationJobType.content_generation.value, "content_type": content_type},
+    )
     job = await create_job(
         db,
         suite_id=suite_id,
@@ -352,7 +505,6 @@ async def generate_content(
         user_id=current_user.id,
         input_data={**options, "count": data.count},
     )
-    background_tasks.add_task(_run_generation, suite_id, job.id, data.count, options)
     return serialize_job(job)
 
 
@@ -517,6 +669,15 @@ async def regenerate_post(
     _mark_regeneration_requested(post, feedback, current_user.id)
     await db.commit()
 
+    await enforce_generation_gate(
+        suite_id,
+        db,
+        required_tokens=estimate_content_generation_tokens(1, post.format.value if post.format else "mixed"),
+        requested_units=1,
+        allow_free_trial=(post.format.value if post.format else "mixed") != "video",
+        event_type="content_regeneration",
+        metadata={"job_type": GenerationJobType.content_regeneration.value, "post_id": post_id},
+    )
     job = await create_job(
         db,
         suite_id=suite_id,
@@ -524,7 +685,6 @@ async def regenerate_post(
         user_id=current_user.id,
         input_data={**options, "count": 1, "post_id": post_id, "preserve_original": True},
     )
-    background_tasks.add_task(_run_generation, suite_id, job.id, 1, options)
     return serialize_job(job)
 
 
@@ -535,7 +695,27 @@ class PublishRequest(BaseModel):
 
 def _publish_preflight(post: ContentPost, platforms: list[str], allow_text_only: bool = False) -> tuple[list[str], dict]:
     requested = [platform for platform in platforms if platform in {"facebook", "instagram"}]
-    readiness = media_readiness_for_post(post)
+    readiness = media_readiness_for_post(post, requested)
+    if readiness.get("state") == "not_required":
+        if set(requested).issubset({"facebook"}):
+            return ["facebook"], {
+                "media_readiness": readiness,
+                "publish_mode": "text_only",
+                "warnings": [],
+            }
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Instagram publishing requires public media.",
+                "media_readiness": readiness,
+                "allowed_actions": [
+                    "retry_media_generation",
+                    "configure_public_media_storage",
+                    "publish_facebook_text_only",
+                ],
+            },
+        )
+
     if readiness.get("publish_ready"):
         return requested, {
             "media_readiness": readiness,
@@ -587,7 +767,13 @@ async def publish_post(
         raise HTTPException(status_code=400, detail="No platforms connected. Connect Facebook or Instagram first.")
 
     publish_platforms, preflight = _publish_preflight(post, data.platforms, data.allow_text_only)
-    publish_result = await asyncio.to_thread(_publish_post, post, connections, publish_platforms)
+    publish_result = await asyncio.to_thread(
+        _publish_post,
+        post,
+        connections,
+        publish_platforms,
+        allow_text_only=preflight.get("publish_mode") == "text_only",
+    )
     if preflight.get("warnings"):
         publish_result.setdefault("warnings", [])
         publish_result["warnings"].extend(preflight["warnings"])

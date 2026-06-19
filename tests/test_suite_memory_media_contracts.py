@@ -1,15 +1,21 @@
 import pytest
+from fastapi import BackgroundTasks, HTTPException
 from api.models.content import ContentPost, PostFormat, PostStatus
+from api.models.generation_job import GenerationJob, GenerationJobStatus, GenerationJobType
+from api.models.suite import Suite
+from api.models.user import User
 from api.routers.content import (
     GenerateRequest,
     _apply_rejection_metadata,
     _account_options,
     _mark_regeneration_requested,
+    _validate_quick_creative_brief,
     _normalize_rejection_reason,
     _publish_preflight,
     _record_publish_attempt,
+    generate_account_content,
 )
-from fastapi import HTTPException
+from api.services import publisher
 from api.services.media_storage import media_readiness_for_post
 from api.services.suite_memory import build_suite_memory_v0, merge_suite_brand
 
@@ -160,6 +166,77 @@ def test_publish_preflight_accepts_public_media():
     assert preflight["media_readiness"]["state"] == "ready"
 
 
+def test_publish_preflight_uses_platform_specific_media_before_generic_media():
+    post = ContentPost(
+        id="post_7_platform_media",
+        suite_id="suite_1",
+        format=PostFormat.image,
+        status=PostStatus.approved,
+        media_urls=["https://cdn.example/generic.png"],
+        ai_metadata={
+            "platform_media": {
+                "facebook": ["/static/posts/facebook-local.png"],
+                "instagram": ["https://cdn.example/instagram.png"],
+            }
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        _publish_preflight(post, ["facebook", "instagram"])
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["media_readiness"]["platforms"]["facebook"]["state"] == "local-only"
+    assert exc.value.detail["media_readiness"]["platforms"]["instagram"]["state"] == "ready"
+
+
+def test_facebook_media_publish_does_not_fall_back_to_text_only(monkeypatch):
+    post = ContentPost(
+        id="post_7_fb_no_text_fallback",
+        suite_id="suite_1",
+        format=PostFormat.image,
+        status=PostStatus.approved,
+        media_urls=["/static/posts/local.png"],
+        ai_metadata={},
+    )
+
+    monkeypatch.setattr(publisher, "_fb_text", lambda *args: (_ for _ in ()).throw(AssertionError("unexpected text publish")))
+
+    result = publisher.publish_post(
+        post,
+        {"facebook": {"page_id": "page_1", "page_access_token": "token_1"}},
+        ["facebook"],
+    )
+
+    assert "facebook" not in result
+    assert result["facebook_error"] == "Facebook media is not available as a public HTTPS URL."
+
+
+def test_partial_publish_attempt_keeps_post_globally_unpublished():
+    post = ContentPost(
+        id="post_7_partial_publish",
+        suite_id="suite_1",
+        format=PostFormat.image,
+        status=PostStatus.approved,
+        ai_metadata={"source": "ai"},
+    )
+
+    attempt = _record_publish_attempt(
+        post,
+        requested_platforms={"facebook", "instagram"},
+        successful_platforms={"facebook"},
+        fully_published=False,
+        preflight={"publish_mode": "media", "media_readiness": {"state": "ready"}},
+        publish_result={"facebook": "fb_123", "instagram_error": "permission denied"},
+    )
+
+    assert attempt["status"] == "partially_published"
+    assert attempt["fully_published"] is False
+    assert post.status == PostStatus.approved
+    assert post.ai_metadata["last_publish_result"]["status"] == "partially_published"
+    assert post.ai_metadata["last_publish_result"]["results"]["facebook"] == "fb_123"
+    assert post.ai_metadata["last_publish_result"]["results"]["instagram_error"] == "permission denied"
+
+
 def test_merge_suite_brand_preserves_unrelated_existing_fields():
     merged = merge_suite_brand(
         {
@@ -263,3 +340,176 @@ def test_account_generation_options_force_brand_off_and_keep_language():
     assert options["account_level"] is True
     assert options["language"] == "he"
     assert options["content_type"] == "image"
+
+
+@pytest.mark.asyncio
+async def test_account_generation_route_forces_brand_off_and_enqueues_durable_job(monkeypatch):
+    user = User(id="user-1", email="owner@example.com", hashed_password="x")
+    suite = Suite(id="suite-1", owner_id=user.id, name="Quick Create", slug="quick-create")
+    suite.brand = {"account_level_draft": True, "name": "Owner"}
+
+    async def fake_get_or_create_account_draft_suite(_current_user, _db):
+        return suite
+
+    async def fake_get_active_job(_db, _suite_id):
+        return None
+
+    async def fake_enforce_generation_gate(*_args, **_kwargs):
+        return None
+
+    created_job_input = {}
+
+    async def fake_create_job(_db, suite_id, job_type, user_id, input_data):
+        created_job_input.update(input_data)
+        return GenerationJob(
+            id="job-1",
+            suite_id=suite_id,
+            type=job_type,
+            status=GenerationJobStatus.queued,
+            stage="queued",
+            message="Generation queued.",
+            progress=0,
+            created_by=user_id,
+            input=input_data,
+        )
+
+    class FakeDb:
+        committed = False
+
+        async def commit(self):
+            self.committed = True
+
+    monkeypatch.setattr("api.routers.content._get_or_create_account_draft_suite", fake_get_or_create_account_draft_suite)
+    monkeypatch.setattr("api.routers.content.get_active_job", fake_get_active_job)
+    monkeypatch.setattr("api.routers.content.enforce_generation_gate", fake_enforce_generation_gate)
+    monkeypatch.setattr("api.routers.content.create_job", fake_create_job)
+
+    background_tasks = BackgroundTasks()
+    payload = await generate_account_content(
+        GenerateRequest(
+            count=12,
+            prompt="Create a launch post",
+            mode="image",
+            content_type="image",
+            use_brand=True,
+            language="ar",
+        ),
+        background_tasks,
+        user,
+        FakeDb(),
+    )
+
+    assert payload["job_id"] == "job-1"
+    assert payload["status"] == "queued"
+    assert payload["type"] == GenerationJobType.content_generation.value
+    assert payload["suite_id"] == "suite-1"
+    assert payload["execution"]["mode"] == "durable_worker"
+    assert background_tasks.tasks == []
+
+    assert created_job_input["count"] == 3
+    assert created_job_input["use_brand"] is False
+    assert created_job_input["account_level"] is True
+    assert created_job_input["language"] == "ar"
+    assert suite.brand["account_level_draft"] is True
+    assert suite.brand["audience_languages"] == ["ar"]
+
+
+@pytest.mark.asyncio
+async def test_account_generation_route_preserves_payment_gate_upgrade_actions(monkeypatch):
+    user = User(id="user-1", email="owner@example.com", hashed_password="x")
+    suite = Suite(id="suite-1", owner_id=user.id, name="Quick Create", slug="quick-create")
+    suite.brand = {"account_level_draft": True}
+
+    async def fake_get_or_create_account_draft_suite(_current_user, _db):
+        return suite
+
+    async def fake_get_active_job(_db, _suite_id):
+        return None
+
+    async def fake_enforce_generation_gate(*_args, **_kwargs):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "generation_tokens_exhausted",
+                "message": "Generation tokens are exhausted.",
+                "allowed_actions": ["upgrade_plan", "buy_generation_tokens"],
+            },
+        )
+
+    class FakeDb:
+        async def commit(self):
+            return None
+
+    monkeypatch.setattr("api.routers.content._get_or_create_account_draft_suite", fake_get_or_create_account_draft_suite)
+    monkeypatch.setattr("api.routers.content.get_active_job", fake_get_active_job)
+    monkeypatch.setattr("api.routers.content.enforce_generation_gate", fake_enforce_generation_gate)
+
+    with pytest.raises(HTTPException) as exc:
+        await generate_account_content(
+            GenerateRequest(count=1, prompt="Create a launch post", content_type="image"),
+            BackgroundTasks(),
+            user,
+            FakeDb(),
+        )
+
+    assert exc.value.status_code == 402
+    assert exc.value.detail["code"] == "generation_tokens_exhausted"
+    assert exc.value.detail["allowed_actions"] == ["upgrade_plan", "buy_generation_tokens"]
+
+
+def test_quick_creative_brief_allows_uploaded_https_assets():
+    _validate_quick_creative_brief(
+        GenerateRequest(
+            count=1,
+            mode="quick",
+            content_type="image",
+            creative_brief={
+                "logo": {"enabled": True, "source": "uploaded", "url": "https://cdn.example/logo.png"},
+                "required_sizes": {"ids": ["instagram_post_4_5"], "aspect_ratios": ["4:5"]},
+                "reference_assets": [
+                    {
+                        "kind": "product",
+                        "names": ["product.png"],
+                        "urls": ["https://cdn.example/product.png"],
+                        "count": 1,
+                        "instruction": "Preserve product identity.",
+                    }
+                ],
+                "hook": "Launch now",
+            },
+        )
+    )
+
+
+def test_quick_creative_brief_rejects_unuploaded_reference_assets():
+    with pytest.raises(HTTPException) as exc:
+        _validate_quick_creative_brief(
+            GenerateRequest(
+                count=1,
+                mode="quick",
+                content_type="image",
+                creative_brief={
+                    "reference_assets": [
+                        {"kind": "product", "names": ["local.png"], "urls": [], "count": 1}
+                    ]
+                },
+            )
+        )
+
+    assert exc.value.status_code == 422
+    assert "uploaded" in str(exc.value.detail)
+
+
+def test_quick_creative_brief_rejects_invalid_required_size():
+    with pytest.raises(HTTPException) as exc:
+        _validate_quick_creative_brief(
+            GenerateRequest(
+                count=1,
+                mode="quick",
+                content_type="image",
+                creative_brief={"required_sizes": {"ids": ["poster_7_3"]}},
+            )
+        )
+
+    assert exc.value.status_code == 422
+    assert "required size" in str(exc.value.detail)

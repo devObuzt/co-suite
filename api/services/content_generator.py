@@ -20,6 +20,16 @@ from ..core.config import settings
 from ..core.ai_client import call_claude_sync
 from ..models.content import ContentPost, PostFormat, PostStatus
 from ..models.suite import Suite
+from .ai_router import (
+    AiRoute,
+    AiRouteDecision,
+    PromptPolicyVersion,
+    language_prompt_rules,
+    media_backend_for_urls,
+    public_url_ready,
+    resolve_ai_route,
+    text_rendering_mode_for_media,
+)
 from .media_storage import STATIC_DIR, store_post_media
 
 log = logging.getLogger(__name__)
@@ -118,8 +128,22 @@ def _clean_native_visual_direction(text: str) -> str:
     return " ".join(cleaned.split())
 
 
-def _load_reference_images(brand: dict, limit: int = 2) -> list:
-    """Load uploaded/scraped brand images as PIL references for Gemini image models."""
+def _quick_reference_urls(idea: dict) -> list[str]:
+    brief = ((idea.get("generation_request") or {}).get("creative_brief") or {})
+    if not isinstance(brief, dict):
+        return []
+    urls: list[str] = []
+    logo = brief.get("logo") or {}
+    if isinstance(logo, dict) and logo.get("enabled") and logo.get("url"):
+        urls.append(str(logo["url"]))
+    for group in brief.get("reference_assets") or []:
+        if isinstance(group, dict):
+            urls.extend(str(url) for url in (group.get("urls") or []) if url)
+    return urls
+
+
+def _load_reference_images(brand: dict, extra_urls: list[str] | None = None, limit: int = 6) -> list:
+    """Load uploaded/scraped brand and quick-brief images as PIL references for Gemini image models."""
     from PIL import Image
 
     urls: list[str] = []
@@ -129,6 +153,7 @@ def _load_reference_images(brand: dict, limit: int = 2) -> list:
     for asset in brand.get("logo_assets") or []:
         if isinstance(asset, dict) and asset.get("url"):
             urls.append(asset["url"])
+    urls.extend(extra_urls or [])
     loaded = []
     seen = set()
     for url in urls:
@@ -271,6 +296,7 @@ def _generate_ideas(
         f"their values must still be written in {lang_label}. "
         f"If the post image contains text, that text must be in the same language as the caption: {lang_label}."
     )
+    system += "\n" + "\n".join(f"- {rule}" for rule in language_prompt_rules(language))
     system += (
         "\n\n--- MODERN IMAGE MODEL RULE ---\n"
         "The image model can now render designed text and can use reference images. "
@@ -307,6 +333,21 @@ def _generate_ideas(
         request_bits.append(f"DESTINATION: {options['destination']}")
     if options.get("model_tier"):
         request_bits.append(f"MODEL TIER: {options['model_tier']}")
+    if options.get("creative_brief"):
+        request_bits.append(
+            "STRUCTURED QUICK POST / AD BRIEF:\n"
+            + json.dumps(options["creative_brief"], ensure_ascii=False)[:3500]
+            + "\n\nTreat these fields as high-priority production constraints. "
+            "If product photos are referenced, preserve product identity and do not redesign or distort the product. "
+            "If hook, short_description, or terms are present, use the exact language and respect the text limits: "
+            "hook up to 30 characters and max 15% of image area; short description up to 60 characters and max 5%; "
+            "terms up to 25 characters, max 5%, and tiny legal text no larger than 10px equivalent. "
+            "If required_sizes is present, treat it as the requested production placements and aspect ratios. "
+            "For all image sizes, plan compatible image variants for Instagram 4:5, Meta square 1:1, vertical 9:16, wide 16:9, and Google Ads. "
+            "For Google Ads image sizes, plan responsive ad crops/assets across square, landscape, portrait, and vertical placements. "
+            "For video sizes, obey the requested 9:16 story/reel or 16:9 wide format. "
+            "If the brief alone is enough, generate from it even when the free prompt is short."
+        )
     if options.get("regenerate_from"):
         request_bits.append(
             "REGENERATE / REPLACE THIS PREVIOUS IDEA:\n"
@@ -322,8 +363,13 @@ def _generate_ideas(
 
     for attempt in range(3):
         try:
+            decision = resolve_ai_route(
+                AiRoute.idea_generation,
+                tenant_context={"language": language},
+                request_context={"language": language, "count": count},
+            )
             raw = call_claude_sync(
-                model="claude-sonnet-4-6",
+                model=decision.model,
                 max_tokens=8000,
                 system=system,
                 messages=[{"role": "user", "content": user}],
@@ -483,6 +529,8 @@ def _native_image_prompt(idea: dict, brand: dict, visible_text: str) -> str:
         f"VISUAL DIRECTION: {_clean_native_visual_direction(idea.get('image_prompt', ''))}\n\n"
         "Render the visible text natively inside the image as polished graphic design typography. "
         "Keep the text exactly as provided, readable, well-spaced, and not cropped. "
+        + " ".join(language_prompt_rules(idea.get("text_language") or idea.get("content_language")))
+        + " "
         "Use strong hierarchy: headline first, supporting visual second. "
         f"Use the {div['name_en']} accent feel if it fits, but prioritize the business brand colors. "
         "Use provided reference images only as brand/style/logo references, not as the whole composition. "
@@ -503,6 +551,8 @@ def _native_slide_prompt(idea: dict, slide: dict, total_slides: int, brand: dict
         f"TOPIC: {idea.get('topic', '')}\n"
         f"VISUAL DIRECTION: {_clean_native_visual_direction(slide.get('image_prompt', ''))}\n\n"
         "Render the exact visible text natively inside the image. Make it large, readable, and polished. "
+        + " ".join(language_prompt_rules(idea.get("text_language") or idea.get("content_language")))
+        + " "
         "Keep the carousel style consistent across slides: same typography logic, spacing, colors, and visual rhythm. "
         f"The slide may use a subtle {div['color_name']} accent, but should primarily follow the business brand identity. "
         "Do not add extra text beyond the exact visible text unless it is purely decorative and unreadable."
@@ -514,10 +564,21 @@ def _generate_image(
     aspect_ratio: str = "1:1",
     extra_images: list | None = None,
     allow_imagen_fallback: bool = True,
+    route: AiRoute = AiRoute.image_generation,
+    language: str = "en",
+    visible_text: str | None = None,
 ) -> Optional[bytes]:
     """Generate a single image via Gemini image model (falls back to Imagen 4). Returns PNG bytes or None."""
     if not settings.google_api_key:
         return None
+    decision = resolve_ai_route(
+        route,
+        request_context={
+            "language": language,
+            "visible_text": bool(visible_text),
+            "text_rendering_mode": "native_text_design" if visible_text else "text_free_background",
+        },
+    )
 
     # Primary: Gemini image generation (better multilingual instruction following)
     try:
@@ -529,7 +590,7 @@ def _generate_image(
         if extra_images:
             contents.extend(extra_images)
         resp = client.models.generate_content(
-            model=settings.google_image_model,
+            model=decision.model,
             contents=contents,
             config=gtypes.GenerateContentConfig(
                 response_modalities=["IMAGE"],
@@ -595,6 +656,36 @@ def _save_video(video_bytes: bytes, post_id: str) -> str:
     return _save_media(video_bytes, post_id, f"{post_id}.mp4", "video/mp4")
 
 
+def _output_ai_metadata(idea: dict, decision: AiRouteDecision, media_urls: list[str] | None = None) -> dict:
+    metadata = dict(idea or {})
+    language = metadata.get("content_language") or metadata.get("text_language") or decision.language_policy["target_language"]
+    text_mode = decision.media_policy.get("text_rendering_mode") if decision.media_policy else "not_applicable"
+    if decision.route in {AiRoute.image_generation.value, AiRoute.carousel_generation.value}:
+        text_mode = text_rendering_mode_for_media(
+            language,
+            metadata.get("text_rendering_mode") or text_mode,
+            has_visible_text=bool(metadata.get("visible_text") or metadata.get("image_title_ar")),
+        )
+    metadata.update(
+        {
+            "ai_route": decision.route,
+            "provider": decision.provider,
+            "model": decision.model,
+            "model_version": decision.model_version,
+            "prompt_policy_version": decision.prompt_policy_version or PromptPolicyVersion,
+            "language": language,
+            "text_rendering_mode": text_mode,
+            "media_backend": media_backend_for_urls(media_urls),
+            "public_url_ready": public_url_ready(media_urls),
+            "fallback_chain_used": [],
+            "cost_estimate": decision.cost_estimate,
+            "usage_event_id": metadata.get("usage_event_id") or "usage_event_pending",
+            "safety_status": metadata.get("safety_status") or "not_checked",
+        }
+    )
+    return metadata
+
+
 def _overlay_image_title(image_bytes: bytes, idea: dict, title_ar: str, slide_number: int = 1, total_slides: int = 1, role: str = "hook") -> bytes:
     from ..engine.text_overlay import overlay_carousel_title
 
@@ -623,23 +714,91 @@ def _target_platforms(idea: dict) -> list[str]:
     return ["instagram"]
 
 
+def _quick_required_size_ids(idea: dict) -> set[str]:
+    brief = ((idea.get("generation_request") or {}).get("creative_brief") or {})
+    required_sizes = brief.get("required_sizes") if isinstance(brief, dict) else None
+    ids = required_sizes.get("ids") if isinstance(required_sizes, dict) else []
+    return {str(size_id) for size_id in ids or []}
+
+
+def _add_variant_spec(specs: list[tuple[str, str, str]], key: str, aspect: str, label: str) -> None:
+    if not any(existing_key == key for existing_key, _aspect, _label in specs):
+        specs.append((key, aspect, label))
+
+
+def _image_variant_specs(idea: dict) -> list[tuple[str, str, str]]:
+    ids = _quick_required_size_ids(idea)
+    specs: list[tuple[str, str, str]] = []
+    if not ids:
+        for platform in _target_platforms(idea):
+            _add_variant_spec(
+                specs,
+                platform,
+                "16:9" if platform == "facebook" else "4:5",
+                f"{platform} social placement",
+            )
+        return specs
+
+    if "image_all" in ids:
+        _add_variant_spec(specs, "instagram", "4:5", "Instagram feed portrait 4:5")
+        _add_variant_spec(specs, "meta_square_1_1", "1:1", "Meta square ad 1:1")
+        _add_variant_spec(specs, "story_9_16", "9:16", "Vertical story placement 9:16")
+        _add_variant_spec(specs, "facebook", "16:9", "Wide social/ad placement 16:9")
+        _add_variant_spec(specs, "google_landscape_1_91_1", "1.91:1", "Google Ads landscape responsive image")
+    if "instagram_post_4_5" in ids:
+        _add_variant_spec(specs, "instagram", "4:5", "Instagram feed portrait 4:5")
+    if "meta_square_1_1" in ids:
+        _add_variant_spec(specs, "meta_square_1_1", "1:1", "Meta square ad 1:1")
+    if "vertical_story_9_16" in ids:
+        _add_variant_spec(specs, "story_9_16", "9:16", "Vertical story placement 9:16")
+    if "wide_16_9" in ids:
+        _add_variant_spec(specs, "facebook", "16:9", "Wide social/ad placement 16:9")
+    if "google_ads_all" in ids:
+        _add_variant_spec(specs, "google_square_1_1", "1:1", "Google Ads square responsive image")
+        _add_variant_spec(specs, "google_landscape_1_91_1", "1.91:1", "Google Ads landscape responsive image")
+        _add_variant_spec(specs, "google_portrait_4_5", "4:5", "Google Ads portrait responsive image")
+        _add_variant_spec(specs, "google_vertical_9_16", "9:16", "Google Ads vertical responsive image")
+        _add_variant_spec(specs, "google_wide_16_9", "16:9", "Google Ads wide responsive image")
+    return specs or [("instagram", "4:5", "Instagram feed portrait 4:5")]
+
+
+def _video_variant_specs(idea: dict) -> list[tuple[str, str, str]]:
+    ids = _quick_required_size_ids(idea)
+    specs: list[tuple[str, str, str]] = []
+    if "video_story_reel_9_16" in ids or "vertical_story_9_16" in ids:
+        _add_variant_spec(specs, "video_story_reel_9_16", "9:16", "Vertical story/reel video")
+    if "video_wide_16_9" in ids or "wide_16_9" in ids:
+        _add_variant_spec(specs, "video_wide_16_9", "16:9", "Wide landscape video")
+    return specs or [("video_story_reel_9_16", "9:16", "Vertical story/reel video")]
+
+
+def _primary_variant_urls(platform_urls: dict[str, list[str]]) -> list[str]:
+    for key in ("instagram", "video_story_reel_9_16", "facebook", "meta_square_1_1", "story_9_16"):
+        urls = platform_urls.get(key) or []
+        if urls:
+            return urls
+    for urls in platform_urls.values():
+        if urls:
+            return urls
+    return []
+
+
 def _generate_single_image_media(idea: dict, brand: dict) -> dict[str, list[bytes]]:
     title_ar = (idea.get("image_title_ar") or "").strip()
     visible_text = (idea.get("visible_text") or title_ar or "").strip()
     native_text = bool(visible_text and _native_text_allowed(idea))
-    references = _load_reference_images(brand) if idea.get("include_logo", True) else []
-    platforms = _target_platforms(idea)
-    out: dict[str, list[bytes]] = {platform: [] for platform in platforms}
+    references = _load_reference_images(brand, _quick_reference_urls(idea)) if idea.get("include_logo", True) else _load_reference_images({}, _quick_reference_urls(idea))
+    variant_specs = _image_variant_specs(idea)
+    out: dict[str, list[bytes]] = {key: [] for key, _aspect, _label in variant_specs}
 
-    platform_aspects = {"instagram": "4:5", "facebook": "16:9"}
-    for platform in platforms:
-        aspect = platform_aspects.get(platform, "4:5")
-        platform_idea = {**idea, "aspect_ratio": aspect}
+    for platform, aspect, label in variant_specs:
+        platform_idea = {**idea, "aspect_ratio": aspect, "variant_key": platform, "variant_label": label}
         if native_text:
             prompt = _native_image_prompt(platform_idea, brand, visible_text)
-            prompt += f"\n\nTARGET PLATFORM: {platform}. Compose specifically for {aspect}."
+            prompt += f"\n\nTARGET PLACEMENT: {label}. Compose specifically for {aspect}."
         else:
             prompt = _image_prompt(platform_idea)
+            prompt += f"\n\nTARGET PLACEMENT: {label}. Compose specifically for {aspect}."
 
         if title_ar and not native_text:
             prompt += (
@@ -652,6 +811,9 @@ def _generate_single_image_media(idea: dict, brand: dict) -> dict[str, list[byte
             aspect,
             extra_images=references,
             allow_imagen_fallback=not native_text,
+            route=AiRoute.image_generation,
+            language=idea.get("content_language") or idea.get("text_language") or "en",
+            visible_text=visible_text if native_text else "",
         )
         if image_bytes and title_ar and not native_text:
             try:
@@ -667,95 +829,64 @@ def _generate_carousel_media(idea: dict, brand: dict) -> dict[str, list[bytes]]:
     from PIL import Image
 
     slides = idea.get("carousel_slides") or []
-    platforms = _target_platforms(idea)
-    out: dict[str, list[bytes]] = {platform: [] for platform in platforms}
-    previous_ig = None
-    references = _load_reference_images(brand) if idea.get("include_logo", True) else []
+    references = _load_reference_images(brand, _quick_reference_urls(idea)) if idea.get("include_logo", True) else _load_reference_images({}, _quick_reference_urls(idea))
     native_text = _native_text_allowed(idea)
+    variant_specs = _image_variant_specs(idea)
+    out: dict[str, list[bytes]] = {key: [] for key, _aspect, _label in variant_specs}
+    previous_by_variant: dict[str, object] = {}
+
     for idx, slide in enumerate(slides, start=1):
         title_ar = (slide.get("title_ar") or "").strip()
-
-        # Instagram primary carousel version: 4:5 portrait.
-        ig_idea = {**idea, "aspect_ratio": "4:5"}
-        if native_text:
-            prompt = _native_slide_prompt(ig_idea, slide, len(slides), brand)
-            prompt += "\n\nTARGET PLATFORM: Instagram carousel. Aspect ratio 4:5."
-        else:
-            prompt = _slide_prompt(ig_idea, slide, len(slides))
-            prompt += (
-                "\n\nIMPORTANT: This image is a clean visual background. "
-                "DO NOT render any text, letters, words, captions, or readable signs in the image. "
-                "Leave the bottom 25-30% of the composition relatively clean and uncluttered. "
-                "We will add title text in post-processing."
-            )
-        extras = list(references)
-        if previous_ig is not None:
-            extras.append(previous_ig)
-            prompt += (
-                "\n\nThe previous image is provided as a visual style reference. "
-                "Match its color grading, lighting, composition style, and overall aesthetic."
-            )
-        ig_bytes = _generate_image(
-            prompt,
-            "4:5",
-            extra_images=extras,
-            allow_imagen_fallback=not native_text,
-        )
-        if ig_bytes and title_ar and not native_text:
-            try:
-                ig_bytes = _overlay_image_title(
-                    ig_bytes,
-                    ig_idea,
-                    title_ar,
-                    slide_number=idx,
-                    total_slides=len(slides),
-                    role=slide.get("role", "content"),
+        for variant_key, base_aspect, label in variant_specs:
+            aspect = "1:1" if variant_key == "facebook" and idx > 1 else base_aspect
+            variant_idea = {**idea, "aspect_ratio": aspect, "variant_key": variant_key, "variant_label": label}
+            if native_text:
+                prompt = _native_slide_prompt(variant_idea, slide, len(slides), brand)
+                prompt += f"\n\nTARGET PLACEMENT: {label}. Aspect ratio {aspect}."
+            else:
+                prompt = _slide_prompt(variant_idea, slide, len(slides))
+                prompt += (
+                    "\n\nIMPORTANT: This image is a clean visual background. "
+                    "DO NOT render any text, letters, words, captions, or readable signs in the image. "
+                    "Leave the bottom 25-30% of the composition relatively clean and uncluttered. "
+                    "We will add title text in post-processing."
+                    f"\n\nTARGET PLACEMENT: {label}. Aspect ratio {aspect}."
                 )
-            except Exception as e:
-                log.warning("Carousel title overlay failed: %s", e)
-        if ig_bytes:
-            out["instagram"].append(ig_bytes)
-            try:
-                previous_ig = Image.open(BytesIO(ig_bytes))
-            except Exception:
-                previous_ig = None
-
-        if "facebook" not in platforms:
-            continue
-
-        # Facebook version: cover is 16:9, remaining slides are square.
-        fb_aspect = "16:9" if idx == 1 else "1:1"
-        fb_idea = {**idea, "aspect_ratio": fb_aspect}
-        if native_text:
-            fb_prompt = _native_slide_prompt(fb_idea, slide, len(slides), brand)
-            fb_prompt += f"\n\nTARGET PLATFORM: Facebook carousel. Aspect ratio {fb_aspect}."
-        else:
-            fb_prompt = _slide_prompt(fb_idea, slide, len(slides))
-            fb_prompt += "\n\nIMPORTANT: Do not render readable text. We will add text in post-processing."
-        fb_extras = list(references)
-        if previous_ig is not None:
-            fb_extras.append(previous_ig)
-            fb_prompt += "\n\nUse the provided Instagram slide as style reference while adapting to this Facebook aspect ratio."
-        fb_bytes = _generate_image(
-            fb_prompt,
-            fb_aspect,
-            extra_images=fb_extras,
-            allow_imagen_fallback=not native_text,
-        )
-        if fb_bytes and title_ar and not native_text:
-            try:
-                fb_bytes = _overlay_image_title(
-                    fb_bytes,
-                    fb_idea,
-                    title_ar,
-                    slide_number=idx,
-                    total_slides=len(slides),
-                    role=slide.get("role", "content"),
+            extras = list(references)
+            previous = previous_by_variant.get(variant_key)
+            if previous is not None:
+                extras.append(previous)
+                prompt += (
+                    "\n\nThe previous slide for this placement is provided as a visual style reference. "
+                    "Match its color grading, lighting, composition style, and overall aesthetic."
                 )
-            except Exception as e:
-                log.warning("Facebook carousel title overlay failed: %s", e)
-        if fb_bytes:
-            out["facebook"].append(fb_bytes)
+            slide_bytes = _generate_image(
+                prompt,
+                aspect,
+                extra_images=extras,
+                allow_imagen_fallback=not native_text,
+                route=AiRoute.carousel_generation,
+                language=idea.get("content_language") or idea.get("text_language") or "en",
+                visible_text=slide.get("visible_text") if native_text else "",
+            )
+            if slide_bytes and title_ar and not native_text:
+                try:
+                    slide_bytes = _overlay_image_title(
+                        slide_bytes,
+                        variant_idea,
+                        title_ar,
+                        slide_number=idx,
+                        total_slides=len(slides),
+                        role=slide.get("role", "content"),
+                    )
+                except Exception as e:
+                    log.warning("Carousel title overlay failed for %s: %s", variant_key, e)
+            if slide_bytes:
+                out[variant_key].append(slide_bytes)
+                try:
+                    previous_by_variant[variant_key] = Image.open(BytesIO(slide_bytes))
+                except Exception:
+                    previous_by_variant[variant_key] = None
     return out
 
 
@@ -830,7 +961,7 @@ async def generate_content_for_suite(
     from .billing import is_frozen, record_usage, COSTS
     if await is_frozen(suite_id, db):
         log.warning("Suite %s is frozen — skipping generation", suite_id)
-        _emit_progress(progress, stage="blocked", message="Suite billing is frozen.", progress=100)
+        _emit_progress(progress, stage="blocked", message="Suite billing is frozen.", percent=100)
         return []
     await db.commit()
 
@@ -885,6 +1016,24 @@ async def generate_content_for_suite(
         )
         post_id = str(uuid.uuid4())
         media_urls: list[str] = []
+        route = (
+            AiRoute.carousel_generation
+            if fmt == PostFormat.carousel
+            else AiRoute.video_generation
+            if fmt == PostFormat.video
+            else AiRoute.image_generation
+        )
+        decision = resolve_ai_route(
+            route,
+            tenant_context={"language": idea.get("content_language")},
+            request_context={
+                "language": idea.get("content_language"),
+                "visible_text": bool(idea.get("visible_text") or idea.get("image_title_ar")),
+                "text_rendering_mode": idea.get("text_rendering_mode"),
+                "slide_count": len(idea.get("carousel_slides") or []),
+                "model_tier": (idea.get("generation_request") or {}).get("model_tier"),
+            },
+        )
 
         # Generate image(s) before opening a DB transaction. Image generation can
         # take a while; holding a DB connection here exhausts Railway's pool.
@@ -904,8 +1053,9 @@ async def generate_content_for_suite(
                         _save_image_variant(img_bytes, post_id, platform, i)
                         for i, img_bytes in enumerate(images)
                     ]
-                media_urls = platform_urls.get("instagram") or platform_urls.get("facebook") or []
+                media_urls = _primary_variant_urls(platform_urls)
                 idea["platform_media"] = platform_urls
+                idea["media_variants"] = {key: {"urls": urls} for key, urls in platform_urls.items()}
                 image_count += sum(len(images) for images in variants.values())
 
             elif fmt == PostFormat.carousel:
@@ -916,15 +1066,24 @@ async def generate_content_for_suite(
                         _save_image_variant(img_bytes, post_id, platform, i)
                         for i, img_bytes in enumerate(images)
                     ]
-                media_urls = platform_urls.get("instagram") or platform_urls.get("facebook") or []
+                media_urls = _primary_variant_urls(platform_urls)
                 idea["platform_media"] = platform_urls
+                idea["media_variants"] = {key: {"urls": urls} for key, urls in platform_urls.items()}
                 image_count += sum(len(images) for images in variants.values())
 
             elif fmt == PostFormat.video:
-                video_bytes = _generate_video_media(idea, brand)
-                if video_bytes:
-                    media_urls = [_save_video(video_bytes, post_id)]
-                    generated_video_count += 1
+                platform_urls = {}
+                for variant_key, aspect, label in _video_variant_specs(idea):
+                    video_idea = {**idea, "aspect_ratio": aspect, "variant_key": variant_key, "variant_label": label}
+                    video_bytes = _generate_video_media(video_idea, brand)
+                    if video_bytes:
+                        platform_urls[variant_key] = [
+                            _save_media(video_bytes, post_id, f"{post_id}_{variant_key}.mp4", "video/mp4")
+                        ]
+                        generated_video_count += 1
+                media_urls = _primary_variant_urls(platform_urls)
+                idea["platform_media"] = platform_urls
+                idea["media_variants"] = {key: {"urls": urls} for key, urls in platform_urls.items()}
         except Exception as e:
             log.warning("Media generation for post %s failed: %s", post_id, e)
             idea["media_generation_failed"] = True
@@ -941,6 +1100,7 @@ async def generate_content_for_suite(
             ai_metadata=idea,
             media_urls=media_urls,
         )
+        post.ai_metadata = _output_ai_metadata(idea, decision, media_urls)
         db.add(post)
         post_ids.append(post.id)
 
