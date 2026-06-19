@@ -403,19 +403,11 @@ async def list_account_posts(
     return [serialize_post(post) for post in posts_result.scalars().all()]
 
 
-@router.post("/{suite_id}/quick-assets")
-async def upload_quick_asset(
+async def _upload_quick_asset_for_suite(
     suite_id: str,
-    kind: str = Form(...),
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(select(Suite).where(Suite.id == suite_id))
-    suite = result.scalar_one_or_none()
-    if not suite or suite.owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Suite not found")
-
+    kind: str,
+    file: UploadFile,
+) -> dict:
     clean_kind = (kind or "").strip().lower()
     if clean_kind not in QUICK_ASSET_KINDS:
         raise HTTPException(status_code=400, detail="Unsupported quick asset kind")
@@ -455,6 +447,32 @@ async def upload_quick_asset(
         "size": len(content),
         "storage": _serialize_stored_media(stored),
     }
+
+
+@router.post("/account/quick-assets")
+async def upload_account_quick_asset(
+    kind: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_or_create_account_draft_suite(current_user, db)
+    return await _upload_quick_asset_for_suite(suite.id, kind, file)
+
+
+@router.post("/{suite_id}/quick-assets")
+async def upload_quick_asset(
+    suite_id: str,
+    kind: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+    return await _upload_quick_asset_for_suite(suite_id, kind, file)
 
 
 @router.post("/{suite_id}/generate", status_code=202)
