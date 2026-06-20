@@ -29,7 +29,13 @@ def _openai_extract_text(payload: dict[str, Any]) -> str:
     return "\n".join(chunks).strip()
 
 
-def _call_openai_sync(model: str, max_tokens: int, messages: list, system: str = "") -> str:
+def _call_openai_sync(
+    model: str,
+    max_tokens: int,
+    messages: list,
+    system: str = "",
+    timeout: int = 120,
+) -> str:
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is missing")
 
@@ -48,7 +54,7 @@ def _call_openai_sync(model: str, max_tokens: int, messages: list, system: str =
         "max_output_tokens": max_tokens,
     }
 
-    resp = requests.post(OPENAI_RESPONSES_URL, headers=headers, json=body, timeout=120)
+    resp = requests.post(OPENAI_RESPONSES_URL, headers=headers, json=body, timeout=timeout)
     resp.raise_for_status()
     text = _openai_extract_text(resp.json())
     if not text:
@@ -63,6 +69,7 @@ async def call_text_ai(
     max_tokens: int,
     messages: list,
     system: str = "",
+    timeout: int = 120,
 ) -> str:
     selected = _provider_or_default(provider)
     if selected == "openai":
@@ -70,7 +77,7 @@ async def call_text_ai(
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None,
-            partial(_call_openai_sync, selected_model, max_tokens, messages, system),
+            partial(_call_openai_sync, selected_model, max_tokens, messages, system, timeout),
         )
 
     selected_model = model or settings.anthropic_text_model
@@ -79,4 +86,5 @@ async def call_text_ai(
         max_tokens=max_tokens,
         messages=messages,
         system=system,
+        timeout=timeout,
     )

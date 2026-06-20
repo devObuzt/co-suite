@@ -14,6 +14,9 @@ from ..models.suite import Suite
 log = logging.getLogger(__name__)
 
 PLAN_VERSION = "marketing_plan_deck_v1"
+PROMPT_PAYLOAD_CHAR_LIMIT = 16000
+MARKETING_PLAN_MAX_TOKENS = 5200
+MARKETING_PLAN_TIMEOUT_SECONDS = 240
 
 LANG_NAMES = {
     "ar": "Arabic, natural Palestinian/Levantine professional tone when appropriate",
@@ -307,6 +310,14 @@ def suite_research_payload(suite: Suite, planning_inputs: dict[str, Any] | None 
     }
 
 
+def _json_for_prompt(payload: dict[str, Any]) -> str:
+    """Compact suite research so long-running plan jobs stay inside provider timeouts."""
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(text) <= PROMPT_PAYLOAD_CHAR_LIMIT:
+        return text
+    return text[:PROMPT_PAYLOAD_CHAR_LIMIT] + "...[truncated]"
+
+
 def build_marketing_plan_prompt(suite_payload: dict[str, Any], language: str) -> str:
     lang_name = LANG_NAMES.get(language, language or "English")
     section_ids = [section_id for section_id, _ in REQUIRED_SECTIONS]
@@ -318,7 +329,7 @@ Use the client/business language naturally. If Arabic or Hebrew, write right-to-
 Use the provided business data as facts. If a fact is missing, state a careful assumption rather than inventing numbers.
 
 Business research payload:
-{json.dumps(suite_payload, ensure_ascii=False, indent=2)[:24000]}
+{_json_for_prompt(suite_payload)}
 
 Return ONLY valid JSON with this exact top-level shape:
 {{
@@ -472,9 +483,10 @@ async def generate_marketing_plan_deck(
     raw = await call_text_ai(
         provider="anthropic",
         model=settings.anthropic_text_model,
-        max_tokens=8000,
+        max_tokens=MARKETING_PLAN_MAX_TOKENS,
         messages=[{"role": "user", "content": prompt}],
         system="You create rigorous, client-ready marketing strategy decks. Return JSON only.",
+        timeout=MARKETING_PLAN_TIMEOUT_SECONDS,
     )
     parsed = parse_marketing_plan_json(raw)
     return normalize_marketing_plan_deck(parsed, suite.name, output_language, planning_inputs=planning_inputs)

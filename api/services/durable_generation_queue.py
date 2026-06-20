@@ -185,6 +185,7 @@ async def execute_claimed_job(
                     "upcoming_campaigns": input_data.get("upcoming_campaigns") or [],
                     "planning_notes": input_data.get("planning_notes"),
                 }
+                progress({"stage": "ai_strategy", "message": "Building the marketing plan with AI.", "progress": 35})
                 deck = await generate_marketing_plan_deck(
                     suite,
                     input_data.get("language"),

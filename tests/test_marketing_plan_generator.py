@@ -155,5 +155,20 @@ async def test_generate_marketing_plan_deck_uses_anthropic(monkeypatch):
 
     assert calls["provider"] == "anthropic"
     assert calls["model"] == mpg.settings.anthropic_text_model
+    assert calls["max_tokens"] == mpg.MARKETING_PLAN_MAX_TOKENS
+    assert calls["timeout"] == mpg.MARKETING_PLAN_TIMEOUT_SECONDS
     assert deck["language"] == "he"
     assert deck["cover"]["title"] == "Connec plan"
+
+
+def test_build_marketing_plan_prompt_compacts_large_payload():
+    prompt = mpg.build_marketing_plan_prompt(
+        {
+            "suite": {"name": "Big payload"},
+            "brand": {"notes": "x" * 40000},
+        },
+        "en",
+    )
+
+    assert len(prompt) < 26000
+    assert "[truncated]" in prompt

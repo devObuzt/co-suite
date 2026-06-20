@@ -15,7 +15,13 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 
 
-def _call_sync(model: str, max_tokens: int, messages: list, system: str = "") -> dict[str, Any]:
+def _call_sync(
+    model: str,
+    max_tokens: int,
+    messages: list,
+    system: str = "",
+    timeout: int = 120,
+) -> dict[str, Any]:
     """Synchronous Anthropic API call via requests."""
     clean_key = "".join(c for c in settings.anthropic_api_key if c.isprintable() and c != " ")
     headers = {
@@ -31,21 +37,33 @@ def _call_sync(model: str, max_tokens: int, messages: list, system: str = "") ->
     if system:
         payload["system"] = system
 
-    resp = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=120)
+    resp = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=timeout)
     resp.raise_for_status()
     return resp.json()
 
 
-async def call_claude(model: str, max_tokens: int, messages: list, system: str = "") -> str:
+async def call_claude(
+    model: str,
+    max_tokens: int,
+    messages: list,
+    system: str = "",
+    timeout: int = 120,
+) -> str:
     """Async wrapper — runs requests in a thread, returns the text of the first content block."""
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
-        None, partial(_call_sync, model, max_tokens, messages, system)
+        None, partial(_call_sync, model, max_tokens, messages, system, timeout)
     )
     return result["content"][0]["text"]
 
 
-def call_claude_sync(model: str, max_tokens: int, system: str, messages: list) -> str:
+def call_claude_sync(
+    model: str,
+    max_tokens: int,
+    system: str,
+    messages: list,
+    timeout: int = 120,
+) -> str:
     """Sync version for use in non-async contexts (content_generator)."""
-    result = _call_sync(model, max_tokens, messages, system)
+    result = _call_sync(model, max_tokens, messages, system, timeout)
     return result["content"][0]["text"]
