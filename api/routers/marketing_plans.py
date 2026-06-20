@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import get_db
 from ..core.security import get_current_user, hash_password, verify_password
+from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
 from ..models.user import User
-from ..services.marketing_plan_generator import generate_marketing_plan_deck, infer_plan_language
+from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job
+from ..services.marketing_plan_generator import infer_plan_language
 
 router = APIRouter(tags=["marketing-plans"])
 
@@ -67,6 +69,29 @@ def _public_deck(deck: dict[str, Any]) -> dict[str, Any]:
     return public
 
 
+async def _latest_marketing_plan_job(db: AsyncSession, suite_id: str) -> GenerationJob | None:
+    result = await db.execute(
+        select(GenerationJob)
+        .where(GenerationJob.suite_id == suite_id)
+        .where(GenerationJob.type == GenerationJobType.marketing_plan)
+        .order_by(GenerationJob.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _active_marketing_plan_job(db: AsyncSession, suite_id: str) -> GenerationJob | None:
+    result = await db.execute(
+        select(GenerationJob)
+        .where(GenerationJob.suite_id == suite_id)
+        .where(GenerationJob.type == GenerationJobType.marketing_plan)
+        .where(GenerationJob.status.in_(ACTIVE_STATUSES))
+        .order_by(GenerationJob.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 def _save_deck(suite: Suite, deck: dict[str, Any]) -> None:
     strategy = dict(_strategy(suite))
     strategy["marketing_plan_deck"] = deck
@@ -93,14 +118,22 @@ async def get_marketing_plan(
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
     deck = _deck(suite)
+    job = await _latest_marketing_plan_job(db, suite_id)
+    generation_status = serialize_job(job, suite_id=suite_id)
     if not deck:
         return {
             "status": "missing",
             "suite_id": suite_id,
             "language": infer_plan_language(suite),
             "deck": None,
+            "generation_status": generation_status,
         }
-    return {"status": "ready", "suite_id": suite_id, "deck": _public_deck(deck)}
+    return {
+        "status": "ready",
+        "suite_id": suite_id,
+        "deck": _public_deck(deck),
+        "generation_status": generation_status,
+    }
 
 
 @router.post("/suites/{suite_id}/marketing-plan/generate")
@@ -112,19 +145,45 @@ async def generate_marketing_plan(
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or GenerateMarketingPlanRequest()
-    planning_inputs = {
-        "near_term_focus": request_data.near_term_focus,
-        "upcoming_campaigns": [item for item in request_data.upcoming_campaigns if item.strip()][:12],
-        "planning_notes": request_data.planning_notes,
+    active = await _active_marketing_plan_job(db, suite_id)
+    deck = _deck(suite)
+    if active:
+        return {
+            "status": active.status.value,
+            "suite_id": suite_id,
+            "deck": _public_deck(deck) if deck else None,
+            "generation_status": serialize_job(active, suite_id=suite_id),
+        }
+
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.marketing_plan,
+        user_id=current_user.id,
+        input_data={
+            "language": request_data.language,
+            "near_term_focus": request_data.near_term_focus,
+            "upcoming_campaigns": [item for item in request_data.upcoming_campaigns if item.strip()][:12],
+            "planning_notes": request_data.planning_notes,
+        },
+    )
+    return {
+        "status": job.status.value,
+        "suite_id": suite_id,
+        "deck": _public_deck(deck) if deck else None,
+        "generation_status": serialize_job(job, suite_id=suite_id),
     }
-    deck = await generate_marketing_plan_deck(suite, request_data.language, planning_inputs=planning_inputs)
-    existing = _deck(suite)
-    if existing and isinstance(existing.get("share"), dict):
-        deck["share"] = existing["share"]
-    _save_deck(suite, deck)
-    await db.commit()
-    await db.refresh(suite)
-    return {"status": "ready", "suite_id": suite_id, "deck": _public_deck(deck)}
+
+
+@router.get("/suites/{suite_id}/marketing-plan/generation-status")
+async def marketing_plan_generation_status(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_owned_suite(db, suite_id, current_user)
+    job = await _latest_marketing_plan_job(db, suite_id)
+    return serialize_job(job, suite_id=suite_id)
 
 
 @router.post("/suites/{suite_id}/marketing-plan/share")

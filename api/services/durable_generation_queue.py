@@ -20,11 +20,13 @@ from .generation_jobs import (
     update_job,
     utcnow,
 )
+from .marketing_plan_generator import generate_marketing_plan_deck
 from .product_bulk_generator import (
     generate_all_products,
     generate_first_product_templates,
     regenerate_product_asset,
 )
+from ..models.suite import Suite
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +75,21 @@ def progress_writer(job_id: str) -> Callable[[dict], None]:
             pass
 
     return progress
+
+
+def _suite_strategy(suite: Suite) -> dict:
+    return suite.strategy if isinstance(suite.strategy, dict) else {}
+
+
+def _suite_marketing_plan_deck(suite: Suite) -> Optional[dict]:
+    deck = _suite_strategy(suite).get("marketing_plan_deck")
+    return deck if isinstance(deck, dict) else None
+
+
+def _save_suite_marketing_plan_deck(suite: Suite, deck: dict) -> None:
+    strategy = dict(_suite_strategy(suite))
+    strategy["marketing_plan_deck"] = deck
+    suite.strategy = strategy
 
 
 async def claim_next_job(db: AsyncSession) -> Optional[GenerationJob]:
@@ -155,6 +172,31 @@ async def execute_claimed_job(
                     progress=progress,
                 )
                 return await mark_completed(db, job.id, {"post_ids": post_ids, "count": len(post_ids)})
+
+            if job.type == GenerationJobType.marketing_plan:
+                result = await db.execute(select(Suite).where(Suite.id == job.suite_id))
+                suite = result.scalar_one_or_none()
+                if not suite:
+                    return await mark_failed(db, job.id, "Suite not found")
+
+                progress({"stage": "research", "message": "Preparing suite research for the marketing plan.", "progress": 15})
+                planning_inputs = {
+                    "near_term_focus": input_data.get("near_term_focus"),
+                    "upcoming_campaigns": input_data.get("upcoming_campaigns") or [],
+                    "planning_notes": input_data.get("planning_notes"),
+                }
+                deck = await generate_marketing_plan_deck(
+                    suite,
+                    input_data.get("language"),
+                    planning_inputs=planning_inputs,
+                )
+                existing = _suite_marketing_plan_deck(suite)
+                if existing and isinstance(existing.get("share"), dict):
+                    deck["share"] = existing["share"]
+                _save_suite_marketing_plan_deck(suite, deck)
+                await db.commit()
+                progress({"stage": "saving", "message": "Marketing plan saved.", "progress": 95})
+                return await mark_completed(db, job.id, {"deck_ready": True, "generated_at": deck.get("generated_at")})
 
             if job.type == GenerationJobType.product_bulk_generate_first:
                 batch_id = str(input_data.get("batch_id") or "")

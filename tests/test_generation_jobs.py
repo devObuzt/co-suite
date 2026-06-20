@@ -20,6 +20,7 @@ def test_generation_job_status_values_are_stable():
 def test_generation_job_type_values_are_stable():
     assert GenerationJobType.content_generation.value == "content_generation"
     assert GenerationJobType.content_regeneration.value == "content_regeneration"
+    assert GenerationJobType.marketing_plan.value == "marketing_plan"
 
 
 def test_serialize_job_returns_frontend_contract():

@@ -72,6 +72,7 @@ async def startup():
 
         async with engine.begin() as conn:
             for value in (
+                "marketing_plan",
                 "product_bulk_import",
                 "product_bulk_generate_first",
                 "product_bulk_generate_all",
