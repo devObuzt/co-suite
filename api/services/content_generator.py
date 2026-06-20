@@ -3,6 +3,7 @@
 Adapts connec-content-engine's idea_generator + image_generator to work
 with any suite's brand data instead of the hardcoded Connec brand.json.
 """
+import asyncio
 import json
 import logging
 import re
@@ -931,6 +932,13 @@ def _emit_progress(callback: Optional[ProgressCallback], **event):
         callback(event)
 
 
+async def _flush_progress() -> None:
+    # The media providers are called through synchronous SDK paths in this worker.
+    # Give the event loop a tick so queued progress writes reach the database
+    # before the next long blocking generation call starts.
+    await asyncio.sleep(0)
+
+
 async def generate_content_for_suite(
     suite_id: str,
     db: AsyncSession,
@@ -992,6 +1000,7 @@ async def generate_content_for_suite(
         message=f"Generating {count} content idea{'s' if count != 1 else ''}.",
         progress=15,
     )
+    await _flush_progress()
     audience_languages = brand.get("audience_languages") or ["ar"]
     if not audience_languages:
         audience_languages = ["ar"]
@@ -1008,6 +1017,7 @@ async def generate_content_for_suite(
             message=f"Writing ideas in {lang_code} ({lang_idx}/{len(lang_jobs)}).",
             progress=15 + int(20 * (lang_idx - 1) / max(1, len(lang_jobs))),
         )
+        await _flush_progress()
         lang_ideas = _generate_ideas(
             brand,
             count=lang_count,
@@ -1060,6 +1070,7 @@ async def generate_content_for_suite(
                 message=f"Generating media {idx}/{total_ideas}.",
                 progress=40 + int(45 * (idx - 1) / total_ideas),
             )
+            await _flush_progress()
             if fmt == PostFormat.image:
                 variants = _generate_single_image_media(idea, brand)
                 platform_urls: dict[str, list[str]] = {}
@@ -1127,6 +1138,7 @@ async def generate_content_for_suite(
         message="Saving generated content.",
         progress=90,
     )
+    await _flush_progress()
     await record_usage(suite_id, "llm_idea_gen", COSTS["llm_idea_gen"] * count, db)
     if image_count:
         await record_usage(suite_id, "image_gen", COSTS["image_gen"] * image_count, db)
