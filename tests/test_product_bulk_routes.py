@@ -142,7 +142,8 @@ async def test_generate_first_route_enqueues_durable_job_without_background_task
     batch = make_batch([make_item()])
     patch_batch(monkeypatch, batch)
 
-    async def fake_get_active_job(_db, _suite_id):
+    async def fake_get_active_job(_db, _suite_id, job_types=None):
+        assert job_types == product_bulk.PRODUCT_BULK_JOB_TYPES
         return None
 
     async def fake_enforce_generation_gate(*_args, **_kwargs):
@@ -180,7 +181,8 @@ async def test_generate_first_route_blocks_expensive_generation_when_tokens_are_
     batch = make_batch([make_item()])
     patch_batch(monkeypatch, batch)
 
-    async def fake_get_active_job(_db, _suite_id):
+    async def fake_get_active_job(_db, _suite_id, job_types=None):
+        assert job_types == product_bulk.PRODUCT_BULK_JOB_TYPES
         return None
 
     async def fake_enforce_generation_gate(*_args, **_kwargs):

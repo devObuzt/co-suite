@@ -127,14 +127,21 @@ def serialize_job(job: Optional[GenerationJob], suite_id: Optional[str] = None, 
     }
 
 
-async def get_active_job(db: AsyncSession, suite_id: str) -> Optional[GenerationJob]:
-    result = await db.execute(
+async def get_active_job(
+    db: AsyncSession,
+    suite_id: str,
+    job_types: Optional[set[GenerationJobType]] = None,
+) -> Optional[GenerationJob]:
+    query = (
         select(GenerationJob)
         .where(GenerationJob.suite_id == suite_id)
         .where(GenerationJob.status.in_(ACTIVE_STATUSES))
         .order_by(GenerationJob.created_at.desc())
         .limit(1)
     )
+    if job_types:
+        query = query.where(GenerationJob.type.in_(job_types))
+    result = await db.execute(query)
     job = result.scalar_one_or_none()
     return job
 

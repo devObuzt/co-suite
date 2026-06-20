@@ -476,7 +476,7 @@ async def generate_first(
     batch = await get_batch(db, suite_id, batch_id, current_user)
     if not batch.items:
         raise HTTPException(status_code=400, detail="Product bulk batch has no products.")
-    existing = await get_active_job(db, suite_id)
+    existing = await get_active_job(db, suite_id, job_types=PRODUCT_BULK_JOB_TYPES)
     if existing:
         return serialize_job(existing)
 
@@ -528,7 +528,7 @@ async def generate_all(
         raise HTTPException(status_code=400, detail="Approve a template direction before generating all products.")
     if not any(direction.id == batch.approved_template_id for direction in batch.template_directions):
         raise HTTPException(status_code=400, detail="Approved template direction is no longer available.")
-    existing = await get_active_job(db, suite_id)
+    existing = await get_active_job(db, suite_id, job_types=PRODUCT_BULK_JOB_TYPES)
     if existing:
         return serialize_job(existing)
 
@@ -630,7 +630,7 @@ async def regenerate_asset(
     ):
         raise HTTPException(status_code=400, detail="Product template direction is no longer available.")
 
-    existing = await get_active_job(db, suite_id)
+    existing = await get_active_job(db, suite_id, job_types=PRODUCT_BULK_JOB_TYPES)
     if existing:
         return serialize_job(existing)
 

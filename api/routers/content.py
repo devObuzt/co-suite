@@ -34,6 +34,11 @@ from ..services.publisher import publish_post as _publish_post
 
 router = APIRouter(prefix="/content", tags=["content"])
 
+CONTENT_JOB_TYPES = {
+    GenerationJobType.content_generation,
+    GenerationJobType.content_regeneration,
+}
+
 
 class PostOut(BaseModel):
     id: str
@@ -396,7 +401,7 @@ async def generate_account_content(
 
     _validate_quick_creative_brief(data)
     options = _account_options(data)
-    existing = await get_active_job(db, suite.id)
+    existing = await get_active_job(db, suite.id, job_types=CONTENT_JOB_TYPES)
     if existing:
         return serialize_job(existing)
 
@@ -545,7 +550,7 @@ async def generate_content(
         "use_brand": data.use_brand,
         "creative_brief": data.creative_brief,
     }
-    existing = await get_active_job(db, suite_id)
+    existing = await get_active_job(db, suite_id, job_types=CONTENT_JOB_TYPES)
     if existing:
         return serialize_job(existing)
     if data.prompt:
@@ -734,7 +739,7 @@ async def regenerate_post(
     db: AsyncSession = Depends(get_db),
 ):
     post = await _get_post(suite_id, post_id, current_user, db)
-    existing = await get_active_job(db, suite_id)
+    existing = await get_active_job(db, suite_id, job_types=CONTENT_JOB_TYPES)
     if existing:
         return serialize_job(existing)
 
