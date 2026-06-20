@@ -1,3 +1,5 @@
+import asyncio
+import os
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,9 +15,11 @@ from .routers import billing
 from .routers import analytics
 from .routers import product_bulk
 from .routers import marketing_plans
+from .services.durable_generation_queue import run_forever
 
 app = FastAPI(title=settings.app_name, docs_url="/docs" if settings.debug else None)
 configure_logging()
+_embedded_generation_worker_task: asyncio.Task | None = None
 
 _origins = [o.strip() for o in settings.frontend_url.split(",") if o.strip()]
 _origins += ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"]
@@ -39,6 +43,7 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 async def startup():
     import logging
     log = logging.getLogger(__name__)
+    global _embedded_generation_worker_task
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -84,6 +89,25 @@ async def startup():
     except Exception as e:
         log.error("Database startup failed (check DATABASE_URL env var): %s", e)
         raise
+
+    embedded_worker_enabled = os.getenv("EMBEDDED_GENERATION_WORKER", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if embedded_worker_enabled and (
+        _embedded_generation_worker_task is None or _embedded_generation_worker_task.done()
+    ):
+        _embedded_generation_worker_task = asyncio.create_task(run_forever())
+        log.info("Embedded generation queue worker started in API process.")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _embedded_generation_worker_task
+    if _embedded_generation_worker_task and not _embedded_generation_worker_task.done():
+        _embedded_generation_worker_task.cancel()
 
 
 app.include_router(auth.router, prefix="/api/v1")
