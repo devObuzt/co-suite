@@ -11,6 +11,7 @@ from ..core.database import AsyncSessionLocal
 from ..models.generation_job import GenerationJob, GenerationJobStatus, GenerationJobType
 from .content_generator import generate_content_for_suite
 from .generation_jobs import (
+    STALE_UPDATE_SECONDS,
     classify_provider_limit,
     mark_completed,
     mark_failed,
@@ -146,6 +147,57 @@ async def _mark_retry_or_failed(db: AsyncSession, job: GenerationJob, error: Exc
         await notify_generation_job_alert(updated, "failed_job")
 
 
+async def recover_stale_running_jobs(db: AsyncSession) -> int:
+    now = utcnow()
+    stale_before = now - timedelta(seconds=STALE_UPDATE_SECONDS)
+    result = await db.execute(
+        select(GenerationJob)
+        .where(GenerationJob.status == GenerationJobStatus.running)
+        .where(GenerationJob.updated_at <= stale_before)
+        .order_by(GenerationJob.updated_at.asc())
+        .limit(10)
+    )
+    stale_jobs = result.scalars().all()
+    recovered = 0
+    for job in stale_jobs:
+        next_retry_count = int(job.retry_count or 0) + 1
+        if next_retry_count > int(job.max_retries or 0):
+            await update_job(
+                db,
+                job.id,
+                status=GenerationJobStatus.failed,
+                stage="failed",
+                message="Generation failed after the worker stopped updating this job.",
+                progress=100,
+                error="Generation worker stopped updating this job before it completed.",
+                finished_at=now,
+            )
+            await notify_generation_job_alert(job, "failed_job")
+        else:
+            await update_job(
+                db,
+                job.id,
+                status=GenerationJobStatus.retrying,
+                stage="retrying",
+                message=f"Recovered stale running job. Retrying attempt {next_retry_count} of {job.max_retries}.",
+                progress=0,
+                retry_count=next_retry_count,
+                next_retry_at=now,
+                error="Generation worker stopped updating this job before it completed.",
+            )
+        recovered += 1
+
+    if recovered:
+        log_event(
+            log,
+            logging.WARNING,
+            "Recovered stale running generation jobs.",
+            event="generation_jobs_recovered",
+            recovered=recovered,
+        )
+    return recovered
+
+
 async def execute_claimed_job(
     job_id: str,
     session_factory: async_sessionmaker[AsyncSession] = AsyncSessionLocal,
@@ -238,6 +290,7 @@ async def run_once(
     session_factory: async_sessionmaker[AsyncSession] = AsyncSessionLocal,
 ) -> Optional[str]:
     async with session_factory() as db:
+        await recover_stale_running_jobs(db)
         job = await claim_next_job(db)
         if not job:
             return None
