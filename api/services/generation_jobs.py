@@ -4,7 +4,12 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.observability import log_event, notify_generation_job_alert
 from ..models.generation_job import GenerationJob, GenerationJobStatus, GenerationJobType
+
+import logging
+
+log = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = {
     GenerationJobStatus.queued,
@@ -115,9 +120,9 @@ def serialize_job(job: Optional[GenerationJob], suite_id: Optional[str] = None, 
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         "result": job.result,
         "execution": {
-            "mode": "fastapi_background_tasks",
-            "durable_queue": False,
-            "warning": "Generation runs in a process-local background task and can become stale after deploys or restarts.",
+            "mode": "durable_worker",
+            "durable_queue": True,
+            "warning": None,
         },
     }
 
@@ -131,17 +136,6 @@ async def get_active_job(db: AsyncSession, suite_id: str) -> Optional[Generation
         .limit(1)
     )
     job = result.scalar_one_or_none()
-    retry_at = job.next_retry_at if job else None
-    if retry_at and retry_at.tzinfo is None:
-        retry_at = retry_at.replace(tzinfo=timezone.utc)
-    if job and job.status == GenerationJobStatus.waiting_provider_limit and retry_at and retry_at <= utcnow():
-        job.status = GenerationJobStatus.failed
-        job.stage = "failed"
-        job.message = "AI provider limit wait expired. Please retry."
-        job.progress = 100
-        job.finished_at = utcnow()
-        await db.commit()
-        return None
     return job
 
 
@@ -278,7 +272,7 @@ async def mark_provider_limit(
     job = result.scalar_one_or_none()
     retry_count = (job.retry_count + 1) if job else 1
     now = utcnow()
-    return await update_job(
+    updated = await update_job(
         db,
         job_id,
         status=GenerationJobStatus.waiting_provider_limit,
@@ -292,6 +286,21 @@ async def mark_provider_limit(
         estimated_wait_seconds=wait_seconds,
         error=error,
     )
+    log_event(
+        log,
+        logging.WARNING,
+        "Generation job waiting on provider limit.",
+        event="generation_job_provider_limit",
+        job_id=job_id,
+        suite_id=updated.suite_id if updated else None,
+        provider=provider,
+        model=model,
+        attempt=updated.retry_count if updated else retry_count,
+        status=GenerationJobStatus.waiting_provider_limit.value,
+        safe_error_class="provider_limit",
+    )
+    await notify_generation_job_alert(updated, "provider_limit")
+    return updated
 
 
 async def mark_completed(db: AsyncSession, job_id: str, result: dict) -> Optional[GenerationJob]:
@@ -308,7 +317,7 @@ async def mark_completed(db: AsyncSession, job_id: str, result: dict) -> Optiona
 
 
 async def mark_failed(db: AsyncSession, job_id: str, error: str) -> Optional[GenerationJob]:
-    return await update_job(
+    updated = await update_job(
         db,
         job_id,
         status=GenerationJobStatus.failed,
@@ -318,6 +327,21 @@ async def mark_failed(db: AsyncSession, job_id: str, error: str) -> Optional[Gen
         error=error,
         finished_at=utcnow(),
     )
+    log_event(
+        log,
+        logging.ERROR,
+        "Generation job failed.",
+        event="generation_job_failed",
+        job_id=job_id,
+        suite_id=updated.suite_id if updated else None,
+        provider=updated.provider if updated else None,
+        model=updated.model if updated else None,
+        attempt=updated.retry_count if updated else None,
+        status=GenerationJobStatus.failed.value,
+        safe_error_class="generation_failure",
+    )
+    await notify_generation_job_alert(updated, "failed_job")
+    return updated
 
 
 def classify_provider_limit(error: Exception) -> Optional[dict]:

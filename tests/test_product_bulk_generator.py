@@ -173,7 +173,7 @@ async def test_generate_first_templates_creates_three_candidates_without_provide
     db = FakeAsyncSession(make_suite(), batch)
     progress_events = []
 
-    async def fake_generate_asset_image(_db, asset, _item, _prompt, _filename):
+    async def fake_generate_asset_image(_db, asset, _item, _prompt, _filename, *_args):
         asset.status = ProductBulkAssetStatus.generated
         asset.media_url = f"https://cdn.example/{asset.id}.png"
         return True
@@ -198,6 +198,10 @@ async def test_generate_first_templates_creates_three_candidates_without_provide
     assert all(asset.status == ProductBulkAssetStatus.generated for asset in batch.assets)
     assert all(asset.media_url and asset.media_url.startswith("https://cdn.example/") for asset in batch.assets)
     assert all(asset.ai_metadata["phase"] == "first_product" for asset in batch.assets)
+    assert all(asset.ai_metadata["ai_route"] == "product_bulk_template" for asset in batch.assets)
+    assert all(asset.ai_metadata["provider"] == "google" for asset in batch.assets)
+    assert all(asset.ai_metadata["model_version"] for asset in batch.assets)
+    assert all(asset.ai_metadata["language"] == "en" for asset in batch.assets)
     assert [event["stage"] for event in progress_events] == ["template", "template", "template"]
 
 
@@ -247,7 +251,7 @@ async def test_generate_all_tracks_generated_and_failed_products(monkeypatch):
     db = FakeAsyncSession(make_suite(), batch)
     patch_load_batch(monkeypatch, batch)
 
-    async def fake_generate_asset_image(_db, asset, item, _prompt, _filename):
+    async def fake_generate_asset_image(_db, asset, item, _prompt, _filename, *_args):
         if item.id == item_a.id:
             asset.status = ProductBulkAssetStatus.generated
             asset.media_url = f"https://cdn.example/{asset.id}.png"
@@ -268,6 +272,11 @@ async def test_generate_all_tracks_generated_and_failed_products(monkeypatch):
     assert len(asset_ids) == 2
     assert len(batch.assets) == 2
     assert [asset.ai_metadata["phase"] for asset in batch.assets] == ["full_batch", "full_batch"]
+    assert [asset.ai_metadata["ai_route"] for asset in batch.assets] == ["product_bulk_asset", "product_bulk_asset"]
+    assert [asset.ai_metadata["text_rendering_mode"] for asset in batch.assets] == [
+        "native_text_design",
+        "native_text_design",
+    ]
 
 
 @pytest.mark.asyncio
@@ -293,7 +302,7 @@ async def test_regenerate_product_asset_preserves_original_and_records_feedback(
     db = FakeAsyncSession(make_suite(), batch)
     patch_load_batch(monkeypatch, batch)
 
-    async def fake_generate_asset_image(_db, asset, _item, _prompt, _filename):
+    async def fake_generate_asset_image(_db, asset, _item, _prompt, _filename, *_args):
         asset.status = ProductBulkAssetStatus.generated
         asset.media_url = f"https://cdn.example/{asset.id}.png"
         return True
@@ -315,6 +324,8 @@ async def test_regenerate_product_asset_preserves_original_and_records_feedback(
     new_asset = next(asset for asset in batch.assets if asset.id == new_asset_id)
     assert new_asset.status == ProductBulkAssetStatus.generated
     assert new_asset.ai_metadata["phase"] == "regenerate_asset"
+    assert new_asset.ai_metadata["ai_route"] == "product_bulk_asset"
+    assert new_asset.ai_metadata["provider"] == "google"
     assert new_asset.ai_metadata["regenerated_from_asset_id"] == original_asset.id
     assert new_asset.ai_metadata["feedback"] == "Make the price larger."
     assert "Regeneration feedback: Make the price larger." in new_asset.prompt

@@ -238,6 +238,23 @@ def _strip_json_fences(text: str) -> str:
     return m.group(1) if m else text
 
 
+def _idea_format_counts(content_type: str | None, count: int) -> dict[str, int]:
+    requested = max(1, min(int(count or 1), 3))
+    clean_type = (content_type or "mixed").strip().lower()
+
+    if clean_type == "video":
+        return {"image_count": 0, "carousel_count": 0, "video_count": requested}
+    if clean_type == "carousel":
+        return {"image_count": 0, "carousel_count": requested, "video_count": 0}
+    if clean_type == "image":
+        return {"image_count": requested, "carousel_count": 0, "video_count": 0}
+    if requested >= 3:
+        return {"image_count": requested - 2, "carousel_count": 1, "video_count": 1}
+    if requested == 2:
+        return {"image_count": 1, "carousel_count": 1, "video_count": 0}
+    return {"image_count": 1, "carousel_count": 0, "video_count": 0}
+
+
 def _generate_ideas(
     brand: dict,
     count: int = 3,
@@ -249,18 +266,10 @@ def _generate_ideas(
     """Call Claude to generate post ideas for a given brand."""
     options = options or {}
     content_type = (options.get("content_type") or "mixed").strip()
-    if content_type == "video":
-        video_count, carousel_count, image_count = count, 0, 0
-    elif content_type == "carousel":
-        video_count, carousel_count, image_count = 0, count, 0
-    elif content_type == "image":
-        video_count, carousel_count, image_count = 0, 0, count
-    else:
-        # Keep the default dashboard action fast and predictable. Video is
-        # expensive/slow, so users must choose video explicitly.
-        video_count = 0
-        carousel_count = 1 if count >= 2 else 0
-        image_count = max(1, count - carousel_count)
+    format_counts = _idea_format_counts(content_type, count)
+    image_count = format_counts["image_count"]
+    carousel_count = format_counts["carousel_count"]
+    video_count = format_counts["video_count"]
 
     recent_str = (
         "\n".join(f"- {t}" for t in (recent_topics or [])[:10])
@@ -966,10 +975,14 @@ async def generate_content_for_suite(
     await db.commit()
 
     mode = options.get("mode")
-    if mode == "quick":
-        count = min(count, 1)
+    content_type = (options.get("content_type") or "mixed").strip().lower()
+    if mode == "quick" and content_type == "mixed":
+        count = 3
+    elif mode == "quick":
+        count = max(1, count)
     elif mode == "set":
         count = max(count, 3)
+    count = max(1, min(count, 3))
 
     log.info("Generating %d ideas for suite %s…", count, suite_id)
     _emit_progress(
@@ -982,6 +995,8 @@ async def generate_content_for_suite(
     audience_languages = brand.get("audience_languages") or ["ar"]
     if not audience_languages:
         audience_languages = ["ar"]
+    if mode == "quick" and content_type == "mixed":
+        audience_languages = audience_languages[:1]
 
     all_ideas = []
     lang_jobs = _language_counts(audience_languages, count)

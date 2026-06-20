@@ -236,7 +236,16 @@ def _media_item(url: str) -> dict:
     }
 
 
-def media_readiness_for_post(post: ContentPost) -> dict:
+def platform_media_for_post(post: ContentPost, platform: str) -> list[str]:
+    meta = post.ai_metadata or {}
+    platform_media = meta.get("platform_media") or {}
+    urls = platform_media.get(platform) or []
+    if urls:
+        return [url for url in urls if isinstance(url, str) and url]
+    return [url for url in (post.media_urls or []) if isinstance(url, str) and url]
+
+
+def _media_readiness_for_urls(post: ContentPost, urls: list[str]) -> dict:
     meta = post.ai_metadata or {}
     requires_media = meta.get("requires_media")
     if requires_media is None:
@@ -246,7 +255,6 @@ def media_readiness_for_post(post: ContentPost) -> dict:
             PostFormat.video,
         }
 
-    urls = [url for url in (post.media_urls or []) if isinstance(url, str) and url]
     items = [_media_item(url) for url in urls]
 
     if not requires_media:
@@ -287,4 +295,43 @@ def media_readiness_for_post(post: ContentPost) -> dict:
         "publish_ready": False,
         "reason": "Media URL is not a supported public HTTPS URL.",
         "items": items,
+    }
+
+
+def media_readiness_for_post(post: ContentPost, platforms: Optional[list[str]] = None) -> dict:
+    requested_platforms = [platform for platform in (platforms or []) if platform in {"facebook", "instagram"}]
+    if not requested_platforms:
+        urls = [url for url in (post.media_urls or []) if isinstance(url, str) and url]
+        return _media_readiness_for_urls(post, urls)
+
+    platform_states = {
+        platform: _media_readiness_for_urls(post, platform_media_for_post(post, platform))
+        for platform in requested_platforms
+    }
+    if len(platform_states) == 1:
+        platform, state = next(iter(platform_states.items()))
+        return {**state, "platforms": {platform: state}}
+
+    if all(state.get("publish_ready") for state in platform_states.values()):
+        aggregate_state = "ready"
+        if all(state.get("state") == "not_required" for state in platform_states.values()):
+            aggregate_state = "not_required"
+        return {
+            "state": aggregate_state,
+            "publish_ready": True,
+            "reason": None,
+            "platforms": platform_states,
+        }
+
+    reasons = [
+        f"{platform}: {state.get('reason')}"
+        for platform, state in platform_states.items()
+        if not state.get("publish_ready") and state.get("reason")
+    ]
+    state_names = {state.get("state") for state in platform_states.values()}
+    return {
+        "state": state_names.pop() if len(state_names) == 1 else "blocked",
+        "publish_ready": False,
+        "reason": " ".join(reasons) or "One or more requested platforms do not have publish-ready media.",
+        "platforms": platform_states,
     }

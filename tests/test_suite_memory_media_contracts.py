@@ -7,6 +7,7 @@ from api.models.user import User
 from api.routers.content import (
     GenerateRequest,
     _apply_rejection_metadata,
+    _append_content_learning_log,
     _account_options,
     _mark_regeneration_requested,
     _validate_quick_creative_brief,
@@ -59,6 +60,24 @@ def test_suite_memory_v0_normalizes_legacy_brand_strategy_connections():
     assert memory["platform_connections_summary"]["instagram"]["state"] == "not_connected"
     assert memory["platform_connections_summary"]["facebook"].get("page_access_token") is None
     assert memory["use_brand_default"] is True
+
+
+def test_append_content_learning_log_keeps_recent_structured_events():
+    brand = {"content_learning_logs": [{"type": f"old-{i}"} for i in range(60)]}
+
+    updated = _append_content_learning_log(
+        brand,
+        event_type="text_edit",
+        user_id="user-1",
+        source="post_editor",
+        payload={"from": "هلق", "to": "اسا"},
+    )
+
+    assert len(updated["content_learning_logs"]) == 50
+    latest = updated["content_learning_logs"][-1]
+    assert latest["type"] == "text_edit"
+    assert latest["source"] == "post_editor"
+    assert latest["payload"] == {"from": "هلق", "to": "اسا"}
 
 
 def test_media_readiness_marks_public_media_ready():

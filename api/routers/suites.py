@@ -46,10 +46,15 @@ class SocialLoopRequest(BaseModel):
     id: Optional[str] = None
     name: str = "Social loop"
     status: str = "draft"
+    content_pillars: list[dict] = Field(default_factory=list)
     content_mix: list[dict] = Field(default_factory=list)
     divisions: list[str] = Field(default_factory=list)
     formats: list[dict] = Field(default_factory=list)
     cadence: Optional[dict] = None
+    platforms: list[str] = Field(default_factory=list)
+    languages: list[str] = Field(default_factory=list)
+    approval_flow: Optional[dict] = None
+    scheduling_handoff: Optional[dict] = None
     notes: Optional[str] = None
 
 
@@ -191,7 +196,12 @@ async def list_social_loops(
     if not suite or suite.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Suite not found")
     brand = suite.brand or {}
-    return {"loops": brand.get("social_loops") or [], "suggestions": _loop_suggestions(brand, suite.strategy or {})}
+    strategy = suite.strategy or {}
+    return {
+        "loops": brand.get("social_loops") or [],
+        "suggestions": _loop_suggestions(brand, strategy),
+        "generated_plan": _build_content_plan(brand, strategy, suite.connections or {}),
+    }
 
 
 @router.post("/{suite_id}/loops")
@@ -207,8 +217,7 @@ async def save_social_loop(
         raise HTTPException(status_code=404, detail="Suite not found")
     brand = dict(suite.brand or {})
     loops = list(brand.get("social_loops") or [])
-    loop = data.model_dump()
-    loop["id"] = loop.get("id") or slugify(loop["name"]) or f"loop-{len(loops) + 1}"
+    loop = _normalize_social_loop(data, len(loops))
     existing_idx = next((i for i, item in enumerate(loops) if item.get("id") == loop["id"]), -1)
     if existing_idx >= 0:
         loops[existing_idx] = loop
@@ -218,6 +227,101 @@ async def save_social_loop(
     suite.brand = brand
     await db.commit()
     return {"ok": True, "loop": loop, "loops": loops}
+
+
+def _unique_strings(values: list | tuple | set) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+    return result
+
+
+def _connected_platforms(connections: dict) -> list[str]:
+    platforms = []
+    for platform in ["facebook", "instagram", "tiktok", "google_ads"]:
+        value = connections.get(platform)
+        if isinstance(value, dict) and value:
+            platforms.append(platform)
+    return platforms or ["instagram", "facebook"]
+
+
+def _content_pillars(brand: dict, strategy: dict) -> list[dict]:
+    plan = strategy.get("marketing_plan") or {}
+    candidates = [
+        *(plan.get("content_themes") or []),
+        *(brand.get("content_themes") or []),
+        *(brand.get("services") or brand.get("products") or []),
+        brand.get("unique_value"),
+    ]
+    names = _unique_strings(candidates)[:5] or ["Education", "Trust", "Offer", "Community"]
+    percentages = [30, 25, 20, 15, 10]
+    return [
+        {
+            "name": name,
+            "percentage": percentages[index] if index < len(percentages) else 10,
+            "notes": "Editable pillar for recurring social content.",
+        }
+        for index, name in enumerate(names)
+    ]
+
+
+def _build_content_plan(brand: dict, strategy: dict, connections: dict) -> dict:
+    business_name = (brand.get("name") or "Suite").strip()
+    languages = _unique_strings(brand.get("audience_languages") or brand.get("audience_language_names") or ["en"])
+    platforms = _connected_platforms(connections)
+    return {
+        "id": "generated-social-content-plan",
+        "name": f"{business_name} social content plan",
+        "status": "draft",
+        "content_pillars": _content_pillars(brand, strategy),
+        "content_mix": _loop_suggestions(brand, strategy)["content_mix"],
+        "divisions": _loop_suggestions(brand, strategy)["divisions"],
+        "cadence": {
+            "posts_per_week": 3,
+            "preferred_days": ["Monday", "Wednesday", "Thursday"],
+            "preferred_hours": ["10:00", "19:00"],
+            "review_buffer_hours": 24,
+        },
+        "platforms": platforms,
+        "formats": [
+            {"type": "image", "enabled": True},
+            {"type": "carousel", "enabled": True},
+            {"type": "short_video", "enabled": "instagram" in platforms or "tiktok" in platforms},
+            {"type": "story", "enabled": "instagram" in platforms or "facebook" in platforms},
+        ],
+        "languages": languages,
+        "approval_flow": {
+            "required": True,
+            "steps": ["draft", "owner_review", "approved", "scheduled"],
+            "rejection_path": "Return to draft with feedback before scheduling.",
+        },
+        "scheduling_handoff": {
+            "status": "ready_for_calendar",
+            "target": "suite_calendar",
+            "requires_connected_platform": False,
+            "notes": "Approved items can be handed to the calendar or exported for manual scheduling.",
+        },
+        "notes": "",
+    }
+
+
+def _normalize_social_loop(data: SocialLoopRequest, existing_count: int) -> dict:
+    loop = data.model_dump()
+    loop["id"] = loop.get("id") or slugify(loop["name"]) or f"loop-{existing_count + 1}"
+    loop["content_pillars"] = list(loop.get("content_pillars") or [])
+    loop["content_mix"] = list(loop.get("content_mix") or [])
+    loop["divisions"] = _unique_strings(loop.get("divisions") or [])
+    loop["formats"] = list(loop.get("formats") or [])
+    loop["cadence"] = loop.get("cadence") or {}
+    loop["platforms"] = _unique_strings(loop.get("platforms") or [])
+    loop["languages"] = _unique_strings(loop.get("languages") or [])
+    loop["approval_flow"] = loop.get("approval_flow") or {"required": True, "steps": ["draft", "owner_review", "approved"]}
+    loop["scheduling_handoff"] = loop.get("scheduling_handoff") or {"status": "ready_for_calendar"}
+    return loop
 
 
 def _loop_suggestions(brand: dict, strategy: dict) -> dict:

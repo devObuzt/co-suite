@@ -25,6 +25,7 @@ from ..models.product_bulk import (
 )
 from ..models.suite import Suite
 from ..models.user import User
+from ..services.billing import enforce_generation_gate
 from ..services.generation_jobs import (
     classify_provider_limit,
     create_job,
@@ -64,6 +65,8 @@ MAX_PRODUCT_ROWS = 500
 MAX_ZIP_ENTRIES = 1000
 MAX_MATCHED_IMAGE_BYTES = 15 * 1024 * 1024
 MAX_TOTAL_MATCHED_IMAGE_BYTES = 200 * 1024 * 1024
+PRODUCT_BULK_FIRST_TEMPLATE_TOKENS = 300
+PRODUCT_BULK_ASSET_TOKENS = 180
 
 
 class RegenerateAssetRequest(BaseModel):
@@ -477,6 +480,15 @@ async def generate_first(
     if existing:
         return serialize_job(existing)
 
+    await enforce_generation_gate(
+        suite_id,
+        db,
+        required_tokens=PRODUCT_BULK_FIRST_TEMPLATE_TOKENS,
+        requested_units=1,
+        allow_free_trial=False,
+        event_type="product_bulk_generate_first",
+        metadata={"job_type": GenerationJobType.product_bulk_generate_first.value, "batch_id": batch.id},
+    )
     job = await create_job(
         db,
         suite_id=suite_id,
@@ -484,7 +496,6 @@ async def generate_first(
         user_id=current_user.id,
         input_data={"batch_id": batch.id},
     )
-    background_tasks.add_task(_run_generate_first, suite_id, batch.id, job.id)
     return serialize_job(job)
 
 
@@ -521,6 +532,20 @@ async def generate_all(
     if existing:
         return serialize_job(existing)
 
+    item_count = max(1, len(batch.items or []))
+    await enforce_generation_gate(
+        suite_id,
+        db,
+        required_tokens=item_count * PRODUCT_BULK_ASSET_TOKENS,
+        requested_units=item_count,
+        allow_free_trial=False,
+        event_type="product_bulk_generate_all",
+        metadata={
+            "job_type": GenerationJobType.product_bulk_generate_all.value,
+            "batch_id": batch.id,
+            "template_id": batch.approved_template_id,
+        },
+    )
     job = await create_job(
         db,
         suite_id=suite_id,
@@ -528,7 +553,6 @@ async def generate_all(
         user_id=current_user.id,
         input_data={"batch_id": batch.id, "template_id": batch.approved_template_id},
     )
-    background_tasks.add_task(_run_generate_all, suite_id, batch.id, job.id)
     return serialize_job(job)
 
 
@@ -611,6 +635,19 @@ async def regenerate_asset(
         return serialize_job(existing)
 
     feedback = (data.feedback or "").strip()
+    await enforce_generation_gate(
+        suite_id,
+        db,
+        required_tokens=PRODUCT_BULK_ASSET_TOKENS,
+        requested_units=1,
+        allow_free_trial=False,
+        event_type="product_bulk_regenerate_asset",
+        metadata={
+            "job_type": GenerationJobType.product_bulk_regenerate_asset.value,
+            "batch_id": batch.id,
+            "asset_id": asset.id,
+        },
+    )
     job = await create_job(
         db,
         suite_id=suite_id,
@@ -618,5 +655,4 @@ async def regenerate_asset(
         user_id=current_user.id,
         input_data={"batch_id": batch.id, "asset_id": asset.id, "feedback": feedback},
     )
-    background_tasks.add_task(_run_regenerate_asset, suite_id, batch.id, asset.id, job.id, feedback)
     return serialize_job(job)

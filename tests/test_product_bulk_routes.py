@@ -11,6 +11,7 @@ from api.models.product_bulk import (
     ProductTemplateDirection,
     ProductTemplateDirectionStatus,
 )
+from api.models.generation_job import GenerationJob, GenerationJobStatus, GenerationJobType
 from api.models.suite import Suite
 from api.models.user import User
 from api.routers import product_bulk
@@ -134,6 +135,72 @@ async def test_generate_first_route_rejects_empty_batch(monkeypatch):
 
     assert exc.value.status_code == 400
     assert exc.value.detail == "Product bulk batch has no products."
+
+
+@pytest.mark.asyncio
+async def test_generate_first_route_enqueues_durable_job_without_background_task(monkeypatch):
+    batch = make_batch([make_item()])
+    patch_batch(monkeypatch, batch)
+
+    async def fake_get_active_job(_db, _suite_id):
+        return None
+
+    async def fake_enforce_generation_gate(*_args, **_kwargs):
+        return None
+
+    async def fake_create_job(_db, suite_id, job_type, user_id, input_data):
+        return GenerationJob(
+            id="job-1",
+            suite_id=suite_id,
+            type=job_type,
+            status=GenerationJobStatus.queued,
+            stage="queued",
+            message="Generation queued.",
+            progress=0,
+            created_by=user_id,
+            input=input_data,
+        )
+
+    monkeypatch.setattr(product_bulk, "get_active_job", fake_get_active_job)
+    monkeypatch.setattr(product_bulk, "enforce_generation_gate", fake_enforce_generation_gate)
+    monkeypatch.setattr(product_bulk, "create_job", fake_create_job)
+
+    background_tasks = BackgroundTasks()
+    payload = await product_bulk.generate_first("suite-1", batch.id, background_tasks, make_user(), object())
+
+    assert payload["job_id"] == "job-1"
+    assert payload["status"] == "queued"
+    assert payload["type"] == GenerationJobType.product_bulk_generate_first.value
+    assert payload["execution"]["mode"] == "durable_worker"
+    assert background_tasks.tasks == []
+
+
+@pytest.mark.asyncio
+async def test_generate_first_route_blocks_expensive_generation_when_tokens_are_exhausted(monkeypatch):
+    batch = make_batch([make_item()])
+    patch_batch(monkeypatch, batch)
+
+    async def fake_get_active_job(_db, _suite_id):
+        return None
+
+    async def fake_enforce_generation_gate(*_args, **_kwargs):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "generation_tokens_exhausted",
+                "allowed_actions": ["upgrade_plan", "buy_generation_tokens"],
+            },
+        )
+
+    monkeypatch.setattr(product_bulk, "get_active_job", fake_get_active_job)
+    monkeypatch.setattr(product_bulk, "enforce_generation_gate", fake_enforce_generation_gate)
+
+    with pytest.raises(HTTPException) as exc:
+        await product_bulk.generate_first("suite-1", batch.id, BackgroundTasks(), make_user(), object())
+
+    assert exc.value.status_code == 402
+    assert exc.value.detail["code"] == "generation_tokens_exhausted"
+    assert exc.value.detail["allowed_actions"] == ["upgrade_plan", "buy_generation_tokens"]
 
 
 @pytest.mark.asyncio

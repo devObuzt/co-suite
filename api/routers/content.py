@@ -64,6 +64,18 @@ class GenerateRequest(BaseModel):
     creative_brief: Optional[dict[str, Any]] = None
 
 
+def _effective_generation_count(data: GenerateRequest) -> int:
+    requested = max(1, min(int(data.count or 1), 3))
+    mode = (data.mode or "").strip().lower()
+    content_type = (data.content_type or "mixed").strip().lower()
+
+    if mode == "quick" and content_type == "mixed":
+        return 3
+    if mode == "set":
+        return max(requested, 3)
+    return requested
+
+
 class RegenerateRequest(BaseModel):
     feedback: Optional[str] = None
 
@@ -157,6 +169,29 @@ def _mark_regeneration_requested(post: ContentPost, feedback: str, user_id: str)
     meta["regeneration_requested"] = request
     post.ai_metadata = meta
     return request
+
+
+def _append_content_learning_log(
+    brand: dict | None,
+    *,
+    event_type: str,
+    user_id: str,
+    source: str,
+    payload: dict,
+) -> dict:
+    next_brand = dict(brand or {})
+    logs = list(next_brand.get("content_learning_logs") or [])
+    logs.append(
+        {
+            "type": event_type,
+            "source": source,
+            "payload": payload,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": user_id,
+        }
+    )
+    next_brand["content_learning_logs"] = logs[-50:]
+    return next_brand
 
 
 def _record_publish_attempt(
@@ -348,6 +383,14 @@ async def generate_account_content(
     brand["audience_languages"] = [language]
     brand["name"] = brand.get("name") or current_user.full_name or current_user.email or "Quick Create"
     brand[ACCOUNT_DRAFT_MARKER] = True
+    if data.prompt:
+        brand = _append_content_learning_log(
+            brand,
+            event_type="generation_prompt",
+            user_id=current_user.id,
+            source="account_quick_create",
+            payload={"prompt": data.prompt, "mode": data.mode, "content_type": data.content_type},
+        )
     suite.brand = brand
     await db.commit()
 
@@ -357,7 +400,7 @@ async def generate_account_content(
     if existing:
         return serialize_job(existing)
 
-    count = max(1, min(data.count or 1, 3))
+    count = _effective_generation_count(data)
     content_type = data.content_type or "mixed"
     await enforce_generation_gate(
         suite.id,
@@ -505,13 +548,22 @@ async def generate_content(
     existing = await get_active_job(db, suite_id)
     if existing:
         return serialize_job(existing)
+    if data.prompt:
+        suite.brand = _append_content_learning_log(
+            suite.brand,
+            event_type="generation_prompt",
+            user_id=current_user.id,
+            source="suite_create",
+            payload={"prompt": data.prompt, "mode": data.mode, "content_type": data.content_type},
+        )
 
+    count = _effective_generation_count(data)
     content_type = data.content_type or "mixed"
     await enforce_generation_gate(
         suite_id,
         db,
-        required_tokens=estimate_content_generation_tokens(data.count, content_type),
-        requested_units=max(1, int(data.count or 1)),
+        required_tokens=estimate_content_generation_tokens(count, content_type),
+        requested_units=count,
         allow_free_trial=content_type.lower() != "video",
         event_type="suite_content_generation",
         metadata={"job_type": GenerationJobType.content_generation.value, "content_type": content_type},
@@ -521,7 +573,7 @@ async def generate_content(
         suite_id=suite_id,
         job_type=GenerationJobType.content_generation,
         user_id=current_user.id,
-        input_data={**options, "count": data.count},
+        input_data={**options, "count": count},
     )
     return serialize_job(job)
 
@@ -573,12 +625,27 @@ async def update_post(
     db: AsyncSession = Depends(get_db),
 ):
     post = await _get_post(suite_id, post_id, current_user, db)
+    before = {"caption": post.caption, "hashtags": post.hashtags, "topic": post.topic}
     if data.caption is not None:
         post.caption = data.caption
     if data.hashtags is not None:
         post.hashtags = data.hashtags
     if data.topic is not None:
         post.topic = data.topic
+    suite_result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = suite_result.scalar_one_or_none()
+    if suite:
+        suite.brand = _append_content_learning_log(
+            suite.brand,
+            event_type="post_text_edit",
+            user_id=current_user.id,
+            source="post_editor",
+            payload={
+                "post_id": post_id,
+                "before": before,
+                "after": {"caption": post.caption, "hashtags": post.hashtags, "topic": post.topic},
+            },
+        )
     await db.commit()
     await db.refresh(post)
     return serialize_post(post)
@@ -608,6 +675,16 @@ async def reject_post(
     post = await _get_post(suite_id, post_id, current_user, db)
     reason = _normalize_rejection_reason(data)
     _apply_rejection_metadata(post, reason, current_user.id)
+    suite_result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = suite_result.scalar_one_or_none()
+    if suite:
+        suite.brand = _append_content_learning_log(
+            suite.brand,
+            event_type="post_rejection",
+            user_id=current_user.id,
+            source="content_review",
+            payload={"post_id": post_id, "reason": reason},
+        )
     post.status = PostStatus.rejected
     await db.commit()
     return {"ok": True, "status": "rejected", "reason": reason}
@@ -674,6 +751,13 @@ async def regenerate_post(
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         brand["content_rules"] = rules[-50:]
+        brand = _append_content_learning_log(
+            brand,
+            event_type="regeneration_feedback",
+            user_id=current_user.id,
+            source="regenerate",
+            payload={"post_id": post_id, "feedback": feedback},
+        )
         suite.brand = brand
 
     options = {

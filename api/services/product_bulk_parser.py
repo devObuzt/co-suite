@@ -18,6 +18,17 @@ DEFAULT_HEBREW_MAPPING = {
     "הערות": "notes",
 }
 
+DEFAULT_ARABIC_MAPPING = {
+    "اسم المنتج": "product_name",
+    "الصورة": "image_ref",
+    "الشعار": "slogan",
+}
+
+DEFAULT_LOCALIZED_MAPPING = {
+    **DEFAULT_HEBREW_MAPPING,
+    **DEFAULT_ARABIC_MAPPING,
+}
+
 IMAGE_CONTENT_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -54,7 +65,7 @@ def normalize_filename(value: str) -> str:
 def detect_column_mapping(headers: list[str]) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for header in headers:
-        target = DEFAULT_HEBREW_MAPPING.get(clean_cell(header))
+        target = DEFAULT_LOCALIZED_MAPPING.get(clean_cell(header))
         if target:
             mapping[target] = header
     return mapping

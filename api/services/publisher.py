@@ -6,7 +6,7 @@ tokens stored in the DB instead of hardcoded env vars.
 Image URL strategy:
   1. If media_url already starts with https:// (e.g. R2) → use as-is.
   2. If media_url is a local /static/ path and R2 is configured → upload first.
-  3. Otherwise → publish caption-only (text post) with a warning.
+  3. Otherwise → fail the media publish; text-only requires an explicit route preflight.
 """
 import json
 import logging
@@ -17,7 +17,7 @@ import httpx
 
 from ..core.config import settings
 from ..models.content import ContentPost, PostFormat, PostStatus
-from .media_storage import upload_static_path
+from .media_storage import platform_media_for_post, upload_static_path
 
 log = logging.getLogger(__name__)
 GRAPH = "https://graph.facebook.com/v22.0"
@@ -64,15 +64,6 @@ def _resolve_url(local_or_remote: str) -> Optional[str]:
             log.warning("R2 upload failed: %s", e)
 
     return None
-
-
-def _platform_media(post: ContentPost, platform: str) -> list[str]:
-    meta = post.ai_metadata or {}
-    platform_media = meta.get("platform_media") or {}
-    urls = platform_media.get(platform) or []
-    if urls:
-        return urls
-    return post.media_urls or []
 
 
 # ── Facebook ──────────────────────────────────────────────────────────────────
@@ -153,7 +144,7 @@ def _ig_reel(ig_user_id: str, token: str, url: str, caption: str) -> str:
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def publish_post(post: ContentPost, connections: dict, platforms: list[str]) -> dict:
+def publish_post(post: ContentPost, connections: dict, platforms: list[str], allow_text_only: bool = False) -> dict:
     """
     Publish a ContentPost to the requested platforms.
 
@@ -171,17 +162,19 @@ def publish_post(post: ContentPost, connections: dict, platforms: list[str]) -> 
         fb = connections.get("facebook", {})
         page_id = fb.get("page_id")
         token = fb.get("page_access_token")
-        raw_urls = _platform_media(post, "facebook")
+        raw_urls = platform_media_for_post(post, "facebook")
         public_urls = [resolved for url in raw_urls if (resolved := _resolve_url(url))]
         has_media = bool(public_urls)
         if raw_urls and not has_media:
             results["warnings"].append(
                 "Facebook media is stored locally and couldn't be made public. "
-                "Configure R2 in api/.env to publish media. Publishing text-only."
+                "Configure R2 in api/.env to publish media."
             )
 
         if not page_id or not token:
             results["facebook_error"] = "Facebook not connected"
+        elif not has_media and not allow_text_only:
+            results["facebook_error"] = "Facebook media is not available as a public HTTPS URL."
         else:
             try:
                 if not has_media:
@@ -203,7 +196,7 @@ def publish_post(post: ContentPost, connections: dict, platforms: list[str]) -> 
         ig = connections.get("instagram", {})
         ig_user_id = ig.get("ig_user_id")
         token = ig.get("page_access_token") or connections.get("facebook", {}).get("page_access_token")
-        raw_urls = _platform_media(post, "instagram")
+        raw_urls = platform_media_for_post(post, "instagram")
         public_urls = [resolved for url in raw_urls if (resolved := _resolve_url(url))]
         has_media = bool(public_urls)
 

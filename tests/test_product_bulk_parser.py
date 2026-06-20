@@ -45,6 +45,16 @@ def make_xlsx_with_title_before_headers() -> bytes:
     return out.getvalue()
 
 
+def make_arabic_xlsx() -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["اسم المنتج", "الصورة", "الشعار"])
+    ws.append(["مكتب خشبي", "desk-ar.jpg", "رتب مكتبك"])
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
 def make_zip() -> bytes:
     out = BytesIO()
     with ZipFile(out, "w") as zf:
@@ -68,6 +78,20 @@ def test_detect_column_mapping_supports_hebrew_headers():
     assert mapping["global_addition"] == "תוספת בכל העיצובים"
     assert mapping["notes"] == "הערות"
     assert DEFAULT_HEBREW_MAPPING["שם"] == "product_name"
+
+
+def test_parse_workbook_supports_arabic_headers():
+    parsed = parse_workbook(make_arabic_xlsx())
+
+    assert parsed.headers == ["اسم المنتج", "الصورة", "الشعار"]
+    assert parsed.mapping["product_name"] == "اسم المنتج"
+    assert parsed.mapping["image_ref"] == "الصورة"
+    assert parsed.mapping["slogan"] == "الشعار"
+    assert len(parsed.rows) == 1
+    row = parsed.rows[0]
+    assert row["product_name"] == "مكتب خشبي"
+    assert row["image_ref"] == "desk-ar.jpg"
+    assert row["slogan"] == "رتب مكتبك"
 
 
 def test_parse_workbook_returns_normalized_products():

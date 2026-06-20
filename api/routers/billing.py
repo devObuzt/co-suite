@@ -13,7 +13,7 @@ from ..models.suite import Suite
 from ..models.billing import Subscription, UsageEvent, BillingStatus
 from ..services.billing import (
     get_or_create_subscription, update_seats, apply_payment,
-    get_tier, monthly_total, PRICING, FREEZE_THRESHOLD,
+    get_tier, monthly_total, monthly_token_grant, PRICING, FREEZE_THRESHOLD,
 )
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -27,6 +27,9 @@ class SubscriptionOut(BaseModel):
     status: str
     seat_count: int
     credit_balance: float
+    generation_token_balance: int
+    marketing_budget_balance_usd: float
+    monthly_generation_token_grant: int
     auto_pay_enabled: bool
     monthly_total: float
     price_per_seat: float
@@ -39,8 +42,17 @@ class SubscriptionOut(BaseModel):
 class UsageEventOut(BaseModel):
     id: str
     event_type: str
+    ledger_account: str
+    billing_event_type: str
+    amount_tokens: int
+    balance_after_tokens: Optional[int] = None
+    amount_usd: float
+    balance_after_usd: Optional[float] = None
     actual_cost_usd: float
     billed_amount: float
+    external_ref: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    event_data: Optional[dict] = None
     created_at: datetime
 
     class Config:
@@ -72,6 +84,9 @@ async def get_subscription(
         status=sub.status.value,
         seat_count=sub.seat_count,
         credit_balance=sub.credit_balance,
+        generation_token_balance=sub.generation_token_balance,
+        marketing_budget_balance_usd=sub.marketing_budget_balance_usd,
+        monthly_generation_token_grant=sub.monthly_generation_token_grant or monthly_token_grant(sub.seat_count),
         auto_pay_enabled=sub.auto_pay_enabled,
         monthly_total=monthly_total(sub.seat_count),
         price_per_seat=PRICING[tier],
@@ -112,6 +127,9 @@ async def change_seats(
         status=sub.status.value,
         seat_count=sub.seat_count,
         credit_balance=sub.credit_balance,
+        generation_token_balance=sub.generation_token_balance,
+        marketing_budget_balance_usd=sub.marketing_budget_balance_usd,
+        monthly_generation_token_grant=sub.monthly_generation_token_grant or monthly_token_grant(sub.seat_count),
         auto_pay_enabled=sub.auto_pay_enabled,
         monthly_total=monthly_total(sub.seat_count),
         price_per_seat=PRICING[tier],

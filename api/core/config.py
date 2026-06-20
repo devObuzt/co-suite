@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     morning_subscribe_url: str = ""   # fill in when Morning provides the payment page URL
     morning_pay_url: str = ""         # fill in when Morning provides the pay-balance page URL
 
+    # Observability / incident alerts
+    log_format: str = "json"  # json | text
+    environment: str = "local"
+    telegram_bot_token: str = ""
+    telegram_owner_chat_id: str = ""
+    telegram_admin_chat_id: str = ""
+    observability_alerts_enabled: bool = True
+    provider_limit_alert_min_wait_seconds: int = 60
+    failed_job_alerts_enabled: bool = True
+
     class Config:
         env_file = str(_here / ".env")
         extra = "ignore"

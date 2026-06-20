@@ -100,6 +100,37 @@ def test_autonomous_runner_moves_to_product_bulk_smoke_after_ui_gate() -> None:
     assert decision.department == "QA"
 
 
+def test_autonomous_runner_prioritizes_new_development_over_pm_gate() -> None:
+    board = """
+## Active Tasks
+
+| ID | Milestone | Task | Owner | Status | Acceptance Criteria | Next Handoff |
+| --- | --- | --- | --- | --- | --- | --- |
+| PM-02 | M1 | Autonomous phase control | Project Management | in_progress | Hold RC until gates close. | Developers, QA, Architecture |
+| DEV-D-01 | M1 | Limited account-level generation without Suite | Developers | not_started | Generate without Suite. | Architecture, Design, QA |
+"""
+    decision = choose_next_decision("cosuite", parse_active_tasks(board))
+
+    assert decision.task_id == "DEV-D-01"
+    assert decision.department == "Developers"
+
+
+def test_autonomous_runner_prioritizes_launch_work_over_pm_gate() -> None:
+    board = """
+## Active Tasks
+
+| ID | Milestone | Task | Owner | Status | Acceptance Criteria | Next Handoff |
+| --- | --- | --- | --- | --- | --- | --- |
+| PM-02 | M1 | Autonomous phase control | Project Management | in_progress | Hold RC until gates close. | Developers, QA, Architecture |
+| PROD-LAUNCH-01 | M1 | Production launch cutline and demo-critical scope | Product Manager | not_started | Define launch path. | Architecture, Developers Manager, QA |
+| DEV-LAUNCH-01 | M1 | Durable generation queue and worker execution | Developers | not_started | Jobs run through a durable queue. | DevOps / Infra, QA |
+"""
+    decision = choose_next_decision("cosuite", parse_active_tasks(board))
+
+    assert decision.task_id == "PROD-LAUNCH-01"
+    assert decision.department == "Product Manager"
+
+
 def test_autonomous_runner_prioritizes_product_bulk_arabic_header_task_over_pm_gate() -> None:
     board = """
 ## Active Tasks
