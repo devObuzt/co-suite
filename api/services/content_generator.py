@@ -753,7 +753,7 @@ def _image_variant_specs(idea: dict) -> list[tuple[str, str, str]]:
         _add_variant_spec(specs, "meta_square_1_1", "1:1", "Meta square ad 1:1")
         _add_variant_spec(specs, "story_9_16", "9:16", "Vertical story placement 9:16")
         _add_variant_spec(specs, "facebook", "16:9", "Wide social/ad placement 16:9")
-        _add_variant_spec(specs, "google_landscape_1_91_1", "1.91:1", "Google Ads landscape responsive image")
+        _add_variant_spec(specs, "google_landscape_1_91_1", "16:9", "Google Ads landscape responsive image")
     if "instagram_post_4_5" in ids:
         _add_variant_spec(specs, "instagram", "4:5", "Instagram feed portrait 4:5")
     if "meta_square_1_1" in ids:
@@ -764,7 +764,7 @@ def _image_variant_specs(idea: dict) -> list[tuple[str, str, str]]:
         _add_variant_spec(specs, "facebook", "16:9", "Wide social/ad placement 16:9")
     if "google_ads_all" in ids:
         _add_variant_spec(specs, "google_square_1_1", "1:1", "Google Ads square responsive image")
-        _add_variant_spec(specs, "google_landscape_1_91_1", "1.91:1", "Google Ads landscape responsive image")
+        _add_variant_spec(specs, "google_landscape_1_91_1", "16:9", "Google Ads landscape responsive image")
         _add_variant_spec(specs, "google_portrait_4_5", "4:5", "Google Ads portrait responsive image")
         _add_variant_spec(specs, "google_vertical_9_16", "9:16", "Google Ads vertical responsive image")
         _add_variant_spec(specs, "google_wide_16_9", "16:9", "Google Ads wide responsive image")

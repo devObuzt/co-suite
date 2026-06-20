@@ -136,6 +136,7 @@ def test_quick_image_required_sizes_expand_to_production_variants():
     assert "google_square_1_1" in keys
     assert "google_landscape_1_91_1" in keys
     assert len(keys) == len(set(keys))
+    assert all(aspect != "1.91:1" for _key, aspect, _label in specs)
 
 
 def test_quick_video_required_sizes_expand_to_video_variants():
