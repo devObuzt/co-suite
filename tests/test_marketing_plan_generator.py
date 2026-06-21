@@ -200,14 +200,23 @@ async def test_generate_marketing_plan_deck_uses_anthropic(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_marketing_plan_deck_rejects_empty_ai_json(monkeypatch):
+async def test_generate_marketing_plan_deck_uses_rule_based_fallback_when_ai_json_fails(monkeypatch):
+    calls = []
+
     async def fake_call_text_ai(**kwargs):
+        calls.append(kwargs)
         return "{}"
 
     monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
 
-    with pytest.raises(mpg.MarketingPlanGenerationError):
-        await mpg.generate_marketing_plan_deck(make_suite(), "ar")
+    deck = await mpg.generate_marketing_plan_deck(make_suite(), "ar")
+
+    assert len(calls) == 4
+    assert deck["cover"]["title"] == "الخطة التسويقية – Connec"
+    assert len(deck["sections"]) >= len(mpg.REQUIRED_SECTIONS)
+    assert len(deck["monthly_work_plan"]["items"]) == 8
+    assert all(len(stage["content_ideas"]) == 2 for stage in deck["paid_funnel"]["stages"])
+    mpg.validate_marketing_plan_deck(deck)
 
 
 def test_validate_marketing_plan_deck_rejects_title_only_skeleton():

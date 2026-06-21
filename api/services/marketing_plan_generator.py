@@ -586,6 +586,217 @@ Business/profile data:
 """
 
 
+def build_rule_based_marketing_plan_json(payload: dict[str, Any], language: str) -> dict[str, Any]:
+    """Last-resort complete deck so provider JSON failures never publish an empty shell."""
+    suite = _dict(payload.get("suite"))
+    brand = _dict(payload.get("brand"))
+    strategy = _dict(payload.get("strategy"))
+    planning_inputs = _dict(payload.get("planning_inputs"))
+    is_ar = str(language or "").startswith("ar")
+    name = str(brand.get("name") or suite.get("name") or "OneShare client").strip()
+    industry = str(brand.get("industry") or brand.get("category") or "business").strip()
+    services = _text_list(
+        brand.get("services") or brand.get("products") or strategy.get("services") or strategy.get("products"),
+        8,
+    )
+    audience = str(
+        strategy.get("target_audience")
+        or brand.get("target_audience")
+        or brand.get("audience")
+        or ("الجمهور المحلي المناسب" if is_ar else "the most relevant local audience")
+    ).strip()
+    focus = str(planning_inputs.get("near_term_focus") or planning_inputs.get("planning_notes") or "").strip()
+    service_text = "، ".join(services[:4]) if services else ("الخدمات الأساسية" if is_ar else "core services")
+
+    if is_ar:
+        cover_title = f"الخطة التسويقية – {name}"
+        subtitle = f"خطة نمو عملية لـ {name} في مجال {industry} مبنية على البروفايل، القنوات الرقمية، وافتراضات تحتاج تأكيداً من العميل."
+        sources = ["بروفايل السوت", "بيانات البراند", "الروابط والحسابات المتصلة", "مدخلات التخطيط من العميل"]
+        limitations = [
+            "تحتاج الخطة لتأكيد الميزانية الشهرية قبل إطلاق الحملات.",
+            "يجب تأكيد العروض أو الخدمات التي يريد العميل التركيز عليها هذا الشهر.",
+            "الأرقام النهائية تعتمد على بيانات الحسابات الإعلانية بعد الربط الكامل.",
+        ]
+        section_copy = {
+            "executive_summary": ("الملخص التنفيذي", f"الفرصة الأساسية هي تحويل حضور {name} الرقمي إلى مسار واضح: جذب جمهور مناسب، بناء ثقة، ثم دفع عروض محددة بدون الإكثار من البيع المباشر."),
+            "current_situation": ("الوضع الحالي", f"{name} يعمل في مجال {industry} ويحتاج إلى ربط الرسالة التسويقية بالخدمات الأكثر طلباً: {service_text}."),
+            "asset_audit": ("تدقيق الأصول الرقمية", "الأولوية هي تثبيت الهوية البصرية، توحيد الرسائل، والتأكد من أن الموقع والحسابات الاجتماعية تقود المستخدم إلى خطوة واضحة."),
+            "market_demand": ("الطلب والفرصة في السوق", f"الجمهور يبحث عن حلول واضحة وسريعة الفهم في {industry}. المحتوى يجب أن يشرح المشكلة، النتيجة، ولماذا {name} خيار مناسب."),
+            "competitors": ("المنافسون والتموضع", "المنافسة غالباً تعرض خدمات متشابهة؛ الفوز يكون بوضوح العرض، دليل الثقة، وسهولة التواصل."),
+            "audience": ("الجمهور المستهدف", f"الجمهور الأساسي: {audience}. يجب مخاطبته بلغته اليومية، مع أمثلة قريبة من واقعه واحتياجاته."),
+            "positioning": ("التموضع والرسالة", f"الرسالة المقترحة: {name} يساعد العميل على فهم الخيار الصحيح واتخاذ قرار أسرع بثقة أكبر."),
+            "channel_strategy": ("استراتيجية القنوات", "استخدم إنستغرام وفيسبوك للثقة والجذب، جوجل للطلب المباشر، والموقع لتحويل الزائر إلى تواصل أو حجز."),
+            "content_strategy": ("استراتيجية المحتوى", "اعتمد مزيج 70% جذب وتعليم، 20% ثقة وإثبات، 10% بيع مباشر فقط حتى لا يشعر الجمهور بالإزعاج."),
+            "campaign_ideas": ("أفكار حملات", "ابدأ بحملة وعي حول المشكلة، ثم حملة إثبات نتائج، ثم عرض واضح محدود بزمن أو خدمة محددة."),
+            "action_plan": ("خطة التنفيذ", "خلال 30 يوماً: تثبيت الرسالة والمحتوى. خلال 60 يوماً: اختبار الإعلانات. خلال 90 يوماً: توسيع الأفضل أداءً."),
+            "kpis": ("مؤشرات القياس", "راقب الوصول، التفاعل، الرسائل، تكلفة المحادثة أو الليد، ونسبة تحويل الزائر إلى طلب."),
+            "budget": ("اتجاه الميزانية", "ابدأ بميزانية اختبار صغيرة موزعة بين وعي وتحويل، ثم انقل الميزانية تدريجياً إلى الحملات الأفضل أداءً."),
+            "next_steps": ("الخطوات القادمة", "أكد الأولويات الشهرية، جهز الأصول الناقصة، ثم حوّل عناصر الخطة إلى محتوى وجدولة وحملات."),
+        }
+        monthly_titles = [
+            "بوست تعليمي يشرح المشكلة الأساسية",
+            "ريل قصير يوضح نتيجة ملموسة",
+            "كاروسيل أسئلة وأجوبة",
+            "ستوري يومي مع سؤال للجمهور",
+            "بوست إثبات ثقة أو تجربة عميل",
+            "فيديو قصير عن خدمة محددة",
+            "كاروسيل مقارنة قبل وبعد",
+            "بوست عرض خفيف بنسبة بيع محدودة",
+        ]
+        funnel_goals = {
+            "Awareness": "تعريف الجمهور بالمشكلة وباسم البراند",
+            "Consideration": "إقناع الجمهور أن الحل مناسب له",
+            "Conversion": "تحويل المهتم إلى رسالة أو طلب",
+            "Loyalty": "إعادة تفعيل العملاء والمتابعين",
+            "Ambassador": "تحويل العملاء الراضين إلى مصدر توصيات",
+        }
+    else:
+        cover_title = f"Marketing plan – {name}"
+        subtitle = f"A practical growth plan for {name} in {industry}, based on the suite profile and connected channels."
+        sources = ["suite profile", "brand data", "connected links/accounts", "planning inputs"]
+        limitations = [
+            "Monthly budget must be confirmed before campaign launch.",
+            "The client should confirm near-term offers and service priorities.",
+            "Final metrics depend on connected ad-account data.",
+        ]
+        section_copy = {
+            section_id: (title, f"{title} for {name}: focus on clear offers, trust signals, and measurable next actions.")
+            for section_id, title in REQUIRED_SECTIONS
+        }
+        monthly_titles = [
+            "Educational problem explainer",
+            "Short proof reel",
+            "FAQ carousel",
+            "Daily audience question story",
+            "Trust proof post",
+            "Service-specific short video",
+            "Before/after carousel",
+            "Soft sales offer post",
+        ]
+        funnel_goals = {stage: f"Move the audience through {stage.lower()} with clear, measurable content." for stage in FUNNEL_STAGES}
+
+    sections = []
+    for section_id, fallback_title in REQUIRED_SECTIONS:
+        title, summary = section_copy.get(section_id, (fallback_title, fallback_title))
+        sections.append(
+            {
+                "id": section_id,
+                "title": title,
+                "summary": summary,
+                "bullets": [
+                    f"{title}: اربط الرسالة بما يحتاجه الجمهور فعلياً." if is_ar else f"{title}: tie the message to the audience need.",
+                    "استخدم دليل ثقة واضح قبل طلب الشراء." if is_ar else "Use a clear trust signal before asking for conversion.",
+                    "حوّل كل فكرة إلى مخرج قابل للتوليد أو النشر." if is_ar else "Turn each idea into a generatable or publishable asset.",
+                ],
+                "cards": [
+                    {
+                        "title": "توصية عملية" if is_ar else "Practical recommendation",
+                        "body": summary,
+                        "points": [
+                            "ابدأ بقياس أسبوعي" if is_ar else "Start with weekly measurement",
+                            "عدّل حسب النتائج" if is_ar else "Adjust based on results",
+                        ],
+                    }
+                ],
+                "metrics": [
+                    {
+                        "label": "مؤشر متابعة" if is_ar else "Tracking metric",
+                        "value": "أسبوعي" if is_ar else "weekly",
+                    }
+                ],
+            }
+        )
+
+    monthly_items = []
+    for index, title in enumerate(monthly_titles, start=1):
+        objective = "attraction" if index <= 5 else ("trust" if index <= 7 else "sales")
+        fmt = "video" if index in {2, 6} else ("carousel" if index in {3, 7} else "image")
+        prompt = (
+            f"ولّد {title} لـ {name}. ركّز على {service_text}. استخدم لغة الجمهور، واحفظ البيع المباشر لعناصر قليلة."
+            if is_ar
+            else f"Generate {title} for {name}. Focus on {service_text} with clear audience language."
+        )
+        monthly_items.append(
+            {
+                "id": f"monthly-content-{index}",
+                "title": title,
+                "objective": objective,
+                "platforms": ["instagram", "facebook"],
+                "placement": "reel" if fmt == "video" else ("carousel" if fmt == "carousel" else "post"),
+                "recommended_output": {"format": fmt, "production_mode": "ai"},
+                "prompt": prompt,
+                "needs_user_asset": fmt == "video",
+                "notes": "يمكن استخدام أصل من العميل إذا توفر." if is_ar else "Use a client asset if available.",
+            }
+        )
+
+    funnel_stages = []
+    for stage in FUNNEL_STAGES:
+        funnel_stages.append(
+            {
+                "stage": stage,
+                "goal": funnel_goals[stage],
+                "audience": audience,
+                "budget_direction": "اختبار صغير ثم توسيع الأفضل أداءً." if is_ar else "Start small, then scale winners.",
+                "content_ideas": [
+                    {
+                        "id": f"{stage.lower()}-1",
+                        "title": f"{stage}: فكرة فيديو" if is_ar else f"{stage}: video idea",
+                        "recommended_outputs": ["video"],
+                        "prompt": f"ولّد فيديو قصير لمرحلة {stage} لـ {name}." if is_ar else f"Generate a short {stage} video for {name}.",
+                    },
+                    {
+                        "id": f"{stage.lower()}-2",
+                        "title": f"{stage}: فكرة صورة/كاروسيل" if is_ar else f"{stage}: image/carousel idea",
+                        "recommended_outputs": ["image", "carousel"],
+                        "prompt": f"ولّد إعلان صورة أو كاروسيل لمرحلة {stage} لـ {name}." if is_ar else f"Generate an image or carousel ad for {stage}.",
+                    },
+                ],
+            }
+        )
+
+    return {
+        "cover": {
+            "title": cover_title,
+            "subtitle": subtitle,
+            "chips": [industry, "OneShare", "Social", "Paid Ads", "Content"],
+            "image_prompt": f"Premium digital marketing plan cover for {name}",
+        },
+        "research_summary": {
+            "sources_used": sources,
+            "confidence": "medium",
+            "limitations": limitations,
+        },
+        "monthly_work_plan": {
+            "client_focus_questions": [
+                "ما المنتجات أو الخدمات أو العروض التي تريد التركيز عليها هذا الشهر؟"
+                if is_ar
+                else "Which products, services, offers, or campaigns should we focus on this month?"
+            ],
+            "calendar_context": {
+                "countries": _text_list(brand.get("audience_locations") or brand.get("countries"), 4),
+                "religions_considered": ["Islam", "Judaism", "Christianity"],
+                "seasonal_notes": [
+                    "افحص المناسبات المحلية والأعياد قبل الجدولة." if is_ar else "Check local holidays and events before scheduling."
+                ],
+            },
+            "content_mix": [
+                {"type": "attraction", "percentage": 70},
+                {"type": "trust", "percentage": 20},
+                {"type": "sales", "percentage": 10},
+            ],
+            "daily_story_direction": [
+                "اسأل سؤالاً قصيراً للجمهور." if is_ar else "Ask a short audience question.",
+                "اعرض دليل ثقة أو نتيجة." if is_ar else "Show proof or a result.",
+                "ذكّر بخطوة التواصل بدون ضغط." if is_ar else "Remind users of the next step without pressure.",
+            ],
+            "items": monthly_items,
+        },
+        "paid_funnel": {"stages": funnel_stages},
+        "sections": sections,
+    }
+
+
 async def parse_or_repair_marketing_plan_json(raw: str, language: str) -> dict[str, Any]:
     parsed = parse_marketing_plan_json(raw)
     if parsed:
@@ -617,7 +828,11 @@ async def generate_compact_marketing_plan_json(payload: dict[str, Any], language
     if parsed:
         return parsed
     log.warning("Compact marketing plan fallback returned invalid JSON; attempting one repair.")
-    return await parse_or_repair_marketing_plan_json(compact_raw, language)
+    repaired = await parse_or_repair_marketing_plan_json(compact_raw, language)
+    if repaired:
+        return repaired
+    log.error("All marketing plan AI JSON attempts failed; using rule-based complete fallback deck.")
+    return build_rule_based_marketing_plan_json(payload, language)
 
 
 def normalize_marketing_plan_deck(
