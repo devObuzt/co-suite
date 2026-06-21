@@ -17,6 +17,8 @@ PLAN_VERSION = "marketing_plan_deck_v1"
 PROMPT_PAYLOAD_CHAR_LIMIT = 16000
 MARKETING_PLAN_MAX_TOKENS = 9000
 MARKETING_PLAN_TIMEOUT_SECONDS = 320
+MARKETING_PLAN_REPAIR_MAX_TOKENS = 7000
+MARKETING_PLAN_REPAIR_TIMEOUT_SECONDS = 220
 
 
 class MarketingPlanGenerationError(RuntimeError):
@@ -430,6 +432,44 @@ Rules:
 - No markdown, no comments, no surrounding text. JSON only."""
 
 
+def build_marketing_plan_repair_prompt(raw: str, language: str) -> str:
+    lang_name = LANG_NAMES.get(language, language or "English")
+    return f"""Repair the following marketing-plan response into valid JSON only.
+
+Output language: {lang_name}.
+Do not explain. Do not wrap in markdown.
+If the response is truncated or malformed, complete the missing required fields with concise, useful content in the requested language.
+Keep it compact but not empty.
+
+Required top-level keys:
+cover, research_summary, monthly_work_plan, paid_funnel, sections.
+
+Every section must include: id, title, summary, bullets, cards, metrics.
+monthly_work_plan must include at least 8 items.
+paid_funnel must include Awareness, Consideration, Conversion, Loyalty, Ambassador, each with at least 2 content_ideas.
+
+Malformed source:
+{raw[:24000]}
+"""
+
+
+async def parse_or_repair_marketing_plan_json(raw: str, language: str) -> dict[str, Any]:
+    parsed = parse_marketing_plan_json(raw)
+    if parsed:
+        return parsed
+
+    log.warning("Marketing plan AI returned invalid JSON; attempting repair. Raw preview: %.500s", raw)
+    repaired = await call_text_ai(
+        provider="anthropic",
+        model=settings.anthropic_text_model,
+        max_tokens=MARKETING_PLAN_REPAIR_MAX_TOKENS,
+        messages=[{"role": "user", "content": build_marketing_plan_repair_prompt(raw, language)}],
+        system="You repair malformed AI JSON into strict valid JSON only.",
+        timeout=MARKETING_PLAN_REPAIR_TIMEOUT_SECONDS,
+    )
+    return parse_marketing_plan_json(repaired)
+
+
 def normalize_marketing_plan_deck(
     raw: dict[str, Any],
     suite_name: str,
@@ -534,7 +574,7 @@ async def generate_marketing_plan_deck(
         system="You create rigorous, client-ready marketing strategy decks. Return JSON only.",
         timeout=MARKETING_PLAN_TIMEOUT_SECONDS,
     )
-    parsed = parse_marketing_plan_json(raw)
+    parsed = await parse_or_repair_marketing_plan_json(raw, output_language)
     if not parsed:
         raise MarketingPlanGenerationError("Marketing plan AI response was not valid JSON.")
     deck = normalize_marketing_plan_deck(parsed, suite.name, output_language, planning_inputs=planning_inputs)
