@@ -23,6 +23,51 @@ def make_suite() -> Suite:
     )
 
 
+def complete_plan_payload(title: str = "Connec plan") -> dict:
+    return {
+        "cover": {"title": title, "subtitle": "Practical growth"},
+        "research_summary": {
+            "sources_used": ["manual profile", "instagram", "website"],
+            "limitations": ["Validate budget and current campaign priorities"],
+        },
+        "monthly_work_plan": {
+            "daily_story_direction": ["Show daily proof", "Answer common questions", "Publish clear offers"],
+            "items": [
+                {
+                    "title": f"Content item {i}",
+                    "prompt": f"Create content item {i}",
+                    "recommended_output": {"format": "image"},
+                }
+                for i in range(1, 9)
+            ],
+        },
+        "paid_funnel": {
+            "stages": [
+                {
+                    "stage": stage,
+                    "goal": f"Goal for {stage}",
+                    "content_ideas": [
+                        {"title": f"{stage} idea 1", "recommended_outputs": ["video"], "prompt": "Create video"},
+                        {"title": f"{stage} idea 2", "recommended_outputs": ["image"], "prompt": "Create image"},
+                    ],
+                }
+                for stage in mpg.FUNNEL_STAGES
+            ]
+        },
+        "sections": [
+            {
+                "id": section_id,
+                "title": section_title,
+                "summary": f"Summary for {section_title}",
+                "bullets": ["First practical point", "Second practical point", "Third practical point"],
+                "cards": [{"title": "Recommendation", "body": "A useful action", "points": ["Start here"]}],
+                "metrics": [{"label": "Metric", "value": "Weekly target"}],
+            }
+            for section_id, section_title in mpg.REQUIRED_SECTIONS
+        ],
+    }
+
+
 def test_normalize_marketing_plan_deck_adds_required_sections():
     deck = mpg.normalize_marketing_plan_deck(
         {
@@ -140,46 +185,7 @@ async def test_generate_marketing_plan_deck_uses_anthropic(monkeypatch):
 
     async def fake_call_text_ai(**kwargs):
         calls.update(kwargs)
-        return json.dumps(
-            {
-                "cover": {"title": "Connec plan", "subtitle": "Practical growth"},
-                "research_summary": {
-                    "sources_used": ["manual profile", "instagram"],
-                    "limitations": ["Validate budget and current campaign priorities"],
-                },
-                "monthly_work_plan": {
-                    "daily_story_direction": ["Show daily proof", "Answer common questions"],
-                    "items": [
-                        {"title": "Founder trust reel", "prompt": "Create a trust reel", "recommended_output": {"format": "video"}},
-                        {"title": "Offer carousel", "prompt": "Create an offer carousel", "recommended_output": {"format": "carousel"}},
-                    ],
-                },
-                "paid_funnel": {
-                    "stages": [
-                        {
-                            "stage": "Awareness",
-                            "goal": "Reach local business owners",
-                            "content_ideas": [
-                                {"title": "Pain opener", "recommended_outputs": ["video"], "prompt": "Create awareness video"}
-                            ],
-                        }
-                    ]
-                },
-                "sections": [
-                    {
-                        "id": "executive_summary",
-                        "summary": "Start with the strongest offers.",
-                        "bullets": ["Lead with proof", "Make the offer obvious"],
-                        "cards": [{"title": "Main move", "body": "Turn existing services into clear packages."}],
-                    },
-                    {
-                        "id": "content_strategy",
-                        "summary": "Use a mix of education, proof, and conversion content.",
-                        "bullets": ["70% attraction", "20% trust", "10% sales"],
-                    },
-                ],
-            }
-        )
+        return json.dumps(complete_plan_payload())
 
     monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
 
@@ -209,6 +215,53 @@ def test_validate_marketing_plan_deck_rejects_title_only_skeleton():
 
     with pytest.raises(mpg.MarketingPlanGenerationError):
         mpg.validate_marketing_plan_deck(deck)
+
+
+def test_validate_marketing_plan_deck_rejects_monthly_only_empty_sections():
+    payload = complete_plan_payload()
+    payload["paid_funnel"] = {"stages": [{"stage": stage, "goal": f"Goal {stage}"} for stage in mpg.FUNNEL_STAGES]}
+    payload["sections"] = [{"id": section_id, "title": title} for section_id, title in mpg.REQUIRED_SECTIONS]
+    deck = mpg.normalize_marketing_plan_deck(payload, "Connec", "ar")
+
+    with pytest.raises(mpg.MarketingPlanGenerationError, match="empty sections"):
+        mpg.validate_marketing_plan_deck(deck)
+
+
+def test_normalize_marketing_plan_deck_accepts_ai_field_aliases():
+    payload = complete_plan_payload()
+    payload["sections"] = [
+        {
+            "id": section_id,
+            "name": section_title,
+            "overview": f"Overview for {section_title}",
+            "actions": [{"title": "Action", "description": "Do this next"}],
+            "kpis": [{"name": "Lead signal", "target": "Weekly check"}],
+        }
+        for section_id, section_title in mpg.REQUIRED_SECTIONS
+    ]
+    payload["paid_funnel"] = {
+        "stages": [
+            {
+                "name": stage,
+                "objective": f"Objective {stage}",
+                "ideas": [
+                    {"headline": f"{stage} alt 1", "formats": ["video"], "description": "Video prompt"},
+                    f"{stage} alt 2",
+                ],
+            }
+            for stage in mpg.FUNNEL_STAGES
+        ]
+    }
+
+    deck = mpg.normalize_marketing_plan_deck(payload, "Connec", "ar")
+
+    assert deck["sections"][0]["summary"].startswith("Overview")
+    assert deck["sections"][0]["bullets"] == ["Action"]
+    assert deck["sections"][0]["cards"][0]["body"] == "Do this next"
+    assert deck["sections"][0]["metrics"][0]["label"] == "Lead signal"
+    assert deck["paid_funnel"]["stages"][0]["content_ideas"][0]["title"].endswith("alt 1")
+    assert deck["paid_funnel"]["stages"][0]["content_ideas"][1]["prompt"].endswith("alt 2")
+    mpg.validate_marketing_plan_deck(deck)
 
 
 @pytest.mark.asyncio

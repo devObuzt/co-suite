@@ -119,6 +119,36 @@ def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _first_present(source: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = source.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _text_list(value: Any, limit: int = 8) -> list[str]:
+    items = []
+    for item in _list(value):
+        if isinstance(item, str) and item.strip():
+            items.append(item.strip())
+        elif isinstance(item, (int, float)):
+            items.append(str(item))
+        elif isinstance(item, dict):
+            text = str(
+                item.get("title")
+                or item.get("name")
+                or item.get("summary")
+                or item.get("body")
+                or item.get("description")
+                or item.get("text")
+                or ""
+            ).strip()
+            if text:
+                items.append(text)
+    return items[:limit]
+
+
 def _normalize_card(card: Any) -> dict[str, Any] | None:
     if isinstance(card, str):
         return {"title": card, "body": ""}
@@ -244,16 +274,47 @@ def _normalize_paid_funnel(source: Any) -> dict[str, Any]:
     for fallback in FUNNEL_STAGES:
         raw = _dict(by_stage.get(fallback.lower()))
         ideas = []
-        for index, raw_idea in enumerate(_list(raw.get("content_ideas")), start=1):
+        raw_ideas = _first_present(
+            raw,
+            "content_ideas",
+            "ideas",
+            "content",
+            "recommended_content",
+            "ad_ideas",
+            "campaign_ideas",
+            "creative_ideas",
+        )
+        for index, raw_idea in enumerate(_list(raw_ideas), start=1):
             if not isinstance(raw_idea, dict):
-                continue
-            title = str(raw_idea.get("title") or raw_idea.get("name") or f"{fallback} idea {index}").strip()
+                if isinstance(raw_idea, str) and raw_idea.strip():
+                    raw_idea = {"title": raw_idea, "prompt": raw_idea}
+                else:
+                    continue
+            title = str(
+                raw_idea.get("title")
+                or raw_idea.get("name")
+                or raw_idea.get("headline")
+                or f"{fallback} idea {index}"
+            ).strip()
+            prompt = str(
+                raw_idea.get("prompt")
+                or raw_idea.get("body")
+                or raw_idea.get("description")
+                or raw_idea.get("summary")
+                or title
+            ).strip()
             idea = {
                 "id": str(raw_idea.get("id") or f"{fallback.lower()}-{index}").strip(),
                 "title": title,
-                "recommended_outputs": _string_list(raw_idea.get("recommended_outputs"), 5),
-                "prompt": str(raw_idea.get("prompt") or title).strip(),
-                "notes": str(raw_idea.get("notes") or "").strip(),
+                "recommended_outputs": _text_list(
+                    raw_idea.get("recommended_outputs")
+                    or raw_idea.get("outputs")
+                    or raw_idea.get("formats")
+                    or raw_idea.get("format"),
+                    5,
+                ),
+                "prompt": prompt,
+                "notes": str(raw_idea.get("notes") or raw_idea.get("rationale") or "").strip(),
             }
             idea["generation_request"] = _generation_request_for_item(
                 {"title": title, "prompt": idea["prompt"], "recommended_outputs": idea["recommended_outputs"]}
@@ -262,9 +323,9 @@ def _normalize_paid_funnel(source: Any) -> dict[str, Any]:
         stages.append(
             {
                 "stage": str(raw.get("stage") or fallback).strip(),
-                "goal": str(raw.get("goal") or "").strip(),
-                "audience": str(raw.get("audience") or "").strip(),
-                "budget_direction": str(raw.get("budget_direction") or "").strip(),
+                "goal": str(raw.get("goal") or raw.get("objective") or "").strip(),
+                "audience": str(raw.get("audience") or raw.get("target_audience") or "").strip(),
+                "budget_direction": str(raw.get("budget_direction") or raw.get("budget") or "").strip(),
                 "content_ideas": ideas[:8],
             }
         )
@@ -273,13 +334,30 @@ def _normalize_paid_funnel(source: Any) -> dict[str, Any]:
 
 def _normalize_section(section_id: str, fallback_title: str, source: dict[str, Any] | None = None) -> dict[str, Any]:
     source = source or {}
-    cards = [_normalize_card(card) for card in _list(source.get("cards"))]
-    metrics = [_normalize_metric(metric) for metric in _list(source.get("metrics"))]
+    raw_cards = _first_present(
+        source,
+        "cards",
+        "items",
+        "recommendations",
+        "actions",
+        "examples",
+        "opportunities",
+        "ideas",
+    )
+    cards = [_normalize_card(card) for card in _list(raw_cards)]
+    metrics = [_normalize_metric(metric) for metric in _list(_first_present(source, "metrics", "kpis", "measurements"))]
+    summary = str(
+        _first_present(source, "summary", "overview", "description", "body", "insight", "analysis") or ""
+    ).strip()
+    bullets = _text_list(
+        _first_present(source, "bullets", "points", "takeaways", "recommendations", "actions", "findings"),
+        10,
+    )
     return {
         "id": section_id,
-        "title": str(source.get("title") or fallback_title).strip(),
-        "summary": str(source.get("summary") or source.get("body") or "").strip(),
-        "bullets": _string_list(source.get("bullets") or source.get("points"), 10),
+        "title": str(source.get("title") or source.get("name") or fallback_title).strip(),
+        "summary": summary,
+        "bullets": bullets,
         "cards": [card for card in cards if card][:6],
         "metrics": [metric for metric in metrics if metric][:6],
     }
@@ -623,6 +701,57 @@ def marketing_plan_content_score(deck: dict[str, Any]) -> int:
 
 
 def validate_marketing_plan_deck(deck: dict[str, Any]) -> None:
+    sections = [section for section in _list(deck.get("sections")) if isinstance(section, dict)]
+    by_section_id = {str(section.get("id") or "").strip(): section for section in sections}
+    missing_sections = []
+    empty_sections = []
+    for section_id, _title in REQUIRED_SECTIONS:
+        section = by_section_id.get(section_id)
+        if not section:
+            missing_sections.append(section_id)
+            continue
+        has_content = any(
+            (
+                str(section.get("summary") or "").strip(),
+                _string_list(section.get("bullets"), 12),
+                _list(section.get("cards")),
+                _list(section.get("metrics")),
+            )
+        )
+        if not has_content:
+            empty_sections.append(section_id)
+    if missing_sections or empty_sections:
+        details = []
+        if missing_sections:
+            details.append(f"missing sections: {', '.join(missing_sections)}")
+        if empty_sections:
+            details.append(f"empty sections: {', '.join(empty_sections)}")
+        raise MarketingPlanGenerationError("Marketing plan AI response was incomplete; " + "; ".join(details) + ".")
+
+    monthly_items = _list(_dict(deck.get("monthly_work_plan")).get("items"))
+    if len(monthly_items) < 8:
+        raise MarketingPlanGenerationError(
+            f"Marketing plan AI response was incomplete; monthly work plan has {len(monthly_items)} items."
+        )
+
+    funnel_stages = _list(_dict(deck.get("paid_funnel")).get("stages"))
+    ideas_by_stage = {
+        str(stage.get("stage") or "").strip(): len(_list(stage.get("content_ideas")))
+        for stage in funnel_stages
+        if isinstance(stage, dict)
+    }
+    sparse_stages = [
+        stage
+        for stage in FUNNEL_STAGES
+        if ideas_by_stage.get(stage, 0) < 2
+    ]
+    if sparse_stages:
+        raise MarketingPlanGenerationError(
+            "Marketing plan AI response was incomplete; paid funnel needs at least 2 ideas for: "
+            + ", ".join(sparse_stages)
+            + "."
+        )
+
     score = marketing_plan_content_score(deck)
     if score < 18:
         raise MarketingPlanGenerationError(
