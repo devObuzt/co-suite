@@ -155,6 +155,56 @@ def test_normalize_marketing_plan_deck_preserves_monthly_work_plan_and_paid_funn
     assert deck["paid_funnel"]["stages"][0]["content_ideas"][0]["generation_request"]["content_type"] == "mixed"
 
 
+def test_normalize_marketing_plan_deck_expands_social_plan_to_recommended_monthly_cadence():
+    payload = complete_plan_payload()
+    payload["monthly_work_plan"]["recommended_weekly_posts"] = 3
+    payload["monthly_work_plan"]["cadence_reason"] = "The client has enough owned channels for three focused posts per week."
+
+    deck = mpg.normalize_marketing_plan_deck(payload, "Connec", "ar")
+    monthly = deck["monthly_work_plan"]
+
+    assert monthly["recommended_weekly_posts"] == 3
+    assert monthly["recommended_monthly_posts"] == 12
+    assert "three focused posts" in monthly["cadence_reason"]
+    assert len(monthly["items"]) >= 12
+
+
+def test_normalize_marketing_plan_deck_keeps_real_world_production_modes_not_ai_only():
+    payload = complete_plan_payload()
+    payload["monthly_work_plan"]["items"] = [
+        {
+            "title": "Founder explainer",
+            "placement": "reel",
+            "recommended_output": {"format": "video", "production_mode": "talking_head"},
+            "prompt": "Record the founder explaining the offer.",
+            "needs_user_asset": True,
+        },
+        {
+            "title": "Office trust walkthrough",
+            "placement": "reel",
+            "recommended_output": {"format": "video", "production_mode": "office_video"},
+            "prompt": "Film the office and team.",
+            "needs_user_asset": True,
+        },
+        {
+            "title": "Product/service proof",
+            "placement": "post",
+            "recommended_output": {"format": "image", "production_mode": "product_photo"},
+            "prompt": "Use real product or service proof.",
+            "needs_user_asset": True,
+        },
+    ]
+
+    deck = mpg.normalize_marketing_plan_deck(payload, "Connec", "ar")
+    modes = [item["recommended_output"]["production_mode"] for item in deck["monthly_work_plan"]["items"]]
+    action_plan = mpg.normalize_marketing_action_plan({}, deck, "ar")
+
+    assert {"talking_head", "office_video", "product_photo"}.issubset(set(modes))
+    assert {"human_video", "location_video", "product_photos"}.issubset(
+        {asset for item in action_plan["social_items"] for asset in item["required_assets"]}
+    )
+
+
 def test_build_marketing_plan_prompt_requests_required_json_and_language():
     prompt = mpg.build_marketing_plan_prompt(
         {
@@ -214,7 +264,7 @@ async def test_generate_marketing_plan_deck_uses_rule_based_fallback_when_ai_jso
     assert len(calls) == 4
     assert deck["cover"]["title"] == "الخطة التسويقية – Connec"
     assert len(deck["sections"]) >= len(mpg.REQUIRED_SECTIONS)
-    assert len(deck["monthly_work_plan"]["items"]) == 8
+    assert len(deck["monthly_work_plan"]["items"]) >= 12
     assert all(len(stage["content_ideas"]) == 2 for stage in deck["paid_funnel"]["stages"])
     mpg.validate_marketing_plan_deck(deck)
 

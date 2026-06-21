@@ -56,6 +56,17 @@ REQUIRED_SECTIONS = [
 ]
 
 FUNNEL_STAGES = ["Awareness", "Consideration", "Conversion", "Loyalty", "Ambassador"]
+REAL_WORLD_PRODUCTION_MODES = {
+    "talking_head": ["human_video"],
+    "founder_video": ["human_video"],
+    "ugc": ["human_video"],
+    "store_video": ["location_video"],
+    "office_video": ["location_video"],
+    "location_video": ["location_video"],
+    "product_photo": ["product_photos"],
+    "product_video": ["product_photos", "product_video"],
+    "manual_upload": ["client_asset"],
+}
 
 
 def _extract_json_object(text: str) -> str | None:
@@ -216,6 +227,56 @@ def _generation_request_for_item(item: dict[str, Any], default_prompt: str = "")
         "use_brand": True,
         "prompt": str(item.get("prompt") or default_prompt or item.get("title") or "").strip(),
     }
+
+
+def _safe_int(value: Any, fallback: int, minimum: int = 1, maximum: int = 7) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(minimum, min(maximum, parsed))
+
+
+def _normalize_production_mode(value: Any) -> str:
+    text = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "ai": "ai_image",
+        "ai_generated": "ai_image",
+        "manual": "manual_upload",
+        "talking": "talking_head",
+        "talking_head_video": "talking_head",
+        "store_footage": "store_video",
+        "office_footage": "office_video",
+        "real_product": "product_photo",
+        "product": "product_photo",
+    }
+    return aliases.get(text, text)
+
+
+def _production_mode_for_item(raw: dict[str, Any], index: int) -> str:
+    recommended = _dict(raw.get("recommended_output"))
+    mode = _normalize_production_mode(
+        raw.get("production_mode")
+        or recommended.get("production_mode")
+        or raw.get("production")
+        or raw.get("asset_type")
+    )
+    if mode:
+        return mode
+
+    text = json.dumps(raw, ensure_ascii=False).lower()
+    fmt = str(recommended.get("format") or raw.get("placement") or "").lower()
+    if any(token in text for token in ("founder", "person", "talking", "ugc", "presenter", "صاحب", "شخص", "يحكي")):
+        return "talking_head"
+    if any(token in text for token in ("office", "store", "location", "shop", "مكتب", "متجر", "محل")):
+        return "office_video"
+    if any(token in text for token in ("product", "منتج", "خدمة محددة")):
+        return "product_photo"
+    if "video" in fmt or "reel" in fmt:
+        return ["talking_head", "office_video", "ai_video", "ugc"][index % 4]
+    if "carousel" in fmt:
+        return "ai_carousel"
+    return "ai_image" if index % 3 else "product_photo"
 
 
 def _stable_slug(value: str, fallback: str) -> str:
@@ -576,10 +637,17 @@ def _required_assets_for_item(raw: dict[str, Any]) -> list[str]:
     assets = _string_list(raw.get("required_assets"), 6)
     if assets:
         return assets
+    production_mode = _normalize_production_mode(
+        raw.get("production_mode") or _dict(raw.get("recommended_output")).get("production_mode")
+    )
+    if production_mode in REAL_WORLD_PRODUCTION_MODES:
+        return REAL_WORLD_PRODUCTION_MODES[production_mode]
     if raw.get("needs_user_asset"):
         output_text = json.dumps(raw.get("recommended_output") or raw.get("recommended_outputs") or "", ensure_ascii=False).lower()
         if "product" in output_text:
             return ["product_photos"]
+        if "office" in output_text or "store" in output_text or "location" in output_text:
+            return ["location_video"]
         if "video" in output_text or "ugc" in output_text or "talking" in output_text:
             return ["human_video"]
         return ["client_asset"]
@@ -601,7 +669,8 @@ def _normalize_action_item(raw: dict[str, Any], index: int, plan_type: str, lang
     )
     if not output_types:
         output_types = [_content_type_from_outputs(raw.get("placement"), raw.get("recommended_output"))]
-    required_assets = _required_assets_for_item(raw)
+    production_mode = _production_mode_for_item(raw, index)
+    required_assets = _required_assets_for_item({**raw, "production_mode": production_mode})
     item = {
         "id": str(raw.get("id") or f"{plan_type}-{index}").strip(),
         "plan_type": plan_type,
@@ -611,6 +680,7 @@ def _normalize_action_item(raw: dict[str, Any], index: int, plan_type: str, lang
         "platforms": _string_list(raw.get("platforms"), 6),
         "placement": str(raw.get("placement") or "").strip(),
         "output_types": output_types,
+        "production_mode": production_mode,
         "schedule_window": str(raw.get("schedule_window") or raw.get("date") or "").strip(),
         "funnel_stage": str(raw.get("funnel_stage") or raw.get("stage") or "").strip() or None,
         "required_assets": required_assets,
@@ -689,6 +759,27 @@ def normalize_marketing_action_plan(
 
 def _normalize_monthly_work_plan(source: Any) -> dict[str, Any]:
     source = _dict(source)
+    recommended_weekly_posts = _safe_int(
+        source.get("recommended_weekly_posts")
+        or source.get("weekly_posts")
+        or source.get("posts_per_week"),
+        2,
+        minimum=1,
+        maximum=7,
+    )
+    recommended_monthly_posts = _safe_int(
+        source.get("recommended_monthly_posts")
+        or source.get("monthly_posts")
+        or recommended_weekly_posts * 4,
+        recommended_weekly_posts * 4,
+        minimum=4,
+        maximum=31,
+    )
+    cadence_reason = str(source.get("cadence_reason") or source.get("posting_cadence_reason") or "").strip()
+    if not cadence_reason:
+        cadence_reason = (
+            "Recommended from the available business profile, owned assets, and current market research depth."
+        )
     content_mix = []
     for item in _list(source.get("content_mix")):
         if isinstance(item, dict):
@@ -708,24 +799,62 @@ def _normalize_monthly_work_plan(source: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
             continue
         title = str(raw.get("title") or raw.get("name") or f"Content item {index}").strip()
+        recommended_output = _dict(raw.get("recommended_output"))
+        if not recommended_output.get("format"):
+            recommended_output["format"] = _content_type_from_outputs(raw.get("placement"), raw.get("recommended_outputs"))
+        recommended_output["production_mode"] = _production_mode_for_item({**raw, "recommended_output": recommended_output}, index)
+        needs_user_asset = bool(raw.get("needs_user_asset")) or recommended_output["production_mode"] in REAL_WORLD_PRODUCTION_MODES
         item = {
             "id": str(raw.get("id") or f"monthly-content-{index}").strip(),
             "title": title,
             "objective": str(raw.get("objective") or "").strip(),
             "platforms": _string_list(raw.get("platforms"), 5),
             "placement": str(raw.get("placement") or "").strip(),
-            "recommended_output": _dict(raw.get("recommended_output")),
+            "recommended_output": recommended_output,
             "prompt": str(raw.get("prompt") or title).strip(),
-            "needs_user_asset": bool(raw.get("needs_user_asset")),
+            "needs_user_asset": needs_user_asset,
             "notes": str(raw.get("notes") or "").strip(),
         }
         item["generation_request"] = _generation_request_for_item(item)
         items.append(item)
 
+    if items and len(items) < recommended_monthly_posts:
+        base_items = list(items)
+        objective_cycle = ["attraction", "attraction", "attraction", "trust", "sales"]
+        placement_cycle = ["reel", "post", "carousel", "story"]
+        while len(items) < recommended_monthly_posts:
+            index = len(items) + 1
+            source_item = dict(base_items[(index - 1) % len(base_items)])
+            source_output = _dict(source_item.get("recommended_output"))
+            source_output["production_mode"] = _production_mode_for_item(
+                {
+                    **source_item,
+                    "recommended_output": source_output,
+                    "placement": source_item.get("placement") or placement_cycle[index % len(placement_cycle)],
+                },
+                index,
+            )
+            source_item.update(
+                {
+                    "id": f"monthly-content-{index}",
+                    "title": f"{source_item.get('title') or 'Content item'} #{index}",
+                    "objective": source_item.get("objective") or objective_cycle[(index - 1) % len(objective_cycle)],
+                    "placement": source_item.get("placement") or placement_cycle[(index - 1) % len(placement_cycle)],
+                    "recommended_output": source_output,
+                    "needs_user_asset": bool(source_item.get("needs_user_asset"))
+                    or source_output["production_mode"] in REAL_WORLD_PRODUCTION_MODES,
+                }
+            )
+            source_item["generation_request"] = _generation_request_for_item(source_item)
+            items.append(source_item)
+
     return {
         "client_focus_questions": _string_list(source.get("client_focus_questions"), 6)
         or ["Do you have products, services, offers, launches, or campaigns to focus on this month?"],
         "calendar_context": _dict(source.get("calendar_context")),
+        "recommended_weekly_posts": recommended_weekly_posts,
+        "recommended_monthly_posts": recommended_monthly_posts,
+        "cadence_reason": cadence_reason,
         "content_mix": content_mix,
         "daily_story_direction": _string_list(source.get("daily_story_direction"), 10),
         "items": items[:40],
@@ -901,6 +1030,9 @@ Return ONLY valid JSON with this exact top-level shape:
     "limitations": ["what is missing or should be validated"]
   }},
   "monthly_work_plan": {{
+    "recommended_weekly_posts": 3,
+    "recommended_monthly_posts": 12,
+    "cadence_reason": "why this cadence fits available assets, competitor activity, demand, and business capacity",
     "client_focus_questions": ["questions to ask the client before finalizing this month"],
     "calendar_context": {{
       "countries": ["target countries"],
@@ -920,7 +1052,7 @@ Return ONLY valid JSON with this exact top-level shape:
         "objective": "attraction|trust|sales",
         "platforms": ["instagram", "facebook"],
         "placement": "post|reel|story|carousel|ad",
-        "recommended_output": {{"format": "image|video|carousel|mixed", "production_mode": "ai|talking_head|ugc|store_video|product_photo|manual_upload"}},
+        "recommended_output": {{"format": "image|video|carousel|mixed", "production_mode": "ai_image|ai_video|ai_carousel|talking_head|ugc|store_video|office_video|product_photo|product_video|manual_upload"}},
         "prompt": "ready-to-generate prompt for OneShare",
         "needs_user_asset": true,
         "notes": "what the user should upload or approve"
@@ -964,10 +1096,14 @@ Required content:
 - Campaign ideas with practical examples.
 - A monthly social content work plan:
   - Start by asking what products, services, campaigns, launches, or offers the client wants to focus on soon.
+  - Recommend the weekly posting cadence. Base it on the available brand assets, connected social activity, real competitor activity if available, market demand, and the business's likely ability to produce real materials.
+  - If you recommend 3 posts per week, return at least 12 monthly content items. If you recommend 4 posts per week, return at least 16. Never return fewer monthly items than recommended_weekly_posts * 4.
   - Check target audience, country, religions/cultures, holidays, local seasons, and relevant events before suggesting timing.
   - Build the social plan around 70% attraction / attention, 20% trust building, 10% sales. Do not exceed 10% direct sales.
   - Include daily direction for posts, reels, and stories.
-  - Every content item must recommend the output shape: image, video, carousel, mixed, story, reel, UGC/talking-head, store footage, product photo, manual upload, or AI generation.
+  - Think like a senior content producer, not only an AI generator. Some content should use AI, but strong plans often need a person talking to camera, office/store footage, product photos/video, customer proof, UGC, or manual upload.
+  - Every content item must recommend the output shape and production mode: image, video, carousel, mixed, story, reel, UGC/talking-head, office/store footage, product photo/video, manual upload, or AI generation.
+  - Use needs_user_asset=true whenever the recommendation requires filming, product photos, a person talking, office/store footage, UGC, or a manual asset from the client.
   - Some ideas may require more than one output, such as video + image or video + carousel.
 - A complete paid marketing funnel with these stages: Awareness, Consideration, Conversion, Loyalty, Ambassador.
   - For each stage, suggest content ideas and recommended outputs.
@@ -995,7 +1131,8 @@ Required top-level keys:
 cover, research_summary, monthly_work_plan, paid_funnel, sections.
 
 Every section must include: id, title, summary, bullets, cards, metrics.
-monthly_work_plan must include at least 8 items.
+monthly_work_plan must include recommended_weekly_posts, recommended_monthly_posts, cadence_reason, and at least recommended_weekly_posts * 4 items.
+Monthly items must mix realistic production modes: AI generation, talking-head/person-to-camera, office/store footage, product photos/video, UGC, and manual upload when appropriate. Do not make every item AI-only.
 paid_funnel must include Awareness, Consideration, Conversion, Loyalty, Ambassador, each with at least 2 content_ideas.
 
 Malformed source:
@@ -1024,6 +1161,9 @@ JSON shape:
   "cover": {{"title": "...", "subtitle": "...", "chips": ["..."]}},
   "research_summary": {{"sources_used": ["..."], "limitations": ["..."]}},
   "monthly_work_plan": {{
+    "recommended_weekly_posts": 3,
+    "recommended_monthly_posts": 12,
+    "cadence_reason": "...",
     "client_focus_questions": ["..."],
     "calendar_context": {{"countries": ["..."], "religions_considered": ["..."], "seasonal_notes": ["..."]}},
     "daily_story_direction": ["..."],
@@ -1033,7 +1173,7 @@ JSON shape:
       {{"type": "sales", "percentage": 10}}
     ],
     "items": [
-      {{"title": "...", "objective": "attraction|trust|sales", "platforms": ["instagram","facebook"], "placement": "post|reel|story|ad", "recommended_output": {{"format": "image|video|carousel|mixed", "production_mode": "AI|manual|UGC"}}, "prompt": "...", "needs_user_asset": false, "notes": "..."}}
+      {{"title": "...", "objective": "attraction|trust|sales", "platforms": ["instagram","facebook"], "placement": "post|reel|story|ad", "recommended_output": {{"format": "image|video|carousel|mixed", "production_mode": "ai_image|ai_video|ai_carousel|talking_head|ugc|store_video|office_video|product_photo|product_video|manual_upload"}}, "prompt": "...", "needs_user_asset": false, "notes": "..."}}
     ]
   }},
   "paid_funnel": {{
@@ -1047,7 +1187,9 @@ JSON shape:
 }}
 
 Rules:
-- monthly_work_plan.items: exactly 8 practical content items.
+- Decide recommended_weekly_posts from assets, competitor activity, market demand, and realistic business capacity.
+- monthly_work_plan.items: at least recommended_weekly_posts * 4 practical content items. Use 12 items when recommending 3 posts per week.
+- Do not make all items AI-only. Mix AI, talking-head, office/store footage, product photo/video, UGC, and manual upload when appropriate.
 - paid_funnel.stages: include exactly Awareness, Consideration, Conversion, Loyalty, Ambassador; each stage has 2 content_ideas.
 - sections: include every required section id exactly once.
 - Each section: 1 short summary, 3 bullets, 1 card, 1 metric.
@@ -1107,13 +1249,17 @@ def build_rule_based_marketing_plan_json(payload: dict[str, Any], language: str)
         }
         monthly_titles = [
             "بوست تعليمي يشرح المشكلة الأساسية",
-            "ريل قصير يوضح نتيجة ملموسة",
+            "فيديو قصير لصاحب المصلحة يشرح نتيجة ملموسة",
             "كاروسيل أسئلة وأجوبة",
             "ستوري يومي مع سؤال للجمهور",
             "بوست إثبات ثقة أو تجربة عميل",
-            "فيديو قصير عن خدمة محددة",
+            "تصوير مكتب أو متجر يوضح الخدمة",
             "كاروسيل مقارنة قبل وبعد",
             "بوست عرض خفيف بنسبة بيع محدودة",
+            "فيديو UGC أو رأي عميل",
+            "صورة منتج أو خدمة من الواقع",
+            "كاروسيل أخطاء شائعة ونصائح",
+            "ريل سريع من وراء الكواليس",
         ]
         funnel_goals = {
             "Awareness": "تعريف الجمهور بالمشكلة وباسم البراند",
@@ -1137,13 +1283,17 @@ def build_rule_based_marketing_plan_json(payload: dict[str, Any], language: str)
         }
         monthly_titles = [
             "Educational problem explainer",
-            "Short proof reel",
+            "Founder proof reel",
             "FAQ carousel",
             "Daily audience question story",
             "Trust proof post",
-            "Service-specific short video",
+            "Office or store service walkthrough",
             "Before/after carousel",
             "Soft sales offer post",
+            "UGC or customer proof video",
+            "Real product/service photo post",
+            "Common mistakes carousel",
+            "Behind-the-scenes reel",
         ]
         funnel_goals = {stage: f"Move the audience through {stage.lower()} with clear, measurable content." for stage in FUNNEL_STAGES}
 
@@ -1182,7 +1332,21 @@ def build_rule_based_marketing_plan_json(payload: dict[str, Any], language: str)
     monthly_items = []
     for index, title in enumerate(monthly_titles, start=1):
         objective = "attraction" if index <= 5 else ("trust" if index <= 7 else "sales")
-        fmt = "video" if index in {2, 6} else ("carousel" if index in {3, 7} else "image")
+        fmt = "video" if index in {2, 6, 9, 12} else ("carousel" if index in {3, 7, 11} else "image")
+        production_mode = {
+            1: "ai_image",
+            2: "talking_head",
+            3: "ai_carousel",
+            4: "manual_upload",
+            5: "product_photo",
+            6: "office_video",
+            7: "ai_carousel",
+            8: "ai_image",
+            9: "ugc",
+            10: "product_photo",
+            11: "ai_carousel",
+            12: "store_video",
+        }.get(index, "ai_image")
         prompt = (
             f"ولّد {title} لـ {name}. ركّز على {service_text}. استخدم لغة الجمهور، واحفظ البيع المباشر لعناصر قليلة."
             if is_ar
@@ -1195,10 +1359,10 @@ def build_rule_based_marketing_plan_json(payload: dict[str, Any], language: str)
                 "objective": objective,
                 "platforms": ["instagram", "facebook"],
                 "placement": "reel" if fmt == "video" else ("carousel" if fmt == "carousel" else "post"),
-                "recommended_output": {"format": fmt, "production_mode": "ai"},
+                "recommended_output": {"format": fmt, "production_mode": production_mode},
                 "prompt": prompt,
-                "needs_user_asset": fmt == "video",
-                "notes": "يمكن استخدام أصل من العميل إذا توفر." if is_ar else "Use a client asset if available.",
+                "needs_user_asset": production_mode in REAL_WORLD_PRODUCTION_MODES,
+                "notes": "يتطلب تصويراً أو أصلاً من العميل إذا لم يكن متوفراً." if production_mode in REAL_WORLD_PRODUCTION_MODES and is_ar else ("Requires a filmed/client asset if not available." if production_mode in REAL_WORLD_PRODUCTION_MODES else ("يمكن استخدام الذكاء الاصطناعي هنا." if is_ar else "AI generation is suitable here.")),
             }
         )
 
@@ -1240,6 +1404,13 @@ def build_rule_based_marketing_plan_json(payload: dict[str, Any], language: str)
             "limitations": limitations,
         },
         "monthly_work_plan": {
+            "recommended_weekly_posts": 3,
+            "recommended_monthly_posts": 12,
+            "cadence_reason": (
+                "نقترح 3 منشورات أسبوعياً كبداية متوازنة بين قدرة الإنتاج وبناء الثقة بدون إغراق الجمهور."
+                if is_ar
+                else "We recommend 3 posts per week as a balanced starting cadence for production capacity and trust building."
+            ),
             "client_focus_questions": [
                 "ما المنتجات أو الخدمات أو العروض التي تريد التركيز عليها هذا الشهر؟"
                 if is_ar
