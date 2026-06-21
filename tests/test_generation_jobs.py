@@ -1,4 +1,7 @@
 from datetime import datetime, timedelta, timezone
+import asyncio
+
+import pytest
 
 from api.models.generation_job import GenerationJob, GenerationJobStatus, GenerationJobType
 from api.services.generation_jobs import classify_provider_limit, serialize_job
@@ -139,3 +142,27 @@ def test_worker_error_metadata_marks_failed_after_max_retries():
     assert fields["progress"] == 100
     assert fields["finished_at"] is not None
     assert fields["error"] == "permanent failure"
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_continues_after_unexpected_error(monkeypatch):
+    calls = {"count": 0}
+    sleeps: list[int] = []
+
+    async def fake_run_once(session_factory):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("database hiccup")
+        raise asyncio.CancelledError()
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(durable_generation_queue, "run_once", fake_run_once)
+    monkeypatch.setattr(durable_generation_queue.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await durable_generation_queue.run_forever(session_factory=object(), poll_interval_seconds=2)
+
+    assert calls["count"] == 2
+    assert sleeps == [10]

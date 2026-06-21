@@ -305,6 +305,13 @@ async def run_forever(
     poll_interval_seconds: int = POLL_INTERVAL_SECONDS,
 ) -> None:
     while True:
-        claimed = await run_once(session_factory)
+        try:
+            claimed = await run_once(session_factory)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Generation queue worker loop crashed; continuing after backoff.")
+            await asyncio.sleep(min(30, max(1, poll_interval_seconds * 5)))
+            continue
         if not claimed:
             await asyncio.sleep(poll_interval_seconds)
