@@ -143,8 +143,40 @@ async def test_generate_marketing_plan_deck_uses_anthropic(monkeypatch):
         return json.dumps(
             {
                 "cover": {"title": "Connec plan", "subtitle": "Practical growth"},
+                "research_summary": {
+                    "sources_used": ["manual profile", "instagram"],
+                    "limitations": ["Validate budget and current campaign priorities"],
+                },
+                "monthly_work_plan": {
+                    "daily_story_direction": ["Show daily proof", "Answer common questions"],
+                    "items": [
+                        {"title": "Founder trust reel", "prompt": "Create a trust reel", "recommended_output": {"format": "video"}},
+                        {"title": "Offer carousel", "prompt": "Create an offer carousel", "recommended_output": {"format": "carousel"}},
+                    ],
+                },
+                "paid_funnel": {
+                    "stages": [
+                        {
+                            "stage": "Awareness",
+                            "goal": "Reach local business owners",
+                            "content_ideas": [
+                                {"title": "Pain opener", "recommended_outputs": ["video"], "prompt": "Create awareness video"}
+                            ],
+                        }
+                    ]
+                },
                 "sections": [
-                    {"id": "executive_summary", "summary": "Start with the strongest offers."}
+                    {
+                        "id": "executive_summary",
+                        "summary": "Start with the strongest offers.",
+                        "bullets": ["Lead with proof", "Make the offer obvious"],
+                        "cards": [{"title": "Main move", "body": "Turn existing services into clear packages."}],
+                    },
+                    {
+                        "id": "content_strategy",
+                        "summary": "Use a mix of education, proof, and conversion content.",
+                        "bullets": ["70% attraction", "20% trust", "10% sales"],
+                    },
                 ],
             }
         )
@@ -159,6 +191,24 @@ async def test_generate_marketing_plan_deck_uses_anthropic(monkeypatch):
     assert calls["timeout"] == mpg.MARKETING_PLAN_TIMEOUT_SECONDS
     assert deck["language"] == "he"
     assert deck["cover"]["title"] == "Connec plan"
+
+
+@pytest.mark.asyncio
+async def test_generate_marketing_plan_deck_rejects_empty_ai_json(monkeypatch):
+    async def fake_call_text_ai(**kwargs):
+        return "{}"
+
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+
+    with pytest.raises(mpg.MarketingPlanGenerationError):
+        await mpg.generate_marketing_plan_deck(make_suite(), "ar")
+
+
+def test_validate_marketing_plan_deck_rejects_title_only_skeleton():
+    deck = mpg.normalize_marketing_plan_deck({}, "Connec", "ar")
+
+    with pytest.raises(mpg.MarketingPlanGenerationError):
+        mpg.validate_marketing_plan_deck(deck)
 
 
 def test_build_marketing_plan_prompt_compacts_large_payload():

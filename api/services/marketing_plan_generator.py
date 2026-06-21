@@ -15,8 +15,12 @@ log = logging.getLogger(__name__)
 
 PLAN_VERSION = "marketing_plan_deck_v1"
 PROMPT_PAYLOAD_CHAR_LIMIT = 16000
-MARKETING_PLAN_MAX_TOKENS = 5200
-MARKETING_PLAN_TIMEOUT_SECONDS = 240
+MARKETING_PLAN_MAX_TOKENS = 9000
+MARKETING_PLAN_TIMEOUT_SECONDS = 320
+
+
+class MarketingPlanGenerationError(RuntimeError):
+    """Raised when the AI response cannot produce a useful client-facing plan."""
 
 LANG_NAMES = {
     "ar": "Arabic, natural Palestinian/Levantine professional tone when appropriate",
@@ -472,6 +476,48 @@ def normalize_marketing_plan_deck(
     }
 
 
+def marketing_plan_content_score(deck: dict[str, Any]) -> int:
+    """Approximate whether the generated deck has real substance, not just titles."""
+    score = 0
+    cover = _dict(deck.get("cover"))
+    if cover.get("subtitle") and cover.get("subtitle") != "A practical growth plan built from the business profile.":
+        score += 1
+    research = _dict(deck.get("research_summary"))
+    score += len(_string_list(research.get("sources_used"), 8))
+    score += len(_string_list(research.get("limitations"), 8))
+
+    monthly = _dict(deck.get("monthly_work_plan"))
+    score += len(_list(monthly.get("items"))) * 2
+    score += len(_string_list(monthly.get("daily_story_direction"), 10))
+    calendar = _dict(monthly.get("calendar_context"))
+    score += len(_string_list(calendar.get("seasonal_notes"), 8))
+
+    funnel = _dict(deck.get("paid_funnel"))
+    for stage in _list(funnel.get("stages")):
+        if isinstance(stage, dict):
+            if str(stage.get("goal") or "").strip():
+                score += 1
+            score += len(_list(stage.get("content_ideas"))) * 2
+
+    for section in _list(deck.get("sections")):
+        if not isinstance(section, dict):
+            continue
+        if str(section.get("summary") or "").strip():
+            score += 2
+        score += len(_string_list(section.get("bullets"), 10))
+        score += len(_list(section.get("cards"))) * 2
+        score += len(_list(section.get("metrics")))
+    return score
+
+
+def validate_marketing_plan_deck(deck: dict[str, Any]) -> None:
+    score = marketing_plan_content_score(deck)
+    if score < 18:
+        raise MarketingPlanGenerationError(
+            f"Marketing plan AI response was empty or incomplete; content score {score}."
+        )
+
+
 async def generate_marketing_plan_deck(
     suite: Suite,
     language: str | None = None,
@@ -489,4 +535,8 @@ async def generate_marketing_plan_deck(
         timeout=MARKETING_PLAN_TIMEOUT_SECONDS,
     )
     parsed = parse_marketing_plan_json(raw)
-    return normalize_marketing_plan_deck(parsed, suite.name, output_language, planning_inputs=planning_inputs)
+    if not parsed:
+        raise MarketingPlanGenerationError("Marketing plan AI response was not valid JSON.")
+    deck = normalize_marketing_plan_deck(parsed, suite.name, output_language, planning_inputs=planning_inputs)
+    validate_marketing_plan_deck(deck)
+    return deck
