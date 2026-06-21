@@ -453,6 +453,61 @@ Malformed source:
 """
 
 
+def build_compact_marketing_plan_prompt(payload: dict[str, Any], language: str) -> str:
+    lang_name = LANG_NAMES.get(language, language or "English")
+    payload_json = json.dumps(payload, ensure_ascii=False, default=str)
+    if len(payload_json) > PROMPT_PAYLOAD_CHAR_LIMIT:
+        payload_json = payload_json[:PROMPT_PAYLOAD_CHAR_LIMIT] + "...[truncated]"
+
+    section_lines = "\n".join(f"- {section_id}: {title}" for section_id, title in REQUIRED_SECTIONS)
+    return f"""Create a compact but useful marketing plan deck as STRICT JSON only.
+
+Language: {lang_name}.
+No markdown. No comments. No surrounding text.
+Keep the JSON compact enough to fit in one response, but every required field must contain useful client-facing content.
+
+Required section ids:
+{section_lines}
+
+JSON shape:
+{{
+  "cover": {{"title": "...", "subtitle": "...", "chips": ["..."]}},
+  "research_summary": {{"sources_used": ["..."], "limitations": ["..."]}},
+  "monthly_work_plan": {{
+    "client_focus_questions": ["..."],
+    "calendar_context": {{"countries": ["..."], "religions_considered": ["..."], "seasonal_notes": ["..."]}},
+    "daily_story_direction": ["..."],
+    "content_mix": [
+      {{"type": "attraction", "percentage": 70}},
+      {{"type": "trust", "percentage": 20}},
+      {{"type": "sales", "percentage": 10}}
+    ],
+    "items": [
+      {{"title": "...", "objective": "attraction|trust|sales", "platforms": ["instagram","facebook"], "placement": "post|reel|story|ad", "recommended_output": {{"format": "image|video|carousel|mixed", "production_mode": "AI|manual|UGC"}}, "prompt": "...", "needs_user_asset": false, "notes": "..."}}
+    ]
+  }},
+  "paid_funnel": {{
+    "stages": [
+      {{"stage": "Awareness", "goal": "...", "content_ideas": [{{"title": "...", "recommended_outputs": ["video"], "prompt": "..."}}]}}
+    ]
+  }},
+  "sections": [
+    {{"id": "executive_summary", "title": "...", "summary": "...", "bullets": ["..."], "cards": [{{"title": "...", "body": "...", "points": ["..."]}}], "metrics": [{{"label": "...", "value": "..."}}]}}
+  ]
+}}
+
+Rules:
+- monthly_work_plan.items: exactly 8 practical content items.
+- paid_funnel.stages: include exactly Awareness, Consideration, Conversion, Loyalty, Ambassador; each stage has 2 content_ideas.
+- sections: include every required section id exactly once.
+- Each section: 1 short summary, 3 bullets, 1 card, 1 metric.
+- Do not leave arrays empty.
+
+Business/profile data:
+{payload_json}
+"""
+
+
 async def parse_or_repair_marketing_plan_json(raw: str, language: str) -> dict[str, Any]:
     parsed = parse_marketing_plan_json(raw)
     if parsed:
@@ -468,6 +523,23 @@ async def parse_or_repair_marketing_plan_json(raw: str, language: str) -> dict[s
         timeout=MARKETING_PLAN_REPAIR_TIMEOUT_SECONDS,
     )
     return parse_marketing_plan_json(repaired)
+
+
+async def generate_compact_marketing_plan_json(payload: dict[str, Any], language: str) -> dict[str, Any]:
+    log.warning("Marketing plan repair failed; requesting compact fallback JSON.")
+    compact_raw = await call_text_ai(
+        provider="anthropic",
+        model=settings.anthropic_text_model,
+        max_tokens=MARKETING_PLAN_REPAIR_MAX_TOKENS,
+        messages=[{"role": "user", "content": build_compact_marketing_plan_prompt(payload, language)}],
+        system="You create compact, strict, valid JSON marketing strategy decks. Return JSON only.",
+        timeout=MARKETING_PLAN_REPAIR_TIMEOUT_SECONDS,
+    )
+    parsed = parse_marketing_plan_json(compact_raw)
+    if parsed:
+        return parsed
+    log.warning("Compact marketing plan fallback returned invalid JSON; attempting one repair.")
+    return await parse_or_repair_marketing_plan_json(compact_raw, language)
 
 
 def normalize_marketing_plan_deck(
@@ -575,6 +647,8 @@ async def generate_marketing_plan_deck(
         timeout=MARKETING_PLAN_TIMEOUT_SECONDS,
     )
     parsed = await parse_or_repair_marketing_plan_json(raw, output_language)
+    if not parsed:
+        parsed = await generate_compact_marketing_plan_json(payload, output_language)
     if not parsed:
         raise MarketingPlanGenerationError("Marketing plan AI response was not valid JSON.")
     deck = normalize_marketing_plan_deck(parsed, suite.name, output_language, planning_inputs=planning_inputs)

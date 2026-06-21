@@ -269,6 +269,81 @@ async def test_generate_marketing_plan_deck_repairs_malformed_json(monkeypatch):
     assert len(deck["monthly_work_plan"]["items"]) == 8
 
 
+@pytest.mark.asyncio
+async def test_generate_marketing_plan_deck_uses_compact_fallback_when_repair_fails(monkeypatch):
+    calls = []
+    compact_payload = {
+        "cover": {"title": "خطة Connec المختصرة", "subtitle": "خطة عملية قابلة للتنفيذ"},
+        "research_summary": {
+            "sources_used": ["ملف البزنس", "صفحات السوشيال", "الموقع"],
+            "limitations": ["تأكيد الميزانية وأولويات الشهر"],
+        },
+        "monthly_work_plan": {
+            "client_focus_questions": ["ما العروض أو الخدمات التي تريد دفعها هذا الشهر؟"],
+            "calendar_context": {
+                "countries": ["Israel"],
+                "religions_considered": ["Islam", "Judaism", "Christianity"],
+                "seasonal_notes": ["افحص المناسبات المحلية قبل إطلاق العروض."],
+            },
+            "daily_story_direction": ["دليل يومي", "سؤال عملي", "نتيجة واضحة"],
+            "items": [
+                {
+                    "title": f"محتوى عملي {i}",
+                    "objective": "attraction",
+                    "platforms": ["instagram", "facebook"],
+                    "placement": "post",
+                    "recommended_output": {"format": "image", "production_mode": "AI"},
+                    "prompt": f"ولّد محتوى عملي {i}",
+                }
+                for i in range(1, 9)
+            ],
+        },
+        "paid_funnel": {
+            "stages": [
+                {
+                    "stage": stage,
+                    "goal": f"هدف {stage}",
+                    "content_ideas": [
+                        {"title": f"{stage} 1", "recommended_outputs": ["video"], "prompt": "prompt"},
+                        {"title": f"{stage} 2", "recommended_outputs": ["image"], "prompt": "prompt"},
+                    ],
+                }
+                for stage in mpg.FUNNEL_STAGES
+            ]
+        },
+        "sections": [
+            {
+                "id": section_id,
+                "title": title,
+                "summary": f"ملخص عملي عن {title}",
+                "bullets": ["نقطة أولى", "نقطة ثانية", "نقطة ثالثة"],
+                "cards": [{"title": "توصية", "body": "خطوة عملية", "points": ["ابدأ بقياس واضح"]}],
+                "metrics": [{"label": "مؤشر", "value": "هدف أسبوعي"}],
+            }
+            for section_id, title in mpg.REQUIRED_SECTIONS
+        ],
+    }
+
+    async def fake_call_text_ai(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return '{"cover": {"title": "broken"'
+        if len(calls) == 2:
+            return '{"still": "broken"'
+        return json.dumps(compact_payload, ensure_ascii=False)
+
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+
+    deck = await mpg.generate_marketing_plan_deck(make_suite(), "ar")
+
+    assert len(calls) == 3
+    assert "Repair the following marketing-plan response" in calls[1]["messages"][0]["content"]
+    assert "Create a compact but useful marketing plan deck" in calls[2]["messages"][0]["content"]
+    assert deck["cover"]["title"] == "خطة Connec المختصرة"
+    assert len(deck["monthly_work_plan"]["items"]) == 8
+    assert mpg.marketing_plan_content_score(deck) >= 18
+
+
 def test_build_marketing_plan_prompt_compacts_large_payload():
     prompt = mpg.build_marketing_plan_prompt(
         {
