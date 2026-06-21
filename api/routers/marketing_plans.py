@@ -15,7 +15,12 @@ from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
 from ..models.user import User
 from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job
-from ..services.marketing_plan_generator import infer_plan_language
+from ..services.marketing_plan_generator import (
+    infer_plan_language,
+    normalize_marketing_action_plan,
+    normalize_marketing_intelligence,
+    suite_research_payload,
+)
 
 router = APIRouter(tags=["marketing-plans"])
 
@@ -51,6 +56,24 @@ def _strategy(suite: Suite) -> dict[str, Any]:
 def _deck(suite: Suite) -> dict[str, Any] | None:
     deck = _strategy(suite).get("marketing_plan_deck")
     return deck if isinstance(deck, dict) else None
+
+
+def _intelligence(suite: Suite) -> dict[str, Any]:
+    strategy = _strategy(suite)
+    language = infer_plan_language(suite)
+    existing = strategy.get("marketing_intelligence")
+    if isinstance(existing, dict):
+        return normalize_marketing_intelligence(existing, suite_research_payload(suite), language)
+    return normalize_marketing_intelligence({}, suite_research_payload(suite), language)
+
+
+def _action_plan(suite: Suite) -> dict[str, Any]:
+    strategy = _strategy(suite)
+    language = infer_plan_language(suite)
+    existing = strategy.get("marketing_action_plan")
+    if isinstance(existing, dict):
+        return normalize_marketing_action_plan(existing, _deck(suite), language)
+    return normalize_marketing_action_plan({}, _deck(suite), language)
 
 
 def _share(deck: dict[str, Any]) -> dict[str, Any]:
@@ -126,12 +149,16 @@ async def get_marketing_plan(
             "suite_id": suite_id,
             "language": infer_plan_language(suite),
             "deck": None,
+            "intelligence": _intelligence(suite),
+            "action_plan": _action_plan(suite),
             "generation_status": generation_status,
         }
     return {
         "status": "ready",
         "suite_id": suite_id,
         "deck": _public_deck(deck),
+        "intelligence": _intelligence(suite),
+        "action_plan": _action_plan(suite),
         "generation_status": generation_status,
     }
 
@@ -152,6 +179,8 @@ async def generate_marketing_plan(
             "status": active.status.value,
             "suite_id": suite_id,
             "deck": _public_deck(deck) if deck else None,
+            "intelligence": _intelligence(suite),
+            "action_plan": _action_plan(suite),
             "generation_status": serialize_job(active, suite_id=suite_id),
         }
 
@@ -171,6 +200,8 @@ async def generate_marketing_plan(
         "status": job.status.value,
         "suite_id": suite_id,
         "deck": _public_deck(deck) if deck else None,
+        "intelligence": _intelligence(suite),
+        "action_plan": _action_plan(suite),
         "generation_status": serialize_job(job, suite_id=suite_id),
     }
 

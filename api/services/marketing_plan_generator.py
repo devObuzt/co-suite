@@ -14,6 +14,8 @@ from ..models.suite import Suite
 log = logging.getLogger(__name__)
 
 PLAN_VERSION = "marketing_plan_deck_v1"
+INTELLIGENCE_VERSION = "marketing_intelligence_v1"
+ACTION_PLAN_VERSION = "marketing_action_plan_v1"
 PROMPT_PAYLOAD_CHAR_LIMIT = 16000
 MARKETING_PLAN_MAX_TOKENS = 9000
 MARKETING_PLAN_TIMEOUT_SECONDS = 320
@@ -212,6 +214,267 @@ def _generation_request_for_item(item: dict[str, Any], default_prompt: str = "")
         "destination": "both",
         "use_brand": True,
         "prompt": str(item.get("prompt") or default_prompt or item.get("title") or "").strip(),
+    }
+
+
+def _stable_slug(value: str, fallback: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
+    return text[:48] or fallback
+
+
+def _normalize_source_link(raw: Any, fallback_source: str = "source") -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        url = raw.strip()
+        if not url:
+            return None
+        return {"label": url, "url": url, "source": fallback_source}
+    if not isinstance(raw, dict):
+        return None
+    url = str(raw.get("url") or raw.get("link") or raw.get("href") or "").strip()
+    label = str(raw.get("label") or raw.get("title") or raw.get("name") or url).strip()
+    if not url and not label:
+        return None
+    return {
+        "label": label or url,
+        "url": url,
+        "source": str(raw.get("source") or raw.get("platform") or fallback_source).strip() or fallback_source,
+    }
+
+
+def _normalize_competitor(raw: Any, index: int) -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        name = raw.strip()
+        if not name:
+            return None
+        return {
+            "id": f"competitor-{index}",
+            "name": name,
+            "platform": "other",
+            "url": "",
+            "reason": "",
+            "offer": "",
+            "evidence": "",
+            "opportunity": "",
+            "confidence": "low",
+        }
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or raw.get("title") or raw.get("business") or "").strip()
+    url = str(raw.get("url") or raw.get("link") or raw.get("profile_url") or raw.get("website") or "").strip()
+    if not name and not url:
+        return None
+    platform = str(raw.get("platform") or raw.get("source") or "").strip().lower()
+    if not platform:
+        if "instagram.com" in url:
+            platform = "instagram"
+        elif "facebook.com" in url:
+            platform = "facebook"
+        elif "tiktok.com" in url:
+            platform = "tiktok"
+        elif url:
+            platform = "website"
+        else:
+            platform = "other"
+    return {
+        "id": str(raw.get("id") or _stable_slug(name or url, f"competitor-{index}")),
+        "name": name or url,
+        "platform": platform,
+        "url": url,
+        "reason": str(raw.get("reason") or raw.get("why_relevant") or raw.get("relevance") or "").strip(),
+        "offer": str(raw.get("offer") or raw.get("category") or raw.get("description") or "").strip(),
+        "evidence": str(raw.get("evidence") or raw.get("snippet") or raw.get("summary") or "").strip(),
+        "opportunity": str(raw.get("opportunity") or raw.get("gap") or raw.get("threat") or "").strip(),
+        "confidence": str(raw.get("confidence") or "medium").strip().lower(),
+    }
+
+
+def normalize_marketing_intelligence(
+    raw: dict[str, Any] | None,
+    suite_payload: dict[str, Any],
+    language: str,
+) -> dict[str, Any]:
+    """Normalize market research into a renderable, non-empty shell.
+
+    Slice 1 deliberately supports fallback data derived from the existing Suite/deck.
+    Slice 2 can replace the same contract with deeper source-specific research.
+    """
+    raw = _dict(raw)
+    brand = _dict(suite_payload.get("brand"))
+    strategy = _dict(suite_payload.get("strategy"))
+    deck = _dict(strategy.get("marketing_plan_deck"))
+    research = _dict(deck.get("research_summary"))
+
+    raw_links = []
+    raw_links.extend(_list(suite_payload.get("reference_links")))
+    website = suite_payload.get("website") or brand.get("website")
+    if website:
+        raw_links.append({"label": "Website", "url": website, "source": "website"})
+    social_links = _dict(suite_payload.get("social_links") or brand.get("social_links"))
+    for platform, url in social_links.items():
+        if url:
+            raw_links.append({"label": str(platform), "url": url, "source": str(platform)})
+
+    source_links = [
+        link
+        for link in (_normalize_source_link(item) for item in _list(raw.get("source_links")) + raw_links)
+        if link
+    ][:20]
+
+    competitor_sources = (
+        _list(raw.get("competitors"))
+        + _list(strategy.get("competitors"))
+        + _list(_dict(strategy.get("marketing_plan")).get("competitors"))
+    )
+    competitors = [
+        item
+        for item in (_normalize_competitor(raw_competitor, index) for index, raw_competitor in enumerate(competitor_sources, start=1))
+        if item
+    ][:24]
+
+    demand_signals = _text_list(
+        raw.get("demand_signals")
+        or raw.get("demand")
+        or _first_present(research, "demand_signals", "opportunities", "market_demand")
+        or _dict(deck.get("sections_by_id", {})).get("market_demand"),
+        12,
+    )
+    if not demand_signals:
+        demand_signals = _text_list(_dict(brand).get("audience_interests") or _dict(brand).get("services"), 8)
+
+    supply_signals = _text_list(raw.get("supply_signals") or raw.get("supply") or raw.get("competition_notes"), 12)
+    opportunities = _text_list(raw.get("opportunities") or raw.get("gaps") or raw.get("recommendations"), 12)
+    warnings = _text_list(raw.get("warnings") or research.get("limitations"), 8)
+    if not competitors:
+        warnings.append("Competitor research is not ready yet; run the next intelligence slice to collect external competitors.")
+    if not demand_signals:
+        warnings.append("Demand signals are based on the Suite profile until external research is generated.")
+
+    return {
+        "version": INTELLIGENCE_VERSION,
+        "language": language,
+        "generated_at": raw.get("generated_at") or datetime.now(timezone.utc).isoformat(),
+        "status": raw.get("status") or ("ready" if competitors or demand_signals or source_links else "needs_research"),
+        "competitors": competitors,
+        "demand_signals": [{"id": f"demand-{i}", "title": item, "source": "profile"} for i, item in enumerate(demand_signals, start=1)],
+        "supply_signals": [{"id": f"supply-{i}", "title": item, "source": "research"} for i, item in enumerate(supply_signals, start=1)],
+        "opportunities": [{"id": f"opportunity-{i}", "title": item} for i, item in enumerate(opportunities, start=1)],
+        "source_links": source_links,
+        "warnings": warnings,
+    }
+
+
+def _required_assets_for_item(raw: dict[str, Any]) -> list[str]:
+    assets = _string_list(raw.get("required_assets"), 6)
+    if assets:
+        return assets
+    if raw.get("needs_user_asset"):
+        output_text = json.dumps(raw.get("recommended_output") or raw.get("recommended_outputs") or "", ensure_ascii=False).lower()
+        if "product" in output_text:
+            return ["product_photos"]
+        if "video" in output_text or "ugc" in output_text or "talking" in output_text:
+            return ["human_video"]
+        return ["client_asset"]
+    return []
+
+
+def _action_status(required_assets: list[str]) -> str:
+    return "needs_assets" if required_assets else "ready_to_generate"
+
+
+def _normalize_action_item(raw: dict[str, Any], index: int, plan_type: str, language: str) -> dict[str, Any]:
+    title = str(raw.get("title") or raw.get("name") or f"Action item {index}").strip()
+    output_types = _text_list(
+        raw.get("output_types")
+        or raw.get("recommended_outputs")
+        or _dict(raw.get("recommended_output")).get("format")
+        or raw.get("placement"),
+        5,
+    )
+    if not output_types:
+        output_types = [_content_type_from_outputs(raw.get("placement"), raw.get("recommended_output"))]
+    required_assets = _required_assets_for_item(raw)
+    item = {
+        "id": str(raw.get("id") or f"{plan_type}-{index}").strip(),
+        "plan_type": plan_type,
+        "title": title,
+        "objective": str(raw.get("objective") or raw.get("goal") or "").strip(),
+        "channel": str(raw.get("channel") or (_list(raw.get("platforms")) or [""])[0] or "").strip(),
+        "platforms": _string_list(raw.get("platforms"), 6),
+        "placement": str(raw.get("placement") or "").strip(),
+        "output_types": output_types,
+        "schedule_window": str(raw.get("schedule_window") or raw.get("date") or "").strip(),
+        "funnel_stage": str(raw.get("funnel_stage") or raw.get("stage") or "").strip() or None,
+        "required_assets": required_assets,
+        "generation_prompt": str(raw.get("generation_prompt") or raw.get("prompt") or title).strip(),
+        "caption": str(raw.get("caption") or "").strip(),
+        "hook": str(raw.get("hook") or "").strip(),
+        "source_references": _list(raw.get("source_references"))[:8],
+        "status": str(raw.get("status") or _action_status(required_assets)).strip(),
+        "notes": str(raw.get("notes") or "").strip(),
+        "user_edits": _list(raw.get("user_edits"))[:12],
+        "generated_post_ids": _string_list(raw.get("generated_post_ids"), 12),
+    }
+    item["generation_request"] = _generation_request_for_item(
+        {
+            "title": item["title"],
+            "prompt": item["generation_prompt"],
+            "placement": item["placement"],
+            "recommended_outputs": item["output_types"],
+        },
+        default_prompt=item["generation_prompt"],
+    )
+    return item
+
+
+def normalize_marketing_action_plan(
+    raw: dict[str, Any] | None,
+    deck: dict[str, Any] | None,
+    language: str,
+) -> dict[str, Any]:
+    raw = _dict(raw)
+    deck = _dict(deck)
+    social_source = _list(raw.get("social_items"))
+    if not social_source:
+        social_source = _list(_dict(deck.get("monthly_work_plan")).get("items"))
+    social_items = [
+        _normalize_action_item(item, index, "social", language)
+        for index, item in enumerate(social_source, start=1)
+        if isinstance(item, dict)
+    ][:60]
+
+    ad_sources = _list(raw.get("ad_funnel_items"))
+    if not ad_sources:
+        for stage in _list(_dict(deck.get("paid_funnel")).get("stages")):
+            if not isinstance(stage, dict):
+                continue
+            stage_name = str(stage.get("stage") or "").strip()
+            for idea in _list(stage.get("content_ideas")):
+                if isinstance(idea, dict):
+                    ad_sources.append({**idea, "stage": stage_name, "funnel_stage": stage_name})
+    ad_funnel_items = [
+        _normalize_action_item(item, index, "ads", language)
+        for index, item in enumerate(ad_sources, start=1)
+        if isinstance(item, dict)
+    ][:80]
+
+    planning_questions = _text_list(
+        raw.get("planning_questions")
+        or _dict(deck.get("monthly_work_plan")).get("client_focus_questions"),
+        10,
+    )
+    warnings = _text_list(raw.get("warnings"), 8)
+    if not social_items and not ad_funnel_items:
+        warnings.append("Action plan is not ready yet; generate or refresh the marketing plan first.")
+
+    return {
+        "version": ACTION_PLAN_VERSION,
+        "language": language,
+        "generated_at": raw.get("generated_at") or deck.get("generated_at") or datetime.now(timezone.utc).isoformat(),
+        "status": raw.get("status") or ("ready" if social_items or ad_funnel_items else "missing"),
+        "social_items": social_items,
+        "ad_funnel_items": ad_funnel_items,
+        "planning_questions": planning_questions,
+        "warnings": warnings,
     }
 
 

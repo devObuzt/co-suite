@@ -417,3 +417,35 @@ def test_build_marketing_plan_prompt_compacts_large_payload():
 
     assert len(prompt) < 26000
     assert "[truncated]" in prompt
+
+
+def test_normalize_marketing_intelligence_derives_sources_and_warnings():
+    suite = make_suite()
+    suite.brand = {
+        **suite.brand,
+        "website": "https://connec.co.il",
+        "social_links": {"instagram": "https://www.instagram.com/connec.co.il/"},
+        "services": ["Websites", "Social media"],
+    }
+    payload = mpg.suite_research_payload(suite)
+
+    intelligence = mpg.normalize_marketing_intelligence({}, payload, "ar")
+
+    assert intelligence["version"] == mpg.INTELLIGENCE_VERSION
+    assert intelligence["status"] in {"ready", "needs_research"}
+    assert any(link["url"] == "https://connec.co.il" for link in intelligence["source_links"])
+    assert any(signal["title"] == "Websites" for signal in intelligence["demand_signals"])
+    assert intelligence["warnings"]
+
+
+def test_normalize_marketing_action_plan_converts_deck_items_to_executable_items():
+    deck = mpg.normalize_marketing_plan_deck(complete_plan_payload(), "Connec", "ar")
+
+    action_plan = mpg.normalize_marketing_action_plan({}, deck, "ar")
+
+    assert action_plan["version"] == mpg.ACTION_PLAN_VERSION
+    assert action_plan["status"] == "ready"
+    assert len(action_plan["social_items"]) == 8
+    assert len(action_plan["ad_funnel_items"]) == 10
+    assert action_plan["social_items"][0]["generation_request"]["mode"] == "quick"
+    assert action_plan["ad_funnel_items"][0]["funnel_stage"] == "Awareness"
