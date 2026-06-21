@@ -435,7 +435,31 @@ def test_normalize_marketing_intelligence_derives_sources_and_warnings():
     assert intelligence["status"] in {"ready", "needs_research"}
     assert any(link["url"] == "https://connec.co.il" for link in intelligence["source_links"])
     assert any(signal["title"] == "Websites" for signal in intelligence["demand_signals"])
+    assert len(intelligence["competitors"]) >= 4
+    assert any(item["platform"] == "instagram" and item["url"] for item in intelligence["competitors"])
+    assert intelligence["supply_signals"]
+    assert intelligence["opportunities"]
     assert intelligence["warnings"]
+
+
+def test_normalize_marketing_intelligence_uses_existing_competitors_before_research_leads():
+    suite = make_suite()
+    suite.strategy = {
+        "competitors": [
+            {
+                "name": "Market Peer",
+                "url": "https://www.instagram.com/market.peer/",
+                "description": "A nearby business with active social content.",
+            }
+        ]
+    }
+    payload = mpg.suite_research_payload(suite)
+
+    intelligence = mpg.normalize_marketing_intelligence({}, payload, "en")
+
+    assert intelligence["competitors"][0]["name"] == "Market Peer"
+    assert intelligence["competitors"][0]["platform"] == "instagram"
+    assert not any(item.get("research_lead") for item in intelligence["competitors"])
 
 
 def test_normalize_marketing_action_plan_converts_deck_items_to_executable_items():

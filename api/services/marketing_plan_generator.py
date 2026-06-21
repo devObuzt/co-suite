@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from typing import Any
+from urllib.parse import quote_plus
 
 from ..core.config import settings
 from ..core.llm_client import call_text_ai
@@ -288,6 +289,173 @@ def _normalize_competitor(raw: Any, index: int) -> dict[str, Any] | None:
     }
 
 
+def _business_keywords(brand: dict[str, Any], strategy: dict[str, Any]) -> list[str]:
+    keywords = _text_list(
+        [
+            brand.get("industry"),
+            brand.get("category"),
+            brand.get("niche"),
+            *_text_list(brand.get("services") or brand.get("products"), 4),
+            *_text_list(strategy.get("services") or strategy.get("products"), 4),
+        ],
+        10,
+    )
+    seen: set[str] = set()
+    unique = []
+    for keyword in keywords:
+        normalized = keyword.casefold()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            unique.append(keyword)
+    return unique
+
+
+def _audience_locations(brand: dict[str, Any], strategy: dict[str, Any]) -> list[str]:
+    candidates: list[Any] = []
+    for source in (brand, strategy):
+        candidates.extend(
+            [
+                source.get("audience_location"),
+                source.get("target_location"),
+                source.get("location"),
+                source.get("countries"),
+                source.get("cities"),
+            ]
+        )
+    locations: list[str] = []
+    for item in candidates:
+        if isinstance(item, dict):
+            locations.extend(_text_list(item.get("cities"), 4))
+            locations.extend(_text_list(item.get("countries"), 4))
+            locations.extend(_text_list(item.get("regions"), 4))
+        else:
+            locations.extend(_text_list(item, 6))
+    seen: set[str] = set()
+    unique = []
+    for location in locations:
+        normalized = location.casefold()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            unique.append(location)
+    return unique
+
+
+def _search_url(query: str) -> str:
+    return f"https://www.google.com/search?q={quote_plus(query)}"
+
+
+def _fallback_market_copy(language: str) -> dict[str, str]:
+    if str(language or "").startswith("ar"):
+        return {
+            "competitor_reason": "مسار بحث جاهز للعثور على منافسين فعليين في نفس السوق. سيتم استبداله بنتائج أسماء وروابط بعد تشغيل بحث السوق العميق.",
+            "competitor_offer": "افحص العروض، الأسعار، الرسائل، ونوعية المحتوى التي تظهر كثيراً في هذه القناة.",
+            "competitor_opportunity": "حوّل الفجوات التي تظهر في نتائج البحث إلى زوايا محتوى وحملات أوضح للعميل.",
+            "demand_google": "ابحث عن طلب مباشر في جوجل حول الخدمات والكلمات التجارية المرتبطة بالمصلحة.",
+            "demand_social": "افحص الطلب غير المباشر في السوشيال: أسئلة، تعليقات، ترندات، وحسابات تتفاعل حول نفس المجال.",
+            "supply": "افحص كثافة المنافسة في المنصة: كم نتيجة تظهر، ما قوة العروض، وهل المحتوى متشابه أم فيه فرصة للتميّز.",
+            "opportunity": "ابدأ بمحتوى يشرح المشكلة والنتيجة، ثم قارن بين الخيارات، ثم اعرض إثبات ثقة واضح.",
+            "warning": "هذه نتائج تمهيدية مبنية على بروفايل السوت. شغّل بحث السوق العميق لجلب أسماء منافسين وروابط فعلية.",
+        }
+    if str(language or "").startswith("he"):
+        return {
+            "competitor_reason": "מסלול חיפוש למציאת מתחרים אמיתיים באותו שוק. בשלב הבא הוא יוחלף בתוצאות מחקר עם שמות וקישורים.",
+            "competitor_offer": "בדוק הצעות, מחירים, מסרים וסוגי תוכן שמופיעים הרבה בערוץ הזה.",
+            "competitor_opportunity": "הפוך פערים בתוצאות החיפוש לזוויות תוכן וקמפיינים ברורות יותר.",
+            "demand_google": "בדוק ביקוש ישיר בגוגל סביב השירותים ומילות המפתח העסקיות.",
+            "demand_social": "בדוק ביקוש עקיף בסושיאל: שאלות, תגובות, טרנדים וחשבונות פעילים בתחום.",
+            "supply": "בדוק את צפיפות התחרות בפלטפורמה ואת רמת הדמיון בין המסרים.",
+            "opportunity": "התחל בתוכן שמסביר בעיה ותוצאה, המשך בהשוואת אפשרויות, ואז הוסף הוכחת אמון.",
+            "warning": "אלו תוצאות ראשוניות מפרופיל הסוויט. הפעל מחקר שוק עמוק כדי להביא שמות וקישורים אמיתיים.",
+        }
+    return {
+        "competitor_reason": "A ready research path for finding real competitors in the same market. Deep market research will replace it with actual names and links.",
+        "competitor_offer": "Review offers, pricing, messaging, and content patterns that repeat in this channel.",
+        "competitor_opportunity": "Turn visible gaps into sharper content angles and campaign ideas.",
+        "demand_google": "Check direct demand on Google around the business services and commercial keywords.",
+        "demand_social": "Check indirect social demand: questions, comments, trends, and active accounts in the niche.",
+        "supply": "Check competitive density on the platform and whether messages look repetitive.",
+        "opportunity": "Start with problem/result content, compare options, then show clear trust proof.",
+        "warning": "These are profile-based starter signals. Run deep market research to collect actual competitor names and links.",
+    }
+
+
+def _fallback_competitor_research(
+    brand: dict[str, Any],
+    strategy: dict[str, Any],
+    language: str,
+) -> list[dict[str, Any]]:
+    keywords = _business_keywords(brand, strategy)
+    primary_keyword = keywords[0] if keywords else str(brand.get("name") or "business").strip() or "business"
+    locations = _audience_locations(brand, strategy)
+    location = " ".join(locations[:2]).strip()
+    copy = _fallback_market_copy(language)
+    platforms = [
+        ("google", "Google", ""),
+        ("instagram", "Instagram", "site:instagram.com"),
+        ("facebook", "Facebook", "site:facebook.com"),
+        ("tiktok", "TikTok", "site:tiktok.com"),
+    ]
+    leads = []
+    for index, (platform, label, site_filter) in enumerate(platforms, start=1):
+        query = " ".join(part for part in [site_filter, primary_keyword, location, "competitors OR services"] if part).strip()
+        name = {
+            "ar": f"بحث منافسين على {label}: {primary_keyword}",
+            "he": f"חיפוש מתחרים ב-{label}: {primary_keyword}",
+        }.get(str(language or "")[:2], f"{label} competitor search: {primary_keyword}")
+        leads.append(
+            {
+                "id": f"research-lead-{platform}",
+                "name": name,
+                "platform": platform,
+                "url": _search_url(query),
+                "reason": copy["competitor_reason"],
+                "offer": copy["competitor_offer"],
+                "evidence": query,
+                "opportunity": copy["competitor_opportunity"],
+                "confidence": "starter",
+                "research_lead": True,
+            }
+        )
+    return leads
+
+
+def _fallback_market_signals(
+    brand: dict[str, Any],
+    strategy: dict[str, Any],
+    deck: dict[str, Any],
+    language: str,
+) -> tuple[list[str], list[str], list[str]]:
+    copy = _fallback_market_copy(language)
+    keywords = _business_keywords(brand, strategy)
+    services = keywords[:4] or _text_list(brand.get("services") or brand.get("products"), 4)
+    locations = _audience_locations(brand, strategy)
+    location_text = ", ".join(locations[:3]) if locations else ""
+    market_section = _dict(_dict(deck.get("sections_by_id", {})).get("market_demand"))
+    competitor_section = _dict(_dict(deck.get("sections_by_id", {})).get("competitors"))
+    content_section = _dict(_dict(deck.get("sections_by_id", {})).get("content_strategy"))
+
+    demand = _text_list(market_section.get("bullets") or market_section.get("summary"), 6)
+    supply = _text_list(competitor_section.get("bullets") or competitor_section.get("summary"), 6)
+    opportunities = _text_list(content_section.get("bullets") or content_section.get("summary"), 6)
+
+    if services:
+        service_text = ", ".join(services[:3])
+        demand.extend(
+            [
+                f"{copy['demand_google']} ({service_text}{f' / {location_text}' if location_text else ''})",
+                f"{copy['demand_social']} ({service_text})",
+            ]
+        )
+        supply.append(f"{copy['supply']} ({service_text})")
+        opportunities.append(f"{copy['opportunity']} ({service_text})")
+    else:
+        demand.extend([copy["demand_google"], copy["demand_social"]])
+        supply.append(copy["supply"])
+        opportunities.append(copy["opportunity"])
+
+    return _text_list(demand, 10), _text_list(supply, 10), _text_list(opportunities, 10)
+
+
 def normalize_marketing_intelligence(
     raw: dict[str, Any] | None,
     suite_payload: dict[str, Any],
@@ -319,6 +487,24 @@ def normalize_marketing_intelligence(
         for link in (_normalize_source_link(item) for item in _list(raw.get("source_links")) + raw_links)
         if link
     ][:20]
+    keywords = _business_keywords(brand, strategy)
+    locations = _audience_locations(brand, strategy)
+    if keywords:
+        search_location = " ".join(locations[:2]).strip()
+        for platform, site_filter in (
+            ("google", ""),
+            ("instagram", "site:instagram.com"),
+            ("facebook", "site:facebook.com"),
+            ("tiktok", "site:tiktok.com"),
+        ):
+            query = " ".join(part for part in [site_filter, keywords[0], search_location] if part).strip()
+            source_links.append(
+                {
+                    "label": f"{platform} market search",
+                    "url": _search_url(query),
+                    "source": platform,
+                }
+            )
 
     competitor_sources = (
         _list(raw.get("competitors"))
@@ -330,6 +516,8 @@ def normalize_marketing_intelligence(
         for item in (_normalize_competitor(raw_competitor, index) for index, raw_competitor in enumerate(competitor_sources, start=1))
         if item
     ][:24]
+    if not competitors:
+        competitors = _fallback_competitor_research(brand, strategy, language)
 
     demand_signals = _text_list(
         raw.get("demand_signals")
@@ -343,11 +531,32 @@ def normalize_marketing_intelligence(
 
     supply_signals = _text_list(raw.get("supply_signals") or raw.get("supply") or raw.get("competition_notes"), 12)
     opportunities = _text_list(raw.get("opportunities") or raw.get("gaps") or raw.get("recommendations"), 12)
+    fallback_demand, fallback_supply, fallback_opportunities = _fallback_market_signals(brand, strategy, deck, language)
+    if not demand_signals:
+        demand_signals = fallback_demand
+    elif len(demand_signals) < 3:
+        demand_signals = _text_list([*demand_signals, *fallback_demand], 10)
+    if not supply_signals:
+        supply_signals = fallback_supply
+    elif len(supply_signals) < 3:
+        supply_signals = _text_list([*supply_signals, *fallback_supply], 10)
+    if not opportunities:
+        opportunities = fallback_opportunities
+    elif len(opportunities) < 3:
+        opportunities = _text_list([*opportunities, *fallback_opportunities], 10)
     warnings = _text_list(raw.get("warnings") or research.get("limitations"), 8)
-    if not competitors:
-        warnings.append("Competitor research is not ready yet; run the next intelligence slice to collect external competitors.")
+    if competitors and any(item.get("research_lead") for item in competitors):
+        warnings.append(_fallback_market_copy(language)["warning"])
     if not demand_signals:
         warnings.append("Demand signals are based on the Suite profile until external research is generated.")
+
+    deduped_sources: list[dict[str, Any]] = []
+    seen_source_urls: set[str] = set()
+    for source in source_links:
+        marker = str(source.get("url") or source.get("label") or "")
+        if marker and marker not in seen_source_urls:
+            seen_source_urls.add(marker)
+            deduped_sources.append(source)
 
     return {
         "version": INTELLIGENCE_VERSION,
@@ -358,7 +567,7 @@ def normalize_marketing_intelligence(
         "demand_signals": [{"id": f"demand-{i}", "title": item, "source": "profile"} for i, item in enumerate(demand_signals, start=1)],
         "supply_signals": [{"id": f"supply-{i}", "title": item, "source": "research"} for i, item in enumerate(supply_signals, start=1)],
         "opportunities": [{"id": f"opportunity-{i}", "title": item} for i, item in enumerate(opportunities, start=1)],
-        "source_links": source_links,
+        "source_links": deduped_sources[:20],
         "warnings": warnings,
     }
 
