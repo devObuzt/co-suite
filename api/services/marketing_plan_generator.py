@@ -995,6 +995,48 @@ def suite_research_payload(suite: Suite, planning_inputs: dict[str, Any] | None 
     }
 
 
+MARKETING_PLAN_STAGE_DEFINITIONS: list[dict[str, Any]] = [
+    {"id": "research", "label": "Research base", "progress": 15},
+    {"id": "market", "label": "Market intelligence", "progress": 35},
+    {"id": "deck", "label": "Strategic plan", "progress": 75},
+    {"id": "saving", "label": "Save and publish", "progress": 95},
+]
+
+
+def marketing_plan_stage_snapshot(active_stage_id: str, completed_stage_ids: set[str] | None = None) -> list[dict[str, Any]]:
+    completed_stage_ids = completed_stage_ids or set()
+    stages: list[dict[str, Any]] = []
+    for stage in MARKETING_PLAN_STAGE_DEFINITIONS:
+        stage_id = str(stage["id"])
+        if stage_id in completed_stage_ids:
+            status = "completed"
+        elif stage_id == active_stage_id:
+            status = "running"
+        else:
+            status = "pending"
+        stages.append({**stage, "status": status})
+    return stages
+
+
+def build_marketing_plan_partial_result(
+    suite: Suite,
+    language: str | None = None,
+    planning_inputs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    payload = suite_research_payload(suite, planning_inputs=planning_inputs)
+    intelligence = normalize_marketing_intelligence({}, payload, output_language)
+    return {
+        "stages": marketing_plan_stage_snapshot("deck", {"research", "market"}),
+        "partial": {
+            "intelligence_ready": True,
+            "deck_ready": False,
+            "action_plan_ready": False,
+        },
+        "intelligence": intelligence,
+    }
+
+
 def _json_for_prompt(payload: dict[str, Any]) -> str:
     """Compact suite research so long-running plan jobs stay inside provider timeouts."""
     text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

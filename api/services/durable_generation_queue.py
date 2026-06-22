@@ -21,7 +21,11 @@ from .generation_jobs import (
     update_job,
     utcnow,
 )
-from .marketing_plan_generator import generate_marketing_plan_deck
+from .marketing_plan_generator import (
+    build_marketing_plan_partial_result,
+    generate_marketing_plan_deck,
+    marketing_plan_stage_snapshot,
+)
 from .product_bulk_generator import (
     generate_all_products,
     generate_first_product_templates,
@@ -90,6 +94,14 @@ def _suite_marketing_plan_deck(suite: Suite) -> Optional[dict]:
 def _save_suite_marketing_plan_deck(suite: Suite, deck: dict) -> None:
     strategy = dict(_suite_strategy(suite))
     strategy["marketing_plan_deck"] = deck
+    suite.strategy = strategy
+
+
+def _save_suite_marketing_plan_partial(suite: Suite, partial_result: dict) -> None:
+    strategy = dict(_suite_strategy(suite))
+    intelligence = partial_result.get("intelligence")
+    if isinstance(intelligence, dict):
+        strategy["marketing_intelligence"] = intelligence
     suite.strategy = strategy
 
 
@@ -231,13 +243,28 @@ async def execute_claimed_job(
                 if not suite:
                     return await mark_failed(db, job.id, "Suite not found")
 
-                progress({"stage": "research", "message": "Preparing suite research for the marketing plan.", "progress": 15})
                 planning_inputs = {
                     "near_term_focus": input_data.get("near_term_focus"),
                     "upcoming_campaigns": input_data.get("upcoming_campaigns") or [],
                     "planning_notes": input_data.get("planning_notes"),
                 }
-                progress({"stage": "ai_strategy", "message": "Building the marketing plan with AI.", "progress": 35})
+                partial_result = build_marketing_plan_partial_result(
+                    suite,
+                    input_data.get("language"),
+                    planning_inputs=planning_inputs,
+                )
+                _save_suite_marketing_plan_partial(suite, partial_result)
+                await db.commit()
+                await mark_progress(
+                    db,
+                    job.id,
+                    {
+                        "stage": "ai_strategy",
+                        "message": "Market intelligence is ready. Building the full marketing plan with AI.",
+                        "progress": 35,
+                        "result": partial_result,
+                    },
+                )
                 deck = await generate_marketing_plan_deck(
                     suite,
                     input_data.get("language"),
@@ -248,8 +275,30 @@ async def execute_claimed_job(
                     deck["share"] = existing["share"]
                 _save_suite_marketing_plan_deck(suite, deck)
                 await db.commit()
-                progress({"stage": "saving", "message": "Marketing plan saved.", "progress": 95})
-                return await mark_completed(db, job.id, {"deck_ready": True, "generated_at": deck.get("generated_at")})
+                saving_result = {
+                    **partial_result,
+                    "stages": marketing_plan_stage_snapshot("saving", {"research", "market", "deck"}),
+                    "partial": {
+                        "intelligence_ready": True,
+                        "deck_ready": True,
+                        "action_plan_ready": True,
+                    },
+                    "deck_ready": True,
+                    "generated_at": deck.get("generated_at"),
+                }
+                await mark_progress(
+                    db,
+                    job.id,
+                    {"stage": "saving", "message": "Marketing plan saved.", "progress": 95, "result": saving_result},
+                )
+                return await mark_completed(
+                    db,
+                    job.id,
+                    {
+                        **saving_result,
+                        "stages": marketing_plan_stage_snapshot("", {"research", "market", "deck", "saving"}),
+                    },
+                )
 
             if job.type == GenerationJobType.product_bulk_generate_first:
                 batch_id = str(input_data.get("batch_id") or "")

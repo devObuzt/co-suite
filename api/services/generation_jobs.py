@@ -119,6 +119,8 @@ def serialize_job(job: Optional[GenerationJob], suite_id: Optional[str] = None, 
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         "result": job.result,
+        "stages": (job.result or {}).get("stages") if isinstance(job.result, dict) else None,
+        "partial": (job.result or {}).get("partial") if isinstance(job.result, dict) else None,
         "execution": {
             "mode": "durable_worker",
             "durable_queue": True,

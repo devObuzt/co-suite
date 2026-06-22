@@ -94,6 +94,20 @@ def test_normalize_marketing_plan_deck_adds_required_sections():
     assert "budget" in section_ids
 
 
+def test_build_marketing_plan_partial_result_exposes_market_before_full_deck():
+    suite = make_suite()
+    partial = mpg.build_marketing_plan_partial_result(suite, "ar")
+
+    assert partial["partial"]["intelligence_ready"] is True
+    assert partial["partial"]["deck_ready"] is False
+    assert partial["stages"][0]["id"] == "research"
+    assert partial["stages"][1]["id"] == "market"
+    assert partial["stages"][1]["status"] == "completed"
+    assert partial["stages"][2]["status"] == "running"
+    assert partial["intelligence"]["competitors"]
+    assert partial["intelligence"]["demand_signals"]
+
+
 def test_normalize_marketing_plan_deck_preserves_monthly_work_plan_and_paid_funnel():
     deck = mpg.normalize_marketing_plan_deck(
         {

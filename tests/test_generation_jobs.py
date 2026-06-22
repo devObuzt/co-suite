@@ -69,6 +69,36 @@ def test_serialize_job_returns_frontend_contract():
     }
 
 
+def test_serialize_job_exposes_generation_stages_for_partial_results():
+    now = datetime.now(timezone.utc)
+    job = GenerationJob(
+        id="job_marketing",
+        suite_id="suite_1",
+        type=GenerationJobType.marketing_plan,
+        status=GenerationJobStatus.running,
+        stage="ai_strategy",
+        message="Building the marketing plan with AI.",
+        progress=35,
+        created_at=now,
+        updated_at=now,
+        result={
+            "stages": [
+                {"id": "research", "status": "completed", "progress": 15},
+                {"id": "market", "status": "completed", "progress": 35},
+                {"id": "deck", "status": "running", "progress": 60},
+            ],
+            "partial": {"intelligence_ready": True},
+        },
+    )
+
+    payload = serialize_job(job, now=now)
+
+    assert payload["stages"][0]["id"] == "research"
+    assert payload["stages"][1]["status"] == "completed"
+    assert payload["partial"]["intelligence_ready"] is True
+    assert payload["result"]["stages"] == payload["stages"]
+
+
 def test_serialize_job_marks_stale_background_task_states():
     now = datetime.now(timezone.utc)
     job = GenerationJob(
