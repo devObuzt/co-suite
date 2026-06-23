@@ -24,6 +24,12 @@ from ..services.marketing_plan_generator import (
 
 router = APIRouter(tags=["marketing-plans"])
 
+GENERATED_MARKETING_PLAN_KEYS = (
+    "marketing_plan_deck",
+    "marketing_intelligence",
+    "marketing_action_plan",
+)
+
 
 class GenerateMarketingPlanRequest(BaseModel):
     language: str | None = None
@@ -64,6 +70,8 @@ def _intelligence(suite: Suite) -> dict[str, Any]:
     existing = strategy.get("marketing_intelligence")
     if isinstance(existing, dict):
         return normalize_marketing_intelligence(existing, suite_research_payload(suite), language)
+    if not _deck(suite):
+        return _empty_marketing_intelligence(language)
     return normalize_marketing_intelligence({}, suite_research_payload(suite), language)
 
 
@@ -119,6 +127,31 @@ def _save_deck(suite: Suite, deck: dict[str, Any]) -> None:
     strategy = dict(_strategy(suite))
     strategy["marketing_plan_deck"] = deck
     suite.strategy = strategy
+
+
+def _empty_marketing_intelligence(language: str) -> dict[str, Any]:
+    return {
+        "version": "marketing_intelligence_v1",
+        "language": language,
+        "status": "missing",
+        "competitors": [],
+        "demand_signals": [],
+        "supply_signals": [],
+        "opportunities": [],
+        "source_links": [],
+        "warnings": [],
+    }
+
+
+def _clear_marketing_plan_data(suite: Suite) -> list[str]:
+    strategy = dict(_strategy(suite))
+    removed = []
+    for key in GENERATED_MARKETING_PLAN_KEYS:
+        if key in strategy:
+            removed.append(key)
+            strategy.pop(key, None)
+    suite.strategy = strategy
+    return removed
 
 
 def _marketing_plan_response(
@@ -192,6 +225,24 @@ async def generate_marketing_plan(
         },
     )
     return _marketing_plan_response(suite, suite_id, job, job.status.value)
+
+
+@router.delete("/suites/{suite_id}/marketing-plan")
+async def delete_marketing_plan(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    active = await _active_marketing_plan_job(db, suite_id)
+    if active:
+        raise HTTPException(status_code=409, detail="Wait for the active marketing plan job to finish before deleting it.")
+    removed = _clear_marketing_plan_data(suite)
+    await db.commit()
+    response = _marketing_plan_response(suite, suite_id, await _latest_marketing_plan_job(db, suite_id), "missing")
+    response["deleted"] = True
+    response["removed"] = removed
+    return response
 
 
 async def _generate_marketing_plan_section(
