@@ -154,6 +154,41 @@ def _clear_marketing_plan_data(suite: Suite) -> list[str]:
     return removed
 
 
+def _save_marketing_intelligence(suite: Suite, intelligence: dict[str, Any]) -> dict[str, Any]:
+    strategy = dict(_strategy(suite))
+    strategy["marketing_intelligence"] = intelligence
+    suite.strategy = strategy
+    return intelligence
+
+
+def _save_competitor_scratch(suite: Suite, language: str | None = None) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    intelligence = normalize_marketing_intelligence(
+        {"phase": "competitors"},
+        suite_research_payload(suite),
+        output_language,
+    )
+    return _save_marketing_intelligence(suite, intelligence)
+
+
+def _save_demand_supply_scratch(suite: Suite, language: str | None = None) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    existing = _strategy(suite).get("marketing_intelligence")
+    base = existing if isinstance(existing, dict) else {"phase": "competitors"}
+    base = normalize_marketing_intelligence(base, suite_research_payload(suite), output_language)
+    intelligence = normalize_marketing_intelligence(
+        {
+            **base,
+            "phase": "demand_supply",
+            "status": "ready",
+            "competitors": base.get("competitors") or [],
+        },
+        suite_research_payload(suite),
+        output_language,
+    )
+    return _save_marketing_intelligence(suite, intelligence)
+
+
 def _marketing_plan_response(
     suite: Suite,
     suite_id: str,
@@ -310,7 +345,11 @@ async def generate_marketing_competitors(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await _generate_marketing_research_section(suite_id, "competitors", payload, current_user, db)
+    suite = await get_owned_suite(db, suite_id, current_user)
+    request_data = payload or GenerateMarketingPlanRequest()
+    _save_competitor_scratch(suite, request_data.language)
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
 
 @router.post("/suites/{suite_id}/marketing-plan/demand-supply/generate")
@@ -320,7 +359,11 @@ async def generate_marketing_demand_supply(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await _generate_marketing_research_section(suite_id, "demand_supply", payload, current_user, db)
+    suite = await get_owned_suite(db, suite_id, current_user)
+    request_data = payload or GenerateMarketingPlanRequest()
+    _save_demand_supply_scratch(suite, request_data.language)
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
 
 @router.post("/suites/{suite_id}/marketing-plan/social-plan/generate")

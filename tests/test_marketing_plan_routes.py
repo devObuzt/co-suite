@@ -36,3 +36,21 @@ def test_empty_marketing_intelligence_has_no_generated_market_data():
     assert intelligence["demand_signals"] == []
     assert intelligence["supply_signals"] == []
     assert intelligence["opportunities"] == []
+
+
+def test_save_competitor_scratch_writes_visible_competitors_without_deck():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec", "services": ["Websites"]},
+        strategy={"marketing_message": "Keep me"},
+    )
+
+    intelligence = marketing_plans._save_competitor_scratch(suite, "ar")
+
+    assert suite.strategy["marketing_message"] == "Keep me"
+    assert suite.strategy["marketing_intelligence"]["status"] == "competitors_ready"
+    assert intelligence["competitors"]
+    assert intelligence["demand_signals"] == []
