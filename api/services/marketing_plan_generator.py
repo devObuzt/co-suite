@@ -22,6 +22,8 @@ MARKETING_PLAN_MAX_TOKENS = 9000
 MARKETING_PLAN_TIMEOUT_SECONDS = 320
 MARKETING_PLAN_REPAIR_MAX_TOKENS = 7000
 MARKETING_PLAN_REPAIR_TIMEOUT_SECONDS = 220
+MARKET_RESEARCH_MAX_TOKENS = 3000
+MARKET_RESEARCH_TIMEOUT_SECONDS = 160
 
 
 class MarketingPlanGenerationError(RuntimeError):
@@ -528,6 +530,8 @@ def normalize_marketing_intelligence(
     Slice 2 can replace the same contract with deeper source-specific research.
     """
     raw = _dict(raw)
+    phase = str(raw.get("phase") or "").strip()
+    competitor_only = phase == "competitors"
     brand = _dict(suite_payload.get("brand"))
     strategy = _dict(suite_payload.get("strategy"))
     deck = _dict(strategy.get("marketing_plan_deck"))
@@ -580,31 +584,36 @@ def normalize_marketing_intelligence(
     if not competitors:
         competitors = _fallback_competitor_research(brand, strategy, language)
 
-    demand_signals = _text_list(
-        raw.get("demand_signals")
-        or raw.get("demand")
-        or _first_present(research, "demand_signals", "opportunities", "market_demand")
-        or _dict(deck.get("sections_by_id", {})).get("market_demand"),
-        12,
-    )
-    if not demand_signals:
-        demand_signals = _text_list(_dict(brand).get("audience_interests") or _dict(brand).get("services"), 8)
+    if competitor_only:
+        demand_signals: list[str] = []
+        supply_signals: list[str] = []
+        opportunities: list[str] = []
+    else:
+        demand_signals = _text_list(
+            raw.get("demand_signals")
+            or raw.get("demand")
+            or _first_present(research, "demand_signals", "opportunities", "market_demand")
+            or _dict(deck.get("sections_by_id", {})).get("market_demand"),
+            12,
+        )
+        if not demand_signals:
+            demand_signals = _text_list(_dict(brand).get("audience_interests") or _dict(brand).get("services"), 8)
 
-    supply_signals = _text_list(raw.get("supply_signals") or raw.get("supply") or raw.get("competition_notes"), 12)
-    opportunities = _text_list(raw.get("opportunities") or raw.get("gaps") or raw.get("recommendations"), 12)
-    fallback_demand, fallback_supply, fallback_opportunities = _fallback_market_signals(brand, strategy, deck, language)
-    if not demand_signals:
-        demand_signals = fallback_demand
-    elif len(demand_signals) < 3:
-        demand_signals = _text_list([*demand_signals, *fallback_demand], 10)
-    if not supply_signals:
-        supply_signals = fallback_supply
-    elif len(supply_signals) < 3:
-        supply_signals = _text_list([*supply_signals, *fallback_supply], 10)
-    if not opportunities:
-        opportunities = fallback_opportunities
-    elif len(opportunities) < 3:
-        opportunities = _text_list([*opportunities, *fallback_opportunities], 10)
+        supply_signals = _text_list(raw.get("supply_signals") or raw.get("supply") or raw.get("competition_notes"), 12)
+        opportunities = _text_list(raw.get("opportunities") or raw.get("gaps") or raw.get("recommendations"), 12)
+        fallback_demand, fallback_supply, fallback_opportunities = _fallback_market_signals(brand, strategy, deck, language)
+        if not demand_signals:
+            demand_signals = fallback_demand
+        elif len(demand_signals) < 3:
+            demand_signals = _text_list([*demand_signals, *fallback_demand], 10)
+        if not supply_signals:
+            supply_signals = fallback_supply
+        elif len(supply_signals) < 3:
+            supply_signals = _text_list([*supply_signals, *fallback_supply], 10)
+        if not opportunities:
+            opportunities = fallback_opportunities
+        elif len(opportunities) < 3:
+            opportunities = _text_list([*opportunities, *fallback_opportunities], 10)
     warnings = _text_list(raw.get("warnings") or research.get("limitations"), 8)
     if competitors and any(item.get("research_lead") for item in competitors):
         warnings.append(_fallback_market_copy(language)["warning"])
@@ -623,7 +632,7 @@ def normalize_marketing_intelligence(
         "version": INTELLIGENCE_VERSION,
         "language": language,
         "generated_at": raw.get("generated_at") or datetime.now(timezone.utc).isoformat(),
-        "status": raw.get("status") or ("ready" if competitors or demand_signals or source_links else "needs_research"),
+        "status": raw.get("status") or ("competitors_ready" if competitor_only and competitors else "ready" if competitors or demand_signals or source_links else "needs_research"),
         "competitors": competitors,
         "demand_signals": [{"id": f"demand-{i}", "title": item, "source": "profile"} for i, item in enumerate(demand_signals, start=1)],
         "supply_signals": [{"id": f"supply-{i}", "title": item, "source": "research"} for i, item in enumerate(supply_signals, start=1)],
@@ -1035,6 +1044,159 @@ def build_marketing_plan_partial_result(
         },
         "intelligence": intelligence,
     }
+
+
+def build_marketing_competitor_research_prompt(
+    suite_payload: dict[str, Any],
+    language: str,
+) -> str:
+    lang_name = LANG_NAMES.get(language, language or "English")
+    payload_json = _json_for_prompt(suite_payload)
+    return f"""Research and return the competitor scratch pass for this OneShare suite.
+
+Language: {lang_name}.
+Return STRICT JSON only. No markdown, no comments, no surrounding text.
+Return one top-level key: "marketing_intelligence".
+
+Shape:
+{{
+  "marketing_intelligence": {{
+    "phase": "competitors",
+    "competitors": [
+      {{
+        "id": "stable id",
+        "name": "competitor or research lead name",
+        "platform": "google|instagram|facebook|tiktok|website|other",
+        "url": "source or search URL when available",
+        "reason": "why this competitor matters",
+        "offer": "what they appear to sell or emphasize",
+        "evidence": "observable clue or search query used",
+        "opportunity": "gap this suite can use",
+        "confidence": "high|medium|starter"
+      }}
+    ],
+    "source_links": [
+      {{"label": "source label", "url": "https://...", "source": "google|instagram|facebook|tiktok|website|other"}}
+    ],
+    "warnings": ["research limitations or validation needed"]
+  }}
+}}
+
+Rules:
+- Focus only on finding and explaining competitors or competitor-search leads.
+- Return 4 to 10 competitors or high-quality research leads.
+- Prefer real names and links from supplied links/profile data when available.
+- Use search URLs as starter leads when exact competitor names are not available from the profile.
+- Do not create demand_signals, supply notes, opportunities lists, strategy sections, monthly plans, or ad funnels.
+- Keep all visible text in the requested language.
+
+Business/profile data:
+{payload_json}
+"""
+
+
+def build_marketing_demand_supply_prompt(
+    suite_payload: dict[str, Any],
+    existing_intelligence: dict[str, Any],
+    language: str,
+) -> str:
+    lang_name = LANG_NAMES.get(language, language or "English")
+    payload_json = _json_for_prompt(suite_payload)
+    intelligence_json = _json_for_prompt(existing_intelligence)
+    return f"""Build the demand and supply scratch pass for this OneShare suite.
+
+Language: {lang_name}.
+Return STRICT JSON only. No markdown, no comments, no surrounding text.
+Return one top-level key: "marketing_intelligence".
+
+Shape:
+{{
+  "marketing_intelligence": {{
+    "phase": "demand_supply",
+    "demand_signals": ["clear market demand signal"],
+    "supply_signals": ["clear competitor/supply saturation signal"],
+    "opportunities": ["actionable gap or angle"],
+    "source_links": [
+      {{"label": "source label", "url": "https://...", "source": "google|instagram|facebook|tiktok|website|other"}}
+    ],
+    "warnings": ["research limitations or validation needed"]
+  }}
+}}
+
+Rules:
+- Use the existing competitor scratch pass as context.
+- Do not replace the competitor list; only add demand_signals, supply_signals, opportunities, sources, and warnings.
+- Return 4 to 8 demand signals, 4 to 8 supply signals, and 4 to 8 opportunities.
+- Separate demand from supply: demand is what customers appear to need; supply is what the market already offers.
+- Keep all visible text in the requested language.
+
+Existing competitor scratch pass:
+{intelligence_json}
+
+Business/profile data:
+{payload_json}
+"""
+
+
+async def generate_marketing_competitor_research(
+    suite: Suite,
+    language: str | None,
+    planning_inputs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    payload = suite_research_payload(suite, planning_inputs)
+    prompt = build_marketing_competitor_research_prompt(payload, output_language)
+    raw = await call_text_ai(
+        provider="anthropic",
+        model=settings.anthropic_text_model,
+        max_tokens=MARKET_RESEARCH_MAX_TOKENS,
+        messages=[{"role": "user", "content": prompt}],
+        system="You perform practical market research for client marketing plans. Return JSON only.",
+        timeout=MARKET_RESEARCH_TIMEOUT_SECONDS,
+    )
+    parsed = parse_marketing_plan_json(raw)
+    intelligence = _dict(parsed.get("marketing_intelligence")) or parsed
+    if not intelligence:
+        intelligence = {"phase": "competitors"}
+    intelligence["phase"] = "competitors"
+    return normalize_marketing_intelligence(intelligence, payload, output_language)
+
+
+async def generate_marketing_demand_supply_research(
+    suite: Suite,
+    language: str | None,
+    planning_inputs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    payload = suite_research_payload(suite, planning_inputs)
+    existing = _dict(_dict(suite.strategy).get("marketing_intelligence"))
+    existing = normalize_marketing_intelligence(existing, payload, output_language) if existing else normalize_marketing_intelligence({"phase": "competitors"}, payload, output_language)
+    prompt = build_marketing_demand_supply_prompt(payload, existing, output_language)
+    raw = await call_text_ai(
+        provider="anthropic",
+        model=settings.anthropic_text_model,
+        max_tokens=MARKET_RESEARCH_MAX_TOKENS,
+        messages=[{"role": "user", "content": prompt}],
+        system="You perform practical demand and supply analysis for client marketing plans. Return JSON only.",
+        timeout=MARKET_RESEARCH_TIMEOUT_SECONDS,
+    )
+    parsed = parse_marketing_plan_json(raw)
+    incoming = _dict(parsed.get("marketing_intelligence")) or parsed
+    merged = {
+        **existing,
+        **incoming,
+        "phase": "demand_supply",
+        "competitors": existing.get("competitors") or incoming.get("competitors") or [],
+        "source_links": [
+            *_list(existing.get("source_links")),
+            *_list(incoming.get("source_links")),
+        ],
+        "warnings": [
+            *_list(existing.get("warnings")),
+            *_list(incoming.get("warnings")),
+        ],
+    }
+    return normalize_marketing_intelligence(merged, payload, output_language)
 
 
 def _json_for_prompt(payload: dict[str, Any]) -> str:

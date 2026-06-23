@@ -23,6 +23,8 @@ from .generation_jobs import (
 )
 from .marketing_plan_generator import (
     build_marketing_plan_partial_result,
+    generate_marketing_competitor_research,
+    generate_marketing_demand_supply_research,
     generate_marketing_plan_execution_section,
     generate_marketing_plan_deck,
     marketing_plan_stage_snapshot,
@@ -276,6 +278,57 @@ async def execute_claimed_job(
                     "upcoming_campaigns": input_data.get("upcoming_campaigns") or [],
                     "planning_notes": input_data.get("planning_notes"),
                 }
+                if section in {"competitors", "demand_supply"}:
+                    stage = "competitor_research" if section == "competitors" else "demand_supply"
+                    message = (
+                        "Scratching competitors and source leads."
+                        if section == "competitors"
+                        else "Building demand and supply signals from competitors."
+                    )
+                    await mark_progress(
+                        db,
+                        job.id,
+                        {
+                            "stage": stage,
+                            "message": message,
+                            "progress": 20 if section == "competitors" else 45,
+                            "result": {
+                                "partial": {
+                                    "competitors_ready": False,
+                                    "demand_supply_ready": False,
+                                    "deck_ready": bool(_suite_marketing_plan_deck(suite)),
+                                }
+                            },
+                        },
+                    )
+                    intelligence = (
+                        await generate_marketing_competitor_research(
+                            suite,
+                            input_data.get("language"),
+                            planning_inputs=planning_inputs,
+                        )
+                        if section == "competitors"
+                        else await generate_marketing_demand_supply_research(
+                            suite,
+                            input_data.get("language"),
+                            planning_inputs=planning_inputs,
+                        )
+                    )
+                    _save_suite_marketing_plan_partial(suite, {"intelligence": intelligence})
+                    await db.commit()
+                    return await mark_completed(
+                        db,
+                        job.id,
+                        {
+                            "section": section,
+                            "partial": {
+                                "competitors_ready": bool(intelligence.get("competitors")),
+                                "demand_supply_ready": section == "demand_supply",
+                                "deck_ready": bool(_suite_marketing_plan_deck(suite)),
+                            },
+                            "intelligence": intelligence,
+                        },
+                    )
                 if section in {"social", "ads"}:
                     existing = _suite_marketing_plan_deck(suite)
                     if not existing:

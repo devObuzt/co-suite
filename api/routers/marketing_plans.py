@@ -224,6 +224,54 @@ async def _generate_marketing_plan_section(
     return _marketing_plan_response(suite, suite_id, job, job.status.value)
 
 
+async def _generate_marketing_research_section(
+    suite_id: str,
+    section: str,
+    payload: GenerateMarketingPlanRequest | None,
+    current_user: User,
+    db: AsyncSession,
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    request_data = payload or GenerateMarketingPlanRequest()
+    active = await _active_marketing_plan_job(db, suite_id)
+    if active:
+        return _marketing_plan_response(suite, suite_id, active, active.status.value)
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.marketing_plan,
+        user_id=current_user.id,
+        input_data={
+            "section": section,
+            "language": request_data.language,
+            "near_term_focus": request_data.near_term_focus,
+            "upcoming_campaigns": [item for item in request_data.upcoming_campaigns if item.strip()][:12],
+            "planning_notes": request_data.planning_notes,
+        },
+    )
+    return _marketing_plan_response(suite, suite_id, job, job.status.value)
+
+
+@router.post("/suites/{suite_id}/marketing-plan/competitors/generate")
+async def generate_marketing_competitors(
+    suite_id: str,
+    payload: GenerateMarketingPlanRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _generate_marketing_research_section(suite_id, "competitors", payload, current_user, db)
+
+
+@router.post("/suites/{suite_id}/marketing-plan/demand-supply/generate")
+async def generate_marketing_demand_supply(
+    suite_id: str,
+    payload: GenerateMarketingPlanRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _generate_marketing_research_section(suite_id, "demand_supply", payload, current_user, db)
+
+
 @router.post("/suites/{suite_id}/marketing-plan/social-plan/generate")
 async def generate_marketing_social_plan(
     suite_id: str,

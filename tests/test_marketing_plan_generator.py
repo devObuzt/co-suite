@@ -264,6 +264,63 @@ def test_build_marketing_plan_prompt_can_request_strategy_only_without_execution
     assert "Awareness" not in prompt
 
 
+def test_build_marketing_competitor_research_prompt_requests_only_competitors():
+    prompt = mpg.build_marketing_competitor_research_prompt(
+        {
+            "suite": {"name": "Connec"},
+            "brand": {"services": ["Websites"]},
+            "planning_inputs": {"near_term_focus": "Show competitors first"},
+        },
+        "ar",
+    )
+
+    assert "Return STRICT JSON only" in prompt
+    assert "Arabic" in prompt
+    assert "competitors" in prompt
+    assert "source_links" in prompt
+    assert "Do not create demand_signals" in prompt
+    assert "supply_signals" not in prompt
+    assert "Show competitors first" in prompt
+
+
+def test_build_marketing_demand_supply_prompt_uses_existing_competitors():
+    prompt = mpg.build_marketing_demand_supply_prompt(
+        {"suite": {"name": "Connec"}},
+        {
+            "competitors": [
+                {"name": "Market Peer", "platform": "instagram", "url": "https://example.com/peer"}
+            ]
+        },
+        "he",
+    )
+
+    assert "Hebrew" in prompt
+    assert "Market Peer" in prompt
+    assert "demand_signals" in prompt
+    assert "supply_signals" in prompt
+    assert "opportunities" in prompt
+    assert "Do not replace the competitor list" in prompt
+
+
+def test_competitor_only_intelligence_does_not_fill_demand_supply_fallbacks():
+    payload = mpg.suite_research_payload(make_suite())
+
+    intelligence = mpg.normalize_marketing_intelligence(
+        {
+            "phase": "competitors",
+            "competitors": [{"name": "Market Peer", "platform": "instagram"}],
+        },
+        payload,
+        "en",
+    )
+
+    assert intelligence["status"] == "competitors_ready"
+    assert intelligence["competitors"][0]["name"] == "Market Peer"
+    assert intelligence["demand_signals"] == []
+    assert intelligence["supply_signals"] == []
+    assert intelligence["opportunities"] == []
+
+
 @pytest.mark.asyncio
 async def test_generate_marketing_plan_deck_uses_anthropic(monkeypatch):
     calls = {}
