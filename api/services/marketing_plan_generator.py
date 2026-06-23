@@ -1146,16 +1146,23 @@ async def generate_marketing_competitor_research(
     output_language = infer_plan_language(suite, language)
     payload = suite_research_payload(suite, planning_inputs)
     prompt = build_marketing_competitor_research_prompt(payload, output_language)
-    raw = await call_text_ai(
-        provider="anthropic",
-        model=settings.anthropic_text_model,
-        max_tokens=MARKET_RESEARCH_MAX_TOKENS,
-        messages=[{"role": "user", "content": prompt}],
-        system="You perform practical market research for client marketing plans. Return JSON only.",
-        timeout=MARKET_RESEARCH_TIMEOUT_SECONDS,
-    )
-    parsed = parse_marketing_plan_json(raw)
-    intelligence = _dict(parsed.get("marketing_intelligence")) or parsed
+    try:
+        raw = await call_text_ai(
+            provider="anthropic",
+            model=settings.anthropic_text_model,
+            max_tokens=MARKET_RESEARCH_MAX_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+            system="You perform practical market research for client marketing plans. Return JSON only.",
+            timeout=MARKET_RESEARCH_TIMEOUT_SECONDS,
+        )
+        parsed = parse_marketing_plan_json(raw)
+        intelligence = _dict(parsed.get("marketing_intelligence")) or parsed
+    except Exception as exc:
+        log.warning("Competitor research AI failed; using starter research leads: %s", exc)
+        intelligence = {
+            "phase": "competitors",
+            "warnings": ["AI provider failed during competitor scratch; showing starter research leads from the suite profile."],
+        }
     if not intelligence:
         intelligence = {"phase": "competitors"}
     intelligence["phase"] = "competitors"
@@ -1172,20 +1179,28 @@ async def generate_marketing_demand_supply_research(
     existing = _dict(_dict(suite.strategy).get("marketing_intelligence"))
     existing = normalize_marketing_intelligence(existing, payload, output_language) if existing else normalize_marketing_intelligence({"phase": "competitors"}, payload, output_language)
     prompt = build_marketing_demand_supply_prompt(payload, existing, output_language)
-    raw = await call_text_ai(
-        provider="anthropic",
-        model=settings.anthropic_text_model,
-        max_tokens=MARKET_RESEARCH_MAX_TOKENS,
-        messages=[{"role": "user", "content": prompt}],
-        system="You perform practical demand and supply analysis for client marketing plans. Return JSON only.",
-        timeout=MARKET_RESEARCH_TIMEOUT_SECONDS,
-    )
-    parsed = parse_marketing_plan_json(raw)
-    incoming = _dict(parsed.get("marketing_intelligence")) or parsed
+    try:
+        raw = await call_text_ai(
+            provider="anthropic",
+            model=settings.anthropic_text_model,
+            max_tokens=MARKET_RESEARCH_MAX_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+            system="You perform practical demand and supply analysis for client marketing plans. Return JSON only.",
+            timeout=MARKET_RESEARCH_TIMEOUT_SECONDS,
+        )
+        parsed = parse_marketing_plan_json(raw)
+        incoming = _dict(parsed.get("marketing_intelligence")) or parsed
+    except Exception as exc:
+        log.warning("Demand/supply AI failed; using profile market signals: %s", exc)
+        incoming = {
+            "phase": "demand_supply",
+            "warnings": ["AI provider failed during demand and supply analysis; showing profile-based market signals."],
+        }
     merged = {
         **existing,
         **incoming,
         "phase": "demand_supply",
+        "status": "ready",
         "competitors": existing.get("competitors") or incoming.get("competitors") or [],
         "source_links": [
             *_list(existing.get("source_links")),

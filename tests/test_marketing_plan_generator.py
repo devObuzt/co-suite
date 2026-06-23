@@ -322,6 +322,46 @@ def test_competitor_only_intelligence_does_not_fill_demand_supply_fallbacks():
 
 
 @pytest.mark.asyncio
+async def test_generate_marketing_competitor_research_returns_starter_results_when_ai_fails(monkeypatch):
+    async def fake_call_text_ai(**kwargs):
+        raise RuntimeError("provider is down")
+
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+
+    intelligence = await mpg.generate_marketing_competitor_research(make_suite(), "ar")
+
+    assert intelligence["status"] == "competitors_ready"
+    assert intelligence["competitors"]
+    assert all(item.get("research_lead") for item in intelligence["competitors"])
+    assert intelligence["demand_signals"] == []
+    assert any("provider" in warning.lower() or "ai" in warning.lower() for warning in intelligence["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_generate_marketing_demand_supply_research_returns_profile_signals_when_ai_fails(monkeypatch):
+    async def fake_call_text_ai(**kwargs):
+        raise RuntimeError("provider is down")
+
+    suite = make_suite()
+    suite.strategy = {
+        "marketing_intelligence": {
+            "phase": "competitors",
+            "competitors": [{"name": "Market Peer", "platform": "instagram"}],
+        }
+    }
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+
+    intelligence = await mpg.generate_marketing_demand_supply_research(suite, "en")
+
+    assert intelligence["status"] == "ready"
+    assert intelligence["competitors"][0]["name"] == "Market Peer"
+    assert intelligence["demand_signals"]
+    assert intelligence["supply_signals"]
+    assert intelligence["opportunities"]
+    assert any("provider" in warning.lower() or "ai" in warning.lower() for warning in intelligence["warnings"])
+
+
+@pytest.mark.asyncio
 async def test_generate_marketing_plan_deck_uses_anthropic(monkeypatch):
     calls = {}
 
