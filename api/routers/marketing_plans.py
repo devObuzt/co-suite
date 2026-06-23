@@ -121,6 +121,24 @@ def _save_deck(suite: Suite, deck: dict[str, Any]) -> None:
     suite.strategy = strategy
 
 
+def _marketing_plan_response(
+    suite: Suite,
+    suite_id: str,
+    job: GenerationJob | None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    deck = _deck(suite)
+    return {
+        "status": status or ("ready" if deck else "missing"),
+        "suite_id": suite_id,
+        "language": infer_plan_language(suite),
+        "deck": _public_deck(deck) if deck else None,
+        "intelligence": _intelligence(suite),
+        "action_plan": _action_plan(suite),
+        "generation_status": serialize_job(job, suite_id=suite_id),
+    }
+
+
 async def _find_by_share_token(db: AsyncSession, token: str) -> tuple[Suite, dict[str, Any]] | None:
     result = await db.execute(select(Suite))
     for suite in result.scalars().all():
@@ -142,25 +160,9 @@ async def get_marketing_plan(
     suite = await get_owned_suite(db, suite_id, current_user)
     deck = _deck(suite)
     job = await _latest_marketing_plan_job(db, suite_id)
-    generation_status = serialize_job(job, suite_id=suite_id)
     if not deck:
-        return {
-            "status": "missing",
-            "suite_id": suite_id,
-            "language": infer_plan_language(suite),
-            "deck": None,
-            "intelligence": _intelligence(suite),
-            "action_plan": _action_plan(suite),
-            "generation_status": generation_status,
-        }
-    return {
-        "status": "ready",
-        "suite_id": suite_id,
-        "deck": _public_deck(deck),
-        "intelligence": _intelligence(suite),
-        "action_plan": _action_plan(suite),
-        "generation_status": generation_status,
-    }
+        return _marketing_plan_response(suite, suite_id, job, "missing")
+    return _marketing_plan_response(suite, suite_id, job, "ready")
 
 
 @router.post("/suites/{suite_id}/marketing-plan/generate")
@@ -173,16 +175,8 @@ async def generate_marketing_plan(
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or GenerateMarketingPlanRequest()
     active = await _active_marketing_plan_job(db, suite_id)
-    deck = _deck(suite)
     if active:
-        return {
-            "status": active.status.value,
-            "suite_id": suite_id,
-            "deck": _public_deck(deck) if deck else None,
-            "intelligence": _intelligence(suite),
-            "action_plan": _action_plan(suite),
-            "generation_status": serialize_job(active, suite_id=suite_id),
-        }
+        return _marketing_plan_response(suite, suite_id, active, active.status.value)
 
     job = await create_job(
         db,
@@ -190,20 +184,64 @@ async def generate_marketing_plan(
         job_type=GenerationJobType.marketing_plan,
         user_id=current_user.id,
         input_data={
+            "section": "strategy",
             "language": request_data.language,
             "near_term_focus": request_data.near_term_focus,
             "upcoming_campaigns": [item for item in request_data.upcoming_campaigns if item.strip()][:12],
             "planning_notes": request_data.planning_notes,
         },
     )
-    return {
-        "status": job.status.value,
-        "suite_id": suite_id,
-        "deck": _public_deck(deck) if deck else None,
-        "intelligence": _intelligence(suite),
-        "action_plan": _action_plan(suite),
-        "generation_status": serialize_job(job, suite_id=suite_id),
-    }
+    return _marketing_plan_response(suite, suite_id, job, job.status.value)
+
+
+async def _generate_marketing_plan_section(
+    suite_id: str,
+    section: str,
+    payload: GenerateMarketingPlanRequest | None,
+    current_user: User,
+    db: AsyncSession,
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    if not _deck(suite):
+        raise HTTPException(status_code=404, detail="Generate the core marketing plan before this section.")
+    request_data = payload or GenerateMarketingPlanRequest()
+    active = await _active_marketing_plan_job(db, suite_id)
+    if active:
+        return _marketing_plan_response(suite, suite_id, active, active.status.value)
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.marketing_plan,
+        user_id=current_user.id,
+        input_data={
+            "section": section,
+            "language": request_data.language,
+            "near_term_focus": request_data.near_term_focus,
+            "upcoming_campaigns": [item for item in request_data.upcoming_campaigns if item.strip()][:12],
+            "planning_notes": request_data.planning_notes,
+        },
+    )
+    return _marketing_plan_response(suite, suite_id, job, job.status.value)
+
+
+@router.post("/suites/{suite_id}/marketing-plan/social-plan/generate")
+async def generate_marketing_social_plan(
+    suite_id: str,
+    payload: GenerateMarketingPlanRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _generate_marketing_plan_section(suite_id, "social", payload, current_user, db)
+
+
+@router.post("/suites/{suite_id}/marketing-plan/paid-funnel/generate")
+async def generate_marketing_paid_funnel(
+    suite_id: str,
+    payload: GenerateMarketingPlanRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _generate_marketing_plan_section(suite_id, "ads", payload, current_user, db)
 
 
 @router.get("/suites/{suite_id}/marketing-plan/generation-status")

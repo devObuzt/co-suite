@@ -23,8 +23,10 @@ from .generation_jobs import (
 )
 from .marketing_plan_generator import (
     build_marketing_plan_partial_result,
+    generate_marketing_plan_execution_section,
     generate_marketing_plan_deck,
     marketing_plan_stage_snapshot,
+    normalize_marketing_action_plan,
 )
 from .product_bulk_generator import (
     generate_all_products,
@@ -103,6 +105,31 @@ def _save_suite_marketing_plan_partial(suite: Suite, partial_result: dict) -> No
     if isinstance(intelligence, dict):
         strategy["marketing_intelligence"] = intelligence
     suite.strategy = strategy
+
+
+def _save_suite_marketing_plan_execution_section(suite: Suite, section: str, value: dict) -> dict:
+    strategy = dict(_suite_strategy(suite))
+    deck = dict(_suite_marketing_plan_deck(suite) or {})
+    if section == "social":
+        deck["monthly_work_plan"] = value
+        partial = dict(deck.get("partial") or {})
+        partial["social_plan_ready"] = True
+        partial["action_plan_ready"] = bool(deck.get("paid_funnel"))
+        deck["partial"] = partial
+    elif section == "ads":
+        deck["paid_funnel"] = value
+        partial = dict(deck.get("partial") or {})
+        partial["paid_funnel_ready"] = True
+        partial["action_plan_ready"] = bool(deck.get("monthly_work_plan"))
+        deck["partial"] = partial
+    strategy["marketing_plan_deck"] = deck
+    strategy["marketing_action_plan"] = normalize_marketing_action_plan(
+        dict(strategy.get("marketing_action_plan") or {}),
+        deck,
+        str(deck.get("language") or ""),
+    )
+    suite.strategy = strategy
+    return deck
 
 
 async def claim_next_job(db: AsyncSession) -> Optional[GenerationJob]:
@@ -243,11 +270,52 @@ async def execute_claimed_job(
                 if not suite:
                     return await mark_failed(db, job.id, "Suite not found")
 
+                section = str(input_data.get("section") or "strategy")
                 planning_inputs = {
                     "near_term_focus": input_data.get("near_term_focus"),
                     "upcoming_campaigns": input_data.get("upcoming_campaigns") or [],
                     "planning_notes": input_data.get("planning_notes"),
                 }
+                if section in {"social", "ads"}:
+                    existing = _suite_marketing_plan_deck(suite)
+                    if not existing:
+                        return await mark_failed(db, job.id, "Generate the core marketing plan before this section.")
+                    stage = "social_plan" if section == "social" else "ads_funnel"
+                    message = (
+                        "Building the monthly social work plan."
+                        if section == "social"
+                        else "Building the paid marketing funnel."
+                    )
+                    await mark_progress(
+                        db,
+                        job.id,
+                        {
+                            "stage": stage,
+                            "message": message,
+                            "progress": 30,
+                            "result": {
+                                "partial": existing.get("partial") or {},
+                                "deck_ready": True,
+                            },
+                        },
+                    )
+                    generated_section = await generate_marketing_plan_execution_section(
+                        suite,
+                        input_data.get("language"),
+                        section,
+                        planning_inputs=planning_inputs,
+                    )
+                    deck = _save_suite_marketing_plan_execution_section(suite, section, generated_section)
+                    await db.commit()
+                    completed_result = {
+                        "section": section,
+                        "partial": deck.get("partial") or {},
+                        "deck_ready": True,
+                        "social_plan_ready": bool(deck.get("monthly_work_plan")),
+                        "paid_funnel_ready": bool(deck.get("paid_funnel")),
+                    }
+                    return await mark_completed(db, job.id, completed_result)
+
                 partial_result = build_marketing_plan_partial_result(
                     suite,
                     input_data.get("language"),
@@ -269,6 +337,7 @@ async def execute_claimed_job(
                     suite,
                     input_data.get("language"),
                     planning_inputs=planning_inputs,
+                    include_execution_sections=False,
                 )
                 existing = _suite_marketing_plan_deck(suite)
                 if existing and isinstance(existing.get("share"), dict):
@@ -281,7 +350,9 @@ async def execute_claimed_job(
                     "partial": {
                         "intelligence_ready": True,
                         "deck_ready": True,
-                        "action_plan_ready": True,
+                        "action_plan_ready": False,
+                        "social_plan_ready": False,
+                        "paid_funnel_ready": False,
                     },
                     "deck_ready": True,
                     "generated_at": deck.get("generated_at"),

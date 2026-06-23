@@ -1045,36 +1045,21 @@ def _json_for_prompt(payload: dict[str, Any]) -> str:
     return text[:PROMPT_PAYLOAD_CHAR_LIMIT] + "...[truncated]"
 
 
-def build_marketing_plan_prompt(suite_payload: dict[str, Any], language: str) -> str:
+def build_marketing_plan_prompt(
+    suite_payload: dict[str, Any],
+    language: str,
+    include_execution_sections: bool = True,
+) -> str:
     lang_name = LANG_NAMES.get(language, language or "English")
     section_ids = [section_id for section_id, _ in REQUIRED_SECTIONS]
-    return f"""You are a senior marketing strategist and presentation strategist for OneShare.
-Build a client-facing strategic marketing plan as an interactive web deck, not a generic report.
-
-Output language: {lang_name}.
-Use the client/business language naturally. If Arabic or Hebrew, write right-to-left friendly text.
-Use the provided business data as facts. If a fact is missing, state a careful assumption rather than inventing numbers.
-
-Business research payload:
-{_json_for_prompt(suite_payload)}
-
-Return ONLY valid JSON with this exact top-level shape:
-{{
-  "cover": {{
-    "title": "business or plan title",
-    "subtitle": "one strong positioning sentence",
-    "chips": ["3-6 short chips"],
-    "image_prompt": "optional visual direction for a future cover image"
-  }},
-  "research_summary": {{
-    "sources_used": ["website", "instagram", "meta", "google", "manual profile", "competitor research"],
-    "confidence": "high|medium|low",
-    "limitations": ["what is missing or should be validated"]
-  }},
+    execution_shape = ""
+    execution_requirements = ""
+    if include_execution_sections:
+        execution_shape = f""",
   "monthly_work_plan": {{
     "recommended_weekly_posts": 3,
     "recommended_monthly_posts": 12,
-    "cadence_reason": "why this cadence fits available assets, competitor activity, demand, and business capacity",
+    "cadence_reason": "why this cadence fits available assets, competitor activity, market demand, and business capacity",
     "client_focus_questions": ["questions to ask the client before finalizing this month"],
     "calendar_context": {{
       "countries": ["target countries"],
@@ -1113,7 +1098,45 @@ Return ONLY valid JSON with this exact top-level shape:
         ]
       }}
     ]
+  }}"""
+        execution_requirements = """
+- A monthly social content work plan:
+  - Start by asking what products, services, campaigns, launches, or offers the client wants to focus on soon.
+  - Recommend the weekly posting cadence. Base it on the available brand assets, connected social activity, real competitor activity if available, market demand, and the business's likely ability to produce real materials.
+  - If you recommend 3 posts per week, return at least 12 monthly content items. If you recommend 4 posts per week, return at least 16. Never return fewer monthly items than recommended_weekly_posts * 4.
+  - Check target audience, country, religions/cultures, holidays, local seasons, and relevant events before suggesting timing.
+  - Build the social plan around 70% attraction / attention, 20% trust building, 10% sales. Do not exceed 10% direct sales.
+  - Include daily direction for posts, reels, and stories.
+  - Think like a senior content producer, not only an AI generator. Some content should use AI, but strong plans often need a person talking to camera, office/store footage, product photos/video, customer proof, UGC, or manual upload.
+  - Every content item must recommend the output shape and production mode: image, video, carousel, mixed, story, reel, UGC/talking-head, office/store footage, product photo/video, manual upload, or AI generation.
+  - Use needs_user_asset=true whenever the recommendation requires filming, product photos, a person talking, office/store footage, UGC, or a manual asset from the client.
+  - Some ideas may require more than one output, such as video + image or video + carousel.
+- A complete paid marketing funnel with these stages: Awareness, Consideration, Conversion, Loyalty, Ambassador.
+  - For each stage, suggest content ideas and recommended outputs.
+  - Keep each idea ready to generate, upload, schedule, or convert into ads later."""
+    return f"""You are a senior marketing strategist and presentation strategist for OneShare.
+Build a client-facing strategic marketing plan as an interactive web deck, not a generic report.
+
+Output language: {lang_name}.
+Use the client/business language naturally. If Arabic or Hebrew, write right-to-left friendly text.
+Use the provided business data as facts. If a fact is missing, state a careful assumption rather than inventing numbers.
+
+Business research payload:
+{_json_for_prompt(suite_payload)}
+
+Return ONLY valid JSON with this exact top-level shape:
+{{
+  "cover": {{
+    "title": "business or plan title",
+    "subtitle": "one strong positioning sentence",
+    "chips": ["3-6 short chips"],
+    "image_prompt": "optional visual direction for a future cover image"
   }},
+  "research_summary": {{
+    "sources_used": ["website", "instagram", "meta", "google", "manual profile", "competitor research"],
+    "confidence": "high|medium|low",
+    "limitations": ["what is missing or should be validated"]
+  }}{execution_shape},
   "sections": [
     {{
       "id": "one of: {', '.join(section_ids)}",
@@ -1136,20 +1159,7 @@ Required content:
 - Channel strategy for social, search, paid ads, website, and remarketing when relevant.
 - Content strategy with themes, formats, and posting direction.
 - Campaign ideas with practical examples.
-- A monthly social content work plan:
-  - Start by asking what products, services, campaigns, launches, or offers the client wants to focus on soon.
-  - Recommend the weekly posting cadence. Base it on the available brand assets, connected social activity, real competitor activity if available, market demand, and the business's likely ability to produce real materials.
-  - If you recommend 3 posts per week, return at least 12 monthly content items. If you recommend 4 posts per week, return at least 16. Never return fewer monthly items than recommended_weekly_posts * 4.
-  - Check target audience, country, religions/cultures, holidays, local seasons, and relevant events before suggesting timing.
-  - Build the social plan around 70% attraction / attention, 20% trust building, 10% sales. Do not exceed 10% direct sales.
-  - Include daily direction for posts, reels, and stories.
-  - Think like a senior content producer, not only an AI generator. Some content should use AI, but strong plans often need a person talking to camera, office/store footage, product photos/video, customer proof, UGC, or manual upload.
-  - Every content item must recommend the output shape and production mode: image, video, carousel, mixed, story, reel, UGC/talking-head, office/store footage, product photo/video, manual upload, or AI generation.
-  - Use needs_user_asset=true whenever the recommendation requires filming, product photos, a person talking, office/store footage, UGC, or a manual asset from the client.
-  - Some ideas may require more than one output, such as video + image or video + carousel.
-- A complete paid marketing funnel with these stages: Awareness, Consideration, Conversion, Loyalty, Ambassador.
-  - For each stage, suggest content ideas and recommended outputs.
-  - Keep each idea ready to generate, upload, schedule, or convert into ads later.
+{execution_requirements}
 - 30/60/90 action plan.
 - KPIs, measurement, and budget direction.
 - Clear next steps.
@@ -1240,6 +1250,129 @@ Rules:
 Business/profile data:
 {payload_json}
 """
+
+
+def build_marketing_execution_section_prompt(payload: dict[str, Any], language: str, section: str) -> str:
+    lang_name = LANG_NAMES.get(language, language or "English")
+    payload_json = json.dumps(payload, ensure_ascii=False, default=str)
+    if len(payload_json) > PROMPT_PAYLOAD_CHAR_LIMIT:
+        payload_json = payload_json[:PROMPT_PAYLOAD_CHAR_LIMIT] + "...[truncated]"
+
+    if section == "social":
+        return f"""Create the monthly social work plan for this OneShare marketing plan.
+
+Language: {lang_name}.
+Return STRICT JSON only. No markdown, no comments, no surrounding text.
+Return exactly one top-level key: "monthly_work_plan".
+
+Shape:
+{{
+  "monthly_work_plan": {{
+    "recommended_weekly_posts": 3,
+    "recommended_monthly_posts": 12,
+    "cadence_reason": "why this cadence fits assets, social activity, market demand, and business capacity",
+    "client_focus_questions": ["questions before applying this month"],
+    "calendar_context": {{"countries": ["..."], "religions_considered": ["..."], "seasonal_notes": ["..."]}},
+    "content_mix": [
+      {{"type": "attraction", "percentage": 70}},
+      {{"type": "trust", "percentage": 20}},
+      {{"type": "sales", "percentage": 10}}
+    ],
+    "daily_story_direction": ["daily guidance"],
+    "items": [
+      {{"id": "stable id", "title": "content title", "objective": "attraction|trust|sales", "platforms": ["instagram","facebook"], "placement": "post|reel|story|carousel", "recommended_output": {{"format": "image|video|carousel|mixed", "production_mode": "ai_image|ai_video|talking_head|ugc|store_video|office_video|product_photo|product_video|manual_upload"}}, "prompt": "ready-to-generate prompt", "needs_user_asset": false, "notes": "..."}}
+    ]
+  }}
+}}
+
+Rules:
+- Decide recommended_weekly_posts from available assets, connected social activity, market demand, and realistic business capacity.
+- Return at least recommended_weekly_posts * 4 items, never fewer than 8.
+- Use 70% attraction, 20% trust, 10% sales. Do not exceed 10% direct sales.
+- Mix AI generation with real-world production modes when useful.
+- Set needs_user_asset=true for filming, product photos, a person talking, office/store footage, UGC, or manual upload.
+
+Business/profile data:
+{payload_json}
+"""
+
+    if section == "ads":
+        stages = ", ".join(FUNNEL_STAGES)
+        return f"""Create the paid marketing funnel for this OneShare marketing plan.
+
+Language: {lang_name}.
+Return STRICT JSON only. No markdown, no comments, no surrounding text.
+Return exactly one top-level key: "paid_funnel".
+
+Shape:
+{{
+  "paid_funnel": {{
+    "stages": [
+      {{
+        "stage": "one of: {stages}",
+        "goal": "stage goal",
+        "audience": "who this stage talks to",
+        "budget_direction": "practical budget guidance",
+        "content_ideas": [
+          {{"id": "stable id", "title": "idea title", "recommended_outputs": ["video", "image"], "prompt": "ready-to-generate paid creative prompt", "notes": "optional"}}
+        ]
+      }}
+    ]
+  }}
+}}
+
+Rules:
+- Include exactly these stages: {stages}.
+- Each stage must include at least 2 content_ideas.
+- Keep each idea ready to generate, upload, schedule, or convert into ads later.
+- Recommend output formats that fit each funnel stage.
+
+Business/profile data:
+{payload_json}
+"""
+
+    raise MarketingPlanGenerationError(f"Unknown marketing plan execution section: {section}")
+
+
+async def generate_marketing_plan_execution_section(
+    suite: Suite,
+    language: str | None,
+    section: str,
+    planning_inputs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    payload = suite_research_payload(suite, planning_inputs)
+    prompt = build_marketing_execution_section_prompt(payload, output_language, section)
+    raw = await call_text_ai(
+        provider="anthropic",
+        model=settings.anthropic_text_model,
+        max_tokens=MARKETING_PLAN_MAX_TOKENS,
+        messages=[{"role": "user", "content": prompt}],
+        system="You create practical, execution-ready marketing plan sections. Return JSON only.",
+        timeout=MARKETING_PLAN_TIMEOUT_SECONDS,
+    )
+    parsed = parse_marketing_plan_json(raw)
+    if not parsed:
+        parsed = build_rule_based_marketing_plan_json(payload, output_language)
+
+    if section == "social":
+        plan = _normalize_monthly_work_plan(_dict(parsed.get("monthly_work_plan")) or parsed)
+        if len(_list(plan.get("items"))) < 8:
+            plan = _normalize_monthly_work_plan(build_rule_based_marketing_plan_json(payload, output_language).get("monthly_work_plan"))
+        return plan
+
+    if section == "ads":
+        funnel = _normalize_paid_funnel(_dict(parsed.get("paid_funnel")) or parsed)
+        sparse_stages = [
+            stage
+            for stage in _list(funnel.get("stages"))
+            if len(_list(_dict(stage).get("content_ideas"))) < 2
+        ]
+        if len(_list(funnel.get("stages"))) < len(FUNNEL_STAGES) or sparse_stages:
+            funnel = _normalize_paid_funnel(build_rule_based_marketing_plan_json(payload, output_language).get("paid_funnel"))
+        return funnel
+
+    raise MarketingPlanGenerationError(f"Unknown marketing plan execution section: {section}")
 
 
 def build_rule_based_marketing_plan_json(payload: dict[str, Any], language: str) -> dict[str, Any]:
@@ -1525,6 +1658,7 @@ def normalize_marketing_plan_deck(
     suite_name: str,
     language: str,
     planning_inputs: dict[str, Any] | None = None,
+    include_execution_sections: bool = True,
 ) -> dict[str, Any]:
     cover = _dict(raw.get("cover"))
     raw_sections = _list(raw.get("sections"))
@@ -1546,12 +1680,19 @@ def normalize_marketing_plan_deck(
             if section_id and section_id not in {sid for sid, _ in REQUIRED_SECTIONS}:
                 extras.append(_normalize_section(section_id, str(section.get("title") or section_id), section))
 
-    return {
+    deck = {
         "version": PLAN_VERSION,
         "status": "ready",
         "language": language,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "planning_inputs": planning_inputs or {},
+        "partial": {
+            "intelligence_ready": True,
+            "deck_ready": True,
+            "action_plan_ready": include_execution_sections,
+            "social_plan_ready": include_execution_sections,
+            "paid_funnel_ready": include_execution_sections,
+        },
         "cover": {
             "title": str(cover.get("title") or suite_name or "Marketing plan").strip(),
             "subtitle": str(cover.get("subtitle") or "A practical growth plan built from the business profile.").strip(),
@@ -1560,10 +1701,12 @@ def normalize_marketing_plan_deck(
             "image_url": str(cover.get("image_url") or "").strip(),
         },
         "research_summary": _dict(raw.get("research_summary")),
-        "monthly_work_plan": _normalize_monthly_work_plan(raw.get("monthly_work_plan")),
-        "paid_funnel": _normalize_paid_funnel(raw.get("paid_funnel")),
         "sections": sections + extras[:4],
     }
+    if include_execution_sections:
+        deck["monthly_work_plan"] = _normalize_monthly_work_plan(raw.get("monthly_work_plan"))
+        deck["paid_funnel"] = _normalize_paid_funnel(raw.get("paid_funnel"))
+    return deck
 
 
 def marketing_plan_content_score(deck: dict[str, Any]) -> int:
@@ -1600,7 +1743,7 @@ def marketing_plan_content_score(deck: dict[str, Any]) -> int:
     return score
 
 
-def validate_marketing_plan_deck(deck: dict[str, Any]) -> None:
+def validate_marketing_plan_deck(deck: dict[str, Any], require_execution_sections: bool = True) -> None:
     sections = [section for section in _list(deck.get("sections")) if isinstance(section, dict)]
     by_section_id = {str(section.get("id") or "").strip(): section for section in sections}
     missing_sections = []
@@ -1628,32 +1771,34 @@ def validate_marketing_plan_deck(deck: dict[str, Any]) -> None:
             details.append(f"empty sections: {', '.join(empty_sections)}")
         raise MarketingPlanGenerationError("Marketing plan AI response was incomplete; " + "; ".join(details) + ".")
 
-    monthly_items = _list(_dict(deck.get("monthly_work_plan")).get("items"))
-    if len(monthly_items) < 8:
-        raise MarketingPlanGenerationError(
-            f"Marketing plan AI response was incomplete; monthly work plan has {len(monthly_items)} items."
-        )
+    if require_execution_sections:
+        monthly_items = _list(_dict(deck.get("monthly_work_plan")).get("items"))
+        if len(monthly_items) < 8:
+            raise MarketingPlanGenerationError(
+                f"Marketing plan AI response was incomplete; monthly work plan has {len(monthly_items)} items."
+            )
 
-    funnel_stages = _list(_dict(deck.get("paid_funnel")).get("stages"))
-    ideas_by_stage = {
-        str(stage.get("stage") or "").strip(): len(_list(stage.get("content_ideas")))
-        for stage in funnel_stages
-        if isinstance(stage, dict)
-    }
-    sparse_stages = [
-        stage
-        for stage in FUNNEL_STAGES
-        if ideas_by_stage.get(stage, 0) < 2
-    ]
-    if sparse_stages:
-        raise MarketingPlanGenerationError(
-            "Marketing plan AI response was incomplete; paid funnel needs at least 2 ideas for: "
-            + ", ".join(sparse_stages)
-            + "."
-        )
+        funnel_stages = _list(_dict(deck.get("paid_funnel")).get("stages"))
+        ideas_by_stage = {
+            str(stage.get("stage") or "").strip(): len(_list(stage.get("content_ideas")))
+            for stage in funnel_stages
+            if isinstance(stage, dict)
+        }
+        sparse_stages = [
+            stage
+            for stage in FUNNEL_STAGES
+            if ideas_by_stage.get(stage, 0) < 2
+        ]
+        if sparse_stages:
+            raise MarketingPlanGenerationError(
+                "Marketing plan AI response was incomplete; paid funnel needs at least 2 ideas for: "
+                + ", ".join(sparse_stages)
+                + "."
+            )
 
     score = marketing_plan_content_score(deck)
-    if score < 18:
+    minimum_score = 18 if require_execution_sections else 10
+    if score < minimum_score:
         raise MarketingPlanGenerationError(
             f"Marketing plan AI response was empty or incomplete; content score {score}."
         )
@@ -1663,10 +1808,11 @@ async def generate_marketing_plan_deck(
     suite: Suite,
     language: str | None = None,
     planning_inputs: dict[str, Any] | None = None,
+    include_execution_sections: bool = True,
 ) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
     payload = suite_research_payload(suite, planning_inputs)
-    prompt = build_marketing_plan_prompt(payload, output_language)
+    prompt = build_marketing_plan_prompt(payload, output_language, include_execution_sections=include_execution_sections)
     raw = await call_text_ai(
         provider="anthropic",
         model=settings.anthropic_text_model,
@@ -1680,6 +1826,12 @@ async def generate_marketing_plan_deck(
         parsed = await generate_compact_marketing_plan_json(payload, output_language)
     if not parsed:
         raise MarketingPlanGenerationError("Marketing plan AI response was not valid JSON.")
-    deck = normalize_marketing_plan_deck(parsed, suite.name, output_language, planning_inputs=planning_inputs)
-    validate_marketing_plan_deck(deck)
+    deck = normalize_marketing_plan_deck(
+        parsed,
+        suite.name,
+        output_language,
+        planning_inputs=planning_inputs,
+        include_execution_sections=include_execution_sections,
+    )
+    validate_marketing_plan_deck(deck, require_execution_sections=include_execution_sections)
     return deck

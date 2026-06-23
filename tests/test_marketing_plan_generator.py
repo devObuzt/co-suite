@@ -243,6 +243,27 @@ def test_build_marketing_plan_prompt_requests_required_json_and_language():
     assert "monthly_work_plan" in prompt
 
 
+def test_build_marketing_plan_prompt_can_request_strategy_only_without_execution_sections():
+    prompt = mpg.build_marketing_plan_prompt(
+        {
+            "suite": {"name": "Connec"},
+            "planning_inputs": {"near_term_focus": "Build the core positioning first"},
+        },
+        "ar",
+        include_execution_sections=False,
+    )
+
+    assert "Return ONLY valid JSON" in prompt
+    assert "Arabic" in prompt
+    assert "Build the core positioning first" in prompt
+    assert "competitors" in prompt
+    assert "market_demand" in prompt
+    assert "monthly_work_plan" not in prompt
+    assert "paid_funnel" not in prompt
+    assert "70% attraction" not in prompt
+    assert "Awareness" not in prompt
+
+
 @pytest.mark.asyncio
 async def test_generate_marketing_plan_deck_uses_anthropic(monkeypatch):
     calls = {}
@@ -261,6 +282,71 @@ async def test_generate_marketing_plan_deck_uses_anthropic(monkeypatch):
     assert calls["timeout"] == mpg.MARKETING_PLAN_TIMEOUT_SECONDS
     assert deck["language"] == "he"
     assert deck["cover"]["title"] == "Connec plan"
+
+
+@pytest.mark.asyncio
+async def test_generate_marketing_plan_deck_can_return_strategy_before_execution_sections(monkeypatch):
+    calls = {}
+    payload = complete_plan_payload()
+    payload.pop("monthly_work_plan")
+    payload.pop("paid_funnel")
+
+    async def fake_call_text_ai(**kwargs):
+        calls.update(kwargs)
+        return json.dumps(payload)
+
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+
+    deck = await mpg.generate_marketing_plan_deck(make_suite(), "ar", include_execution_sections=False)
+
+    prompt = calls["messages"][0]["content"]
+    assert "monthly_work_plan" not in prompt
+    assert "paid_funnel" not in prompt
+    assert deck["status"] == "ready"
+    assert deck["partial"]["deck_ready"] is True
+    assert deck["partial"]["social_plan_ready"] is False
+    assert deck["partial"]["paid_funnel_ready"] is False
+    assert "monthly_work_plan" not in deck
+    assert "paid_funnel" not in deck
+    mpg.validate_marketing_plan_deck(deck, require_execution_sections=False)
+
+
+@pytest.mark.asyncio
+async def test_generate_marketing_plan_execution_section_returns_only_requested_social_plan(monkeypatch):
+    calls = {}
+
+    async def fake_call_text_ai(**kwargs):
+        calls.update(kwargs)
+        return json.dumps({"monthly_work_plan": complete_plan_payload()["monthly_work_plan"]})
+
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+
+    section = await mpg.generate_marketing_plan_execution_section(make_suite(), "ar", "social")
+
+    prompt = calls["messages"][0]["content"]
+    assert "monthly_work_plan" in prompt
+    assert "paid_funnel" not in prompt
+    assert len(section["items"]) >= 8
+    assert section["items"][0]["generation_request"]["mode"] == "quick"
+
+
+@pytest.mark.asyncio
+async def test_generate_marketing_plan_execution_section_returns_only_requested_ads_funnel(monkeypatch):
+    calls = {}
+
+    async def fake_call_text_ai(**kwargs):
+        calls.update(kwargs)
+        return json.dumps({"paid_funnel": complete_plan_payload()["paid_funnel"]})
+
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+
+    section = await mpg.generate_marketing_plan_execution_section(make_suite(), "he", "ads")
+
+    prompt = calls["messages"][0]["content"]
+    assert "paid_funnel" in prompt
+    assert "monthly_work_plan" not in prompt
+    assert section["stages"][0]["stage"] == "Awareness"
+    assert section["stages"][0]["content_ideas"][0]["generation_request"]["content_type"] == "video"
 
 
 @pytest.mark.asyncio
