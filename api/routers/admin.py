@@ -121,6 +121,33 @@ async def providers(admin: User = Depends(_admin_user)):
     ]
 
 
+@router.get("/billing-usage")
+async def billing_usage(
+    period: str = Query(default="month", pattern="^(today|yesterday|week|month|all|custom)$"),
+    start: datetime | None = None,
+    end: datetime | None = None,
+    suite_id: str | None = None,
+    event_type: str | None = None,
+    limit: int = Query(default=200, ge=1, le=500),
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    query = (
+        select(UsageEvent, Suite.name, User.email)
+        .outerjoin(Suite, UsageEvent.suite_id == Suite.id)
+        .outerjoin(User, Suite.owner_id == User.id)
+        .order_by(UsageEvent.created_at.desc())
+        .limit(limit)
+    )
+    query = _apply_period(query, UsageEvent, period, start, end)
+    if suite_id:
+        query = query.where(UsageEvent.suite_id == suite_id)
+    if event_type:
+        query = query.where(UsageEvent.event_type == event_type)
+    rows = (await db.execute(query)).all()
+    return [_billing_usage_out(event, suite_name, owner_email) for event, suite_name, owner_email in rows]
+
+
 @router.get("/users")
 async def users(
     q: str | None = None,
@@ -377,5 +404,27 @@ def _provider_usage_out(event: ProviderUsageEvent) -> dict[str, Any]:
         "latency_ms": event.latency_ms,
         "request_id": event.request_id,
         "metadata": event.metadata_json or {},
+        "created_at": event.created_at,
+    }
+
+
+def _billing_usage_out(event: UsageEvent, suite_name: str | None = None, owner_email: str | None = None) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "suite_id": event.suite_id,
+        "suite_name": suite_name,
+        "owner_email": owner_email,
+        "event_type": event.event_type,
+        "ledger_account": event.ledger_account.value if hasattr(event.ledger_account, "value") else str(event.ledger_account),
+        "billing_event_type": event.billing_event_type.value if hasattr(event.billing_event_type, "value") else str(event.billing_event_type),
+        "amount_tokens": event.amount_tokens,
+        "balance_after_tokens": event.balance_after_tokens,
+        "amount_usd": event.amount_usd,
+        "balance_after_usd": event.balance_after_usd,
+        "actual_cost_usd": event.actual_cost_usd,
+        "billed_amount": event.billed_amount,
+        "external_ref": event.external_ref,
+        "idempotency_key": event.idempotency_key,
+        "event_data": event.event_data or {},
         "created_at": event.created_at,
     }

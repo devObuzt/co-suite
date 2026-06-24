@@ -4,6 +4,8 @@ import pytest
 from fastapi import HTTPException
 
 from api.models.user import User
+from api.models.billing import BillingEventType, LedgerAccountType, UsageEvent
+from api.routers import admin
 from api.services import admin_audit
 
 
@@ -65,3 +67,28 @@ def test_period_bounds_cover_named_ranges():
     assert today_end > today_start
     assert (all_start, all_end) == (None, None)
     assert admin_audit.period_bounds("custom", custom_start, custom_end) == (custom_start, custom_end)
+
+
+def test_billing_usage_out_explains_billed_rows():
+    event = UsageEvent(
+        id="usage-1",
+        subscription_id="sub-1",
+        suite_id="suite-1",
+        event_type="image_gen",
+        ledger_account=LedgerAccountType.generation_tokens,
+        billing_event_type=BillingEventType.generation_usage,
+        amount_tokens=12,
+        actual_cost_usd=0.48,
+        billed_amount=1.44,
+        event_data={"post_id": "post-1", "model": "image"},
+    )
+
+    payload = admin._billing_usage_out(event, "Suite One", "owner@example.com")
+
+    assert payload["suite_name"] == "Suite One"
+    assert payload["owner_email"] == "owner@example.com"
+    assert payload["event_type"] == "image_gen"
+    assert payload["amount_tokens"] == 12
+    assert payload["actual_cost_usd"] == 0.48
+    assert payload["billed_amount"] == 1.44
+    assert payload["event_data"]["post_id"] == "post-1"
