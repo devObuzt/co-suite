@@ -80,15 +80,36 @@ def _deck(suite: Suite) -> dict[str, Any] | None:
     return deck if isinstance(deck, dict) else None
 
 
+def _redact_sensitive_text(value: str) -> str:
+    return re.sub(r"api_key=[^&\s'\"<>]+", "[redacted]", value)
+
+
+def _sanitize_market_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _redact_sensitive_text(value)
+    if isinstance(value, list):
+        return [_sanitize_market_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _sanitize_market_value(item) for key, item in value.items()}
+    return value
+
+
+def _sanitize_marketing_intelligence(intelligence: dict[str, Any]) -> dict[str, Any]:
+    sanitized = _sanitize_market_value(intelligence)
+    return sanitized if isinstance(sanitized, dict) else intelligence
+
+
 def _intelligence(suite: Suite) -> dict[str, Any]:
     strategy = _strategy(suite)
     language = infer_plan_language(suite)
     existing = strategy.get("marketing_intelligence")
     if isinstance(existing, dict):
-        return normalize_marketing_intelligence(existing, suite_research_payload(suite), language)
+        return _sanitize_marketing_intelligence(
+            normalize_marketing_intelligence(existing, suite_research_payload(suite), language)
+        )
     if not _deck(suite):
         return _empty_marketing_intelligence(language)
-    return normalize_marketing_intelligence({}, suite_research_payload(suite), language)
+    return _sanitize_marketing_intelligence(normalize_marketing_intelligence({}, suite_research_payload(suite), language))
 
 
 def _action_plan(suite: Suite) -> dict[str, Any]:
@@ -172,6 +193,7 @@ def _clear_marketing_plan_data(suite: Suite) -> list[str]:
 
 def _save_marketing_intelligence(suite: Suite, intelligence: dict[str, Any]) -> dict[str, Any]:
     strategy = dict(_strategy(suite))
+    intelligence = _sanitize_marketing_intelligence(intelligence)
     strategy["marketing_intelligence"] = intelligence
     suite.strategy = strategy
     return intelligence

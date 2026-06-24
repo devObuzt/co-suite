@@ -209,6 +209,37 @@ def test_serpapi_error_message_redacts_api_key():
     assert "api_key" not in message
 
 
+def test_marketing_intelligence_redacts_stored_serpapi_keys():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec", "industry": "Marketing", "services": ["Websites"]},
+        strategy={
+            "marketing_intelligence": {
+                "phase": "competitors",
+                "warnings": [
+                    "SerpAPI failed: https://serpapi.com/search.json?api_key=secret-key&engine=google"
+                ],
+                "competitors": [
+                    {
+                        "name": "Search result",
+                        "url": "https://serpapi.com/search.json?engine=google&api_key=secret-key&q=x",
+                    }
+                ],
+            }
+        },
+    )
+
+    intelligence = marketing_plans._intelligence(suite)
+    serialized = json.dumps(intelligence)
+
+    assert "secret-key" not in serialized
+    assert "api_key" not in serialized
+    assert "[redacted]" in serialized
+
+
 @pytest.mark.asyncio
 async def test_serpapi_failures_return_source_warnings(monkeypatch):
     suite = Suite(
