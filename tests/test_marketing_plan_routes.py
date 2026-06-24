@@ -3,7 +3,16 @@ import json
 import pytest
 
 from api.models.suite import Suite
+from api.models.user import User
 from api.routers import marketing_plans
+
+
+class FakeDb:
+    def __init__(self):
+        self.committed = False
+
+    async def commit(self):
+        self.committed = True
 
 
 def test_clear_marketing_plan_removes_generated_plan_data_only():
@@ -377,3 +386,92 @@ def test_audience_keyword_languages_prefer_selected_audience_languages():
     )
 
     assert marketing_plans._audience_keyword_languages(suite, "en")[:2] == ["Arabic", "ar"]
+
+
+@pytest.mark.asyncio
+async def test_generate_keywords_route_saves_keywords_and_records_usage(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "industry": "Academy", "services": ["Trading courses"]},
+        strategy={},
+    )
+    user = User(id="user-1", email="owner@example.com", full_name="Owner", hashed_password="x")
+    db = FakeDb()
+    usage_calls = []
+
+    async def fake_get_owned_suite(*_args, **_kwargs):
+        return suite
+
+    async def fake_generate_keywords(*_args, **_kwargs):
+        return [{"id": "kw-1", "text": "دورات تداول", "intent": "core"}]
+
+    async def fake_record_provider_usage(_db, **kwargs):
+        usage_calls.append(kwargs)
+
+    async def fake_record_audit_log(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans, "_generate_keywords", fake_generate_keywords)
+    monkeypatch.setattr(marketing_plans, "record_provider_usage", fake_record_provider_usage)
+    monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
+
+    response = await marketing_plans.generate_marketing_keywords(
+        "suite-1",
+        marketing_plans.MarketingStageRequest(language="ar"),
+        user,
+        db,  # type: ignore[arg-type]
+    )
+
+    assert db.committed is True
+    assert suite.strategy["marketing_intelligence"]["keywords"][0]["text"] == "دورات تداول"
+    assert response["intelligence"]["keywords"][0]["text"] == "دورات تداول"
+    assert usage_calls[0]["operation"] == "marketing_keywords.generate"
+    assert usage_calls[0]["metadata"]["keywords"] == 1
+
+
+@pytest.mark.asyncio
+async def test_update_competitor_route_does_not_record_provider_usage(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec", "services": ["Websites"]},
+        strategy={
+            "marketing_intelligence": {
+                "competitors": [
+                    {"id": "competitor-1", "name": "Competitor", "classification_tags": []}
+                ]
+            }
+        },
+    )
+    user = User(id="user-1", email="owner@example.com", full_name="Owner", hashed_password="x")
+    db = FakeDb()
+
+    async def fake_get_owned_suite(*_args, **_kwargs):
+        return suite
+
+    async def fail_record_provider_usage(*_args, **_kwargs):
+        raise AssertionError("competitor classification should not create provider usage")
+
+    async def fake_record_audit_log(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans, "record_provider_usage", fail_record_provider_usage)
+    monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
+
+    response = await marketing_plans.update_marketing_competitor(
+        "suite-1",
+        "competitor-1",
+        marketing_plans.CompetitorClassificationRequest(classification_tags=["good_competitor"]),
+        user,
+        db,  # type: ignore[arg-type]
+    )
+
+    assert db.committed is True
+    assert response["intelligence"]["competitors"][0]["classification_tags"] == ["good_competitor"]

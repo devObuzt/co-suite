@@ -1041,16 +1041,6 @@ async def update_marketing_competitor(
         raise HTTPException(status_code=404, detail="Competitor not found")
     intelligence["competitors"] = competitors
     _save_marketing_intelligence(suite, intelligence)
-    await record_provider_usage(
-        db,
-        provider=settings.ai_text_provider,
-        operation="marketing_keywords.generate",
-        model=settings.openai_text_model if settings.ai_text_provider == "openai" else settings.anthropic_text_model,
-        status="success",
-        suite_id=suite.id,
-        user_id=current_user.id,
-        metadata={"keywords": len(keywords), "language": output_language, "cost_basis": "missing_provider_usage"},
-    )
     await record_audit_log(
         db,
         action="marketing.competitor.update",
@@ -1090,12 +1080,12 @@ async def generate_marketing_keywords(
     await record_provider_usage(
         db,
         provider=settings.ai_text_provider,
-        operation="marketing_keywords.generate_more",
+        operation="marketing_keywords.generate",
         model=settings.openai_text_model if settings.ai_text_provider == "openai" else settings.anthropic_text_model,
         status="success",
         suite_id=suite.id,
         user_id=current_user.id,
-        metadata={"keywords": len(current), "language": output_language, "cost_basis": "missing_provider_usage"},
+        metadata={"keywords": len(keywords), "language": output_language, "cost_basis": "missing_provider_usage"},
     )
     await record_audit_log(
         db,
