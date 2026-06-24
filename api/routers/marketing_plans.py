@@ -22,6 +22,7 @@ from ..models.suite import Suite
 from ..models.user import User
 from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job
 from ..services.google_ads import fetch_keyword_planner_ideas
+from ..services.admin_audit import record_audit_log, record_provider_usage
 from ..services.marketing_plan_generator import (
     infer_plan_language,
     normalize_marketing_action_plan,
@@ -941,6 +942,29 @@ async def generate_marketing_competitors(
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or GenerateMarketingPlanRequest()
     await _save_competitor_scratch_from_search(suite, request_data.language)
+    intelligence = _intelligence(suite)
+    await record_provider_usage(
+        db,
+        provider="serpapi",
+        operation="marketing_competitors.generate",
+        endpoint="search.json",
+        status="partial" if intelligence.get("warnings") else "success",
+        suite_id=suite.id,
+        user_id=current_user.id,
+        metadata={
+            "competitors": len(intelligence.get("competitors") or []),
+            "warnings": list(intelligence.get("warnings") or [])[:5],
+        },
+    )
+    await record_audit_log(
+        db,
+        action="marketing.competitors.generate",
+        resource_type="marketing_intelligence",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"competitors": len(intelligence.get("competitors") or [])},
+    )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
@@ -955,6 +979,29 @@ async def generate_more_marketing_competitors(
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or MarketingStageRequest()
     await _append_competitor_scratch_from_search(suite, request_data.language)
+    intelligence = _intelligence(suite)
+    await record_provider_usage(
+        db,
+        provider="serpapi",
+        operation="marketing_competitors.generate_more",
+        endpoint="search.json",
+        status="partial" if intelligence.get("warnings") else "success",
+        suite_id=suite.id,
+        user_id=current_user.id,
+        metadata={
+            "competitors": len(intelligence.get("competitors") or []),
+            "warnings": list(intelligence.get("warnings") or [])[-5:],
+        },
+    )
+    await record_audit_log(
+        db,
+        action="marketing.competitors.generate_more",
+        resource_type="marketing_intelligence",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"competitors": len(intelligence.get("competitors") or [])},
+    )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
@@ -987,6 +1034,15 @@ async def update_marketing_competitor(
         raise HTTPException(status_code=404, detail="Competitor not found")
     intelligence["competitors"] = competitors
     _save_marketing_intelligence(suite, intelligence)
+    await record_audit_log(
+        db,
+        action="marketing.competitor.update",
+        resource_type="marketing_competitor",
+        resource_id=competitor_id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"classification_tags": tags},
+    )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
@@ -1014,6 +1070,15 @@ async def generate_marketing_keywords(
     intelligence["status"] = "keywords_ready"
     intelligence["generated_at"] = datetime.now(timezone.utc).isoformat()
     _save_marketing_intelligence(suite, intelligence)
+    await record_audit_log(
+        db,
+        action="marketing.keywords.generate",
+        resource_type="marketing_intelligence",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"keywords": len(keywords)},
+    )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
@@ -1049,6 +1114,15 @@ async def generate_more_marketing_keywords(
     intelligence["status"] = "keywords_ready"
     intelligence["generated_at"] = datetime.now(timezone.utc).isoformat()
     _save_marketing_intelligence(suite, intelligence)
+    await record_audit_log(
+        db,
+        action="marketing.keywords.generate_more",
+        resource_type="marketing_intelligence",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"keywords": len(current)},
+    )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 

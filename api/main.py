@@ -15,6 +15,7 @@ from .routers import billing
 from .routers import analytics
 from .routers import product_bulk
 from .routers import marketing_plans
+from .routers import admin
 from .services.durable_generation_queue import run_forever
 
 app = FastAPI(title=settings.app_name, docs_url="/docs" if settings.debug else None)
@@ -70,10 +71,34 @@ async def startup():
                     "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS external_ref VARCHAR",
                     "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR",
                     "CREATE INDEX IF NOT EXISTS ix_usage_events_idempotency_key ON usage_events (idempotency_key)",
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN DEFAULT FALSE NOT NULL",
+                    "CREATE TABLE IF NOT EXISTS audit_logs (id VARCHAR PRIMARY KEY, actor_user_id VARCHAR REFERENCES users(id), actor_email VARCHAR, action VARCHAR NOT NULL, resource_type VARCHAR NOT NULL, resource_id VARCHAR, suite_id VARCHAR REFERENCES suites(id), target_user_id VARCHAR REFERENCES users(id), metadata_json JSON, ip_address VARCHAR, user_agent TEXT, created_at TIMESTAMP WITH TIME ZONE DEFAULT now())",
+                    "CREATE INDEX IF NOT EXISTS ix_audit_logs_created_at ON audit_logs (created_at)",
+                    "CREATE INDEX IF NOT EXISTS ix_audit_logs_action ON audit_logs (action)",
+                    "CREATE INDEX IF NOT EXISTS ix_audit_logs_actor_user_id ON audit_logs (actor_user_id)",
+                    "CREATE INDEX IF NOT EXISTS ix_audit_logs_suite_id ON audit_logs (suite_id)",
+                    "CREATE INDEX IF NOT EXISTS ix_audit_logs_target_user_id ON audit_logs (target_user_id)",
+                    "CREATE TABLE IF NOT EXISTS provider_usage_events (id VARCHAR PRIMARY KEY, provider VARCHAR NOT NULL, model VARCHAR, endpoint VARCHAR, operation VARCHAR NOT NULL, status VARCHAR DEFAULT 'success' NOT NULL, input_tokens INTEGER DEFAULT 0 NOT NULL, output_tokens INTEGER DEFAULT 0 NOT NULL, total_tokens INTEGER DEFAULT 0 NOT NULL, actual_cost_usd DOUBLE PRECISION DEFAULT 0 NOT NULL, suite_id VARCHAR REFERENCES suites(id), user_id VARCHAR REFERENCES users(id), generation_job_id VARCHAR REFERENCES generation_jobs(id), latency_ms INTEGER, request_id VARCHAR, metadata_json JSON, created_at TIMESTAMP WITH TIME ZONE DEFAULT now())",
+                    "CREATE INDEX IF NOT EXISTS ix_provider_usage_events_created_at ON provider_usage_events (created_at)",
+                    "CREATE INDEX IF NOT EXISTS ix_provider_usage_events_provider ON provider_usage_events (provider)",
+                    "CREATE INDEX IF NOT EXISTS ix_provider_usage_events_model ON provider_usage_events (model)",
+                    "CREATE INDEX IF NOT EXISTS ix_provider_usage_events_operation ON provider_usage_events (operation)",
+                    "CREATE INDEX IF NOT EXISTS ix_provider_usage_events_status ON provider_usage_events (status)",
+                    "CREATE INDEX IF NOT EXISTS ix_provider_usage_events_suite_id ON provider_usage_events (suite_id)",
                 ):
                     await conn.execute(text(statement))
         except Exception as e:
             log.warning("billing ledger migration skipped: %s", e)
+
+        if settings.admin_email.strip():
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(
+                        text("UPDATE users SET is_super_admin = TRUE WHERE lower(email) = lower(:email)"),
+                        {"email": settings.admin_email.strip()},
+                    )
+            except Exception as e:
+                log.warning("admin promotion migration skipped: %s", e)
 
         async with engine.begin() as conn:
             for value in (
@@ -119,6 +144,7 @@ app.include_router(billing.router, prefix="/api/v1")
 app.include_router(analytics.router, prefix="/api/v1")
 app.include_router(product_bulk.router, prefix="/api/v1")
 app.include_router(marketing_plans.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
 
 
 @app.get("/health")

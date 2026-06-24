@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     observability_alerts_enabled: bool = True
     provider_limit_alert_min_wait_seconds: int = 60
     failed_job_alerts_enabled: bool = True
+    admin_email: str = ""
 
     class Config:
         env_file = str(_here / ".env")
