@@ -191,6 +191,41 @@ def test_serpapi_results_are_grouped_by_source():
     assert maps[0]["url"] == "https://maps.example"
 
 
+@pytest.mark.asyncio
+async def test_serpapi_failures_return_source_warnings(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec", "industry": "Marketing", "services": ["Websites"]},
+        strategy={},
+    )
+
+    monkeypatch.setattr(marketing_plans.settings, "serpapi_api_key", "key")
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            raise RuntimeError("SerpAPI unavailable")
+
+    monkeypatch.setattr(marketing_plans.httpx, "AsyncClient", FakeClient)
+
+    competitors, warnings = await marketing_plans._serpapi_competitors(suite, "en")
+
+    assert competitors == []
+    assert warnings
+    assert "Google organic" in warnings[0]
+
+
 def test_normalized_competitor_preserves_classification_tags():
     suite = Suite(
         id="suite-1",

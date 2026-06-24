@@ -569,19 +569,23 @@ async def _fetch_serpapi_source(
     return unique
 
 
-async def _serpapi_competitors(suite: Suite, language: str, existing_urls: list[str] | None = None, offset: int = 0) -> list[dict[str, Any]]:
+async def _serpapi_competitors(suite: Suite, language: str, existing_urls: list[str] | None = None, offset: int = 0) -> tuple[list[dict[str, Any]], list[str]]:
     if not settings.serpapi_api_key.strip():
-        return []
+        return [], ["SERPAPI_API_KEY is not configured on the API service."]
     existing = {url for url in (existing_urls or []) if url}
     competitors: list[dict[str, Any]] = []
+    warnings: list[str] = []
     async with httpx.AsyncClient(timeout=18) as client:
         for source_index, spec in enumerate(SERPAPI_SOURCE_SPECS):
             try:
                 source_items = await _fetch_serpapi_source(client, suite, language, spec, existing, offset + source_index)
                 competitors.extend(source_items[:5])
-            except Exception:
+                if not source_items:
+                    warnings.append(f"SerpAPI returned no usable {spec['label']} results.")
+            except Exception as exc:
+                warnings.append(f"SerpAPI {spec['label']} failed: {str(exc)[:180]}")
                 continue
-    return competitors
+    return competitors, warnings
 
 
 def _save_competitor_scratch(suite: Suite, language: str | None = None) -> dict[str, Any]:
@@ -595,12 +599,17 @@ def _save_competitor_scratch(suite: Suite, language: str | None = None) -> dict[
 async def _save_competitor_scratch_from_search(suite: Suite, language: str | None = None) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
     intelligence = normalize_marketing_intelligence({"phase": "competitors"}, suite_research_payload(suite), output_language)
-    competitors = await _serpapi_competitors(suite, output_language)
+    competitors, serpapi_warnings = await _serpapi_competitors(suite, output_language)
     if competitors:
         intelligence["competitors"] = competitors
+        if serpapi_warnings:
+            intelligence["warnings"] = [*list(intelligence.get("warnings") or []), *serpapi_warnings[:5]]
     else:
         intelligence["competitors"] = _mock_competitors(suite, output_language)
-        intelligence["warnings"] = ["SerpAPI did not return usable competitor results; showing starter source leads."]
+        intelligence["warnings"] = [
+            "SerpAPI did not return usable direct competitor results; showing starter source leads.",
+            *serpapi_warnings[:5],
+        ]
     intelligence["status"] = "competitors_ready"
     return _save_marketing_intelligence(suite, intelligence)
 
@@ -623,9 +632,14 @@ async def _append_competitor_scratch_from_search(suite: Suite, language: str | N
     base = normalize_marketing_intelligence(existing if isinstance(existing, dict) else {"phase": "competitors"}, suite_research_payload(suite), output_language)
     current = list(base.get("competitors") or [])
     existing_urls = [str(item.get("url") or item.get("title") or "") for item in current if isinstance(item, dict)]
-    more = await _serpapi_competitors(suite, output_language, existing_urls, offset=len(current))
+    more, serpapi_warnings = await _serpapi_competitors(suite, output_language, existing_urls, offset=len(current))
     if not more:
         more = _mock_competitors(suite, output_language, existing_urls, offset=len(current))
+        base["warnings"] = [
+            *list(base.get("warnings") or []),
+            "SerpAPI did not return additional direct competitor results; showing starter source leads.",
+            *serpapi_warnings[:5],
+        ]
     current.extend(more)
     base["competitors"] = current[:60]
     base["status"] = "competitors_ready"
