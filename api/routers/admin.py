@@ -9,6 +9,7 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import get_db
+from ..core.config import settings
 from ..core.security import get_current_user, hash_password
 from ..models.admin import AuditLog, ProviderUsageEvent
 from ..models.billing import UsageEvent
@@ -76,6 +77,48 @@ async def summary(
         "provider_cost_usd": provider_cost or 0.0,
         "billed_amount_usd": billed_amount or 0.0,
     }
+
+
+@router.get("/providers")
+async def providers(admin: User = Depends(_admin_user)):
+    return [
+        {
+            "provider": "anthropic",
+            "configured": bool(settings.anthropic_api_key.strip()),
+            "models": [settings.anthropic_text_model, settings.anthropic_fast_model],
+            "operations": ["text generation", "strategy", "keywords", "marketing plan"],
+        },
+        {
+            "provider": "openai",
+            "configured": bool(settings.openai_api_key.strip()),
+            "models": [settings.openai_text_model, settings.openai_fast_model, settings.openai_image_model],
+            "operations": ["text generation", "image generation"],
+        },
+        {
+            "provider": "google",
+            "configured": bool(settings.google_api_key.strip() or settings.google_ads_developer_token.strip()),
+            "models": [settings.google_image_model, settings.google_video_model, "Google Ads Keyword Planner"],
+            "operations": ["image generation", "video generation", "keyword planner", "ads metrics"],
+        },
+        {
+            "provider": "serpapi",
+            "configured": bool(settings.serpapi_api_key.strip()),
+            "models": ["google", "google_maps"],
+            "operations": ["competitor search", "organic results", "maps", "social source discovery"],
+        },
+        {
+            "provider": "meta",
+            "configured": bool(settings.meta_app_id.strip() and settings.meta_app_secret.strip()),
+            "models": ["Meta Graph API", "Meta Ads Library"],
+            "operations": ["publishing", "campaigns", "ads library"],
+        },
+        {
+            "provider": "morning",
+            "configured": bool(settings.morning_api_key.strip() or settings.morning_subscribe_url.strip()),
+            "models": ["Morning billing"],
+            "operations": ["subscriptions", "payments"],
+        },
+    ]
 
 
 @router.get("/users")

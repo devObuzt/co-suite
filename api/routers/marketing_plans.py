@@ -1034,6 +1034,16 @@ async def update_marketing_competitor(
         raise HTTPException(status_code=404, detail="Competitor not found")
     intelligence["competitors"] = competitors
     _save_marketing_intelligence(suite, intelligence)
+    await record_provider_usage(
+        db,
+        provider=settings.ai_text_provider,
+        operation="marketing_keywords.generate",
+        model=settings.openai_text_model if settings.ai_text_provider == "openai" else settings.anthropic_text_model,
+        status="success",
+        suite_id=suite.id,
+        user_id=current_user.id,
+        metadata={"keywords": len(keywords), "language": output_language},
+    )
     await record_audit_log(
         db,
         action="marketing.competitor.update",
@@ -1070,6 +1080,16 @@ async def generate_marketing_keywords(
     intelligence["status"] = "keywords_ready"
     intelligence["generated_at"] = datetime.now(timezone.utc).isoformat()
     _save_marketing_intelligence(suite, intelligence)
+    await record_provider_usage(
+        db,
+        provider=settings.ai_text_provider,
+        operation="marketing_keywords.generate_more",
+        model=settings.openai_text_model if settings.ai_text_provider == "openai" else settings.anthropic_text_model,
+        status="success",
+        suite_id=suite.id,
+        user_id=current_user.id,
+        metadata={"keywords": len(current), "language": output_language},
+    )
     await record_audit_log(
         db,
         action="marketing.keywords.generate",
@@ -1137,6 +1157,33 @@ async def generate_marketing_demand_supply(
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or GenerateMarketingPlanRequest()
     await _save_demand_supply_from_google_ads(suite, request_data.language)
+    intelligence = _intelligence(suite)
+    demand_supply = intelligence.get("demand_supply") if isinstance(intelligence.get("demand_supply"), dict) else {}
+    summary = demand_supply.get("summary") if isinstance(demand_supply.get("summary"), dict) else {}
+    await record_provider_usage(
+        db,
+        provider="google",
+        operation="marketing_demand_supply.generate",
+        model="Google Ads Keyword Planner",
+        endpoint="google_ads.keyword_plan_idea_service",
+        status="warning" if demand_supply.get("warning") else "success",
+        suite_id=suite.id,
+        user_id=current_user.id,
+        metadata={
+            "analyzed_keywords": summary.get("analyzed_keywords"),
+            "suggested_keywords": summary.get("suggested_keywords"),
+            "warning": demand_supply.get("warning"),
+        },
+    )
+    await record_audit_log(
+        db,
+        action="marketing.demand_supply.generate",
+        resource_type="marketing_intelligence",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"summary": summary},
+    )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
