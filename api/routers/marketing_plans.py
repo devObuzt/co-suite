@@ -191,7 +191,42 @@ def _unique_strings(values: Any, limit: int = 80) -> list[str]:
 
 def _suite_services(suite: Suite) -> list[str]:
     brand = suite.brand if isinstance(suite.brand, dict) else {}
-    return _unique_strings([*(brand.get("services") or []), *(brand.get("products") or [])], 60)
+    strategy = _strategy(suite)
+    marketing_plan = strategy.get("marketing_plan") if isinstance(strategy.get("marketing_plan"), dict) else {}
+    def values(key: str, source: dict[str, Any]) -> list[Any]:
+        value = source.get(key)
+        return value if isinstance(value, list) else ([value] if value else [])
+    return _unique_strings(
+        [
+            *values("services", brand),
+            *values("products", brand),
+            *values("products_services", brand),
+            *values("services", strategy),
+            *values("products", strategy),
+            *values("products_services", strategy),
+            *values("services", marketing_plan),
+            *values("products", marketing_plan),
+            *values("products_services", marketing_plan),
+        ],
+        60,
+    )
+
+
+def _audience_keyword_languages(suite: Suite, fallback_language: str) -> list[str]:
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    def values(key: str) -> list[Any]:
+        value = brand.get(key)
+        return value if isinstance(value, list) else ([value] if value else [])
+    candidates = _unique_strings(
+        [
+            *values("audience_language_names"),
+            *values("audience_languages"),
+            brand.get("primary_language"),
+            fallback_language,
+        ],
+        4,
+    )
+    return candidates or [fallback_language]
 
 
 def _keyword_candidates(suite: Suite, language: str, existing: list[str] | None = None, more: bool = False) -> list[dict[str, Any]]:
@@ -204,9 +239,22 @@ def _keyword_candidates(suite: Suite, language: str, existing: list[str] | None 
         location = " ".join(_unique_strings([*(loc.get("cities") or []), *(loc.get("countries") or [])], 3))
     base_terms = services or [category or suite.name]
     existing_markers = {item.casefold() for item in _unique_strings(existing or [])}
-    prefixes = ["", "best", "near me", "prices", "offers", "reviews"] if not str(language).startswith("ar") else ["", "أفضل", "قريب مني", "أسعار", "عروض", "تقييمات"]
+    languages = " ".join(_audience_keyword_languages(suite, language)).lower()
+    wants_ar = str(language).startswith("ar") or "arabic" in languages or "العربية" in languages or "ar" in languages.split()
+    wants_he = str(language).startswith("he") or "hebrew" in languages or "עברית" in languages or "he" in languages.split()
+    if wants_ar:
+        prefixes = ["", "أفضل", "قريب مني", "أسعار", "عروض", "تقييمات"]
+    elif wants_he:
+        prefixes = ["", "הכי טוב", "קרוב אליי", "מחירים", "מבצעים", "ביקורות"]
+    else:
+        prefixes = ["", "best", "near me", "prices", "offers", "reviews"]
     if more:
-        prefixes = ["compare", "professional", "affordable", "premium", "booking", "consultation"] if not str(language).startswith("ar") else ["مقارنة", "احترافي", "مناسب", "فاخر", "حجز", "استشارة"]
+        if wants_ar:
+            prefixes = ["مقارنة", "احترافي", "مناسب", "فاخر", "حجز", "استشارة"]
+        elif wants_he:
+            prefixes = ["השוואה", "מקצועי", "משתלם", "פרימיום", "הזמנה", "ייעוץ"]
+        else:
+            prefixes = ["compare", "professional", "affordable", "premium", "booking", "consultation"]
     keywords: list[dict[str, Any]] = []
     for service in base_terms:
         for prefix in prefixes:
@@ -236,6 +284,7 @@ async def _generate_keywords(suite: Suite, language: str, existing: list[str] | 
     try:
         prompt = {
             "language": language,
+            "audience_keyword_languages": _audience_keyword_languages(suite, language),
             "business": {
                 "name": brand.get("name") or suite.name,
                 "category": brand.get("industry") or brand.get("category") or brand.get("niche"),
@@ -245,7 +294,7 @@ async def _generate_keywords(suite: Suite, language: str, existing: list[str] | 
             },
             "existing_keywords": existing or [],
             "mode": "generate_more" if more else "generate",
-            "instructions": "Return JSON only: {\"keywords\":[{\"text\":\"...\",\"intent\":\"core|commercial|local|problem|comparison\",\"confidence\":\"medium\"}]}",
+            "instructions": "Return JSON only: {\"keywords\":[{\"text\":\"...\",\"intent\":\"core|commercial|local|problem|comparison\",\"confidence\":\"medium\"}]}. Write every keyword in the target audience's native country language and selected audience language. Prefer natural local search phrases, 3 to 7 words each. Do not return English keywords unless English is one of the audience languages.",
         }
         raw = await call_text_ai(
             max_tokens=1200,

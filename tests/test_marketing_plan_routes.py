@@ -116,3 +116,33 @@ def test_normalized_competitor_preserves_classification_tags():
     intelligence = marketing_plans._intelligence(suite)
 
     assert intelligence["competitors"][0]["classification_tags"] == ["good_competitor", "local_competitor"]
+
+
+def test_suite_services_reads_strategy_marketing_plan_when_brand_services_missing():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec"},
+        strategy={"marketing_plan": {"services": ["Landing pages", "SEO"]}},
+    )
+
+    assert marketing_plans._suite_services(suite) == ["Landing pages", "SEO"]
+
+
+def test_audience_keyword_languages_prefer_selected_audience_languages():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={
+            "name": "Connec",
+            "audience_languages": ["ar"],
+            "audience_language_names": ["Arabic"],
+        },
+        strategy={},
+    )
+
+    assert marketing_plans._audience_keyword_languages(suite, "en")[:2] == ["Arabic", "ar"]
