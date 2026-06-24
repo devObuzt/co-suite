@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import secrets
+from datetime import datetime, timezone
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import get_db
+from ..core.llm_client import call_text_ai
 from ..core.security import get_current_user, hash_password, verify_password
 from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
@@ -36,6 +39,15 @@ class GenerateMarketingPlanRequest(BaseModel):
     near_term_focus: str | None = Field(default=None, max_length=2000)
     upcoming_campaigns: list[str] = Field(default_factory=list, max_length=12)
     planning_notes: str | None = Field(default=None, max_length=2000)
+
+
+class MarketingStageRequest(GenerateMarketingPlanRequest):
+    existing_ids: list[str] = Field(default_factory=list, max_length=200)
+    existing_values: list[str] = Field(default_factory=list, max_length=200)
+
+
+class CompetitorClassificationRequest(BaseModel):
+    classification_tags: list[str] = Field(default_factory=list, max_length=8)
 
 
 class MarketingPlanShareRequest(BaseModel):
@@ -161,14 +173,185 @@ def _save_marketing_intelligence(suite: Suite, intelligence: dict[str, Any]) -> 
     return intelligence
 
 
+def _unique_strings(values: Any, limit: int = 80) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    source = values if isinstance(values, list) else [values]
+    for item in source:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        marker = text.casefold()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        items.append(text)
+    return items[:limit]
+
+
+def _suite_services(suite: Suite) -> list[str]:
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    return _unique_strings([*(brand.get("services") or []), *(brand.get("products") or [])], 60)
+
+
+def _keyword_candidates(suite: Suite, language: str, existing: list[str] | None = None, more: bool = False) -> list[dict[str, Any]]:
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    services = _suite_services(suite)
+    category = str(brand.get("industry") or brand.get("category") or brand.get("niche") or suite.name or "").strip()
+    location = brand.get("location") or brand.get("target_location") or ""
+    if isinstance(brand.get("audience_location"), dict):
+        loc = brand["audience_location"]
+        location = " ".join(_unique_strings([*(loc.get("cities") or []), *(loc.get("countries") or [])], 3))
+    base_terms = services or [category or suite.name]
+    existing_markers = {item.casefold() for item in _unique_strings(existing or [])}
+    prefixes = ["", "best", "near me", "prices", "offers", "reviews"] if not str(language).startswith("ar") else ["", "أفضل", "قريب مني", "أسعار", "عروض", "تقييمات"]
+    if more:
+        prefixes = ["compare", "professional", "affordable", "premium", "booking", "consultation"] if not str(language).startswith("ar") else ["مقارنة", "احترافي", "مناسب", "فاخر", "حجز", "استشارة"]
+    keywords: list[dict[str, Any]] = []
+    for service in base_terms:
+        for prefix in prefixes:
+            text = " ".join(part for part in [prefix, service, category if service != category else "", str(location or "")] if part).strip()
+            marker = text.casefold()
+            if not text or marker in existing_markers:
+                continue
+            keywords.append({
+                "id": f"kw-{len(keywords) + 1}",
+                "text": text,
+                "intent": "commercial" if prefix else "core",
+                "source": "fallback_more" if more else "fallback",
+                "confidence": "starter",
+            })
+            existing_markers.add(marker)
+            if len(keywords) >= 18:
+                return keywords
+    return keywords
+
+
+async def _generate_keywords(suite: Suite, language: str, existing: list[str] | None = None, more: bool = False) -> list[dict[str, Any]]:
+    fallback = _keyword_candidates(suite, language, existing, more)
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    services = _suite_services(suite)
+    if not services and not brand:
+        return fallback
+    try:
+        prompt = {
+            "language": language,
+            "business": {
+                "name": brand.get("name") or suite.name,
+                "category": brand.get("industry") or brand.get("category") or brand.get("niche"),
+                "services": services,
+                "audience": brand.get("target_audience") or brand.get("audience_notes"),
+                "location": brand.get("location") or brand.get("audience_location"),
+            },
+            "existing_keywords": existing or [],
+            "mode": "generate_more" if more else "generate",
+            "instructions": "Return JSON only: {\"keywords\":[{\"text\":\"...\",\"intent\":\"core|commercial|local|problem|comparison\",\"confidence\":\"medium\"}]}",
+        }
+        raw = await call_text_ai(
+            max_tokens=1200,
+            messages=[{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+            system="You generate practical marketing keywords. Return strict JSON only.",
+            timeout=50,
+        )
+        parsed = json.loads(raw)
+        incoming = parsed.get("keywords") if isinstance(parsed, dict) else []
+        existing_markers = {item.casefold() for item in _unique_strings(existing or [])}
+        generated: list[dict[str, Any]] = []
+        for item in incoming or []:
+            if isinstance(item, str):
+                text = item.strip()
+                intent = "general"
+                confidence = "medium"
+            elif isinstance(item, dict):
+                text = str(item.get("text") or item.get("keyword") or "").strip()
+                intent = str(item.get("intent") or "general").strip()
+                confidence = str(item.get("confidence") or "medium").strip()
+            else:
+                continue
+            if not text or text.casefold() in existing_markers:
+                continue
+            generated.append({
+                "id": f"kw-{len(generated) + 1}",
+                "text": text,
+                "intent": intent,
+                "source": "ai_more" if more else "ai",
+                "confidence": confidence,
+            })
+            existing_markers.add(text.casefold())
+            if len(generated) >= 24:
+                break
+        return generated or fallback
+    except Exception:
+        return fallback
+
+
+def _mock_competitors(suite: Suite, language: str, existing_urls: list[str] | None = None, offset: int = 0) -> list[dict[str, Any]]:
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    services = _suite_services(suite) or [brand.get("industry") or brand.get("category") or suite.name]
+    service = str(services[offset % len(services)] or suite.name).strip()
+    location = str(brand.get("location") or "").strip()
+    source_types = [
+        ("google_organic", "Google organic", "google", "https://www.google.com/search?q="),
+        ("sponsored", "Google sponsored", "google", "https://www.google.com/search?q="),
+        ("instagram", "Instagram", "instagram", "https://www.google.com/search?q=site%3Ainstagram.com+"),
+        ("maps", "Google Maps", "maps", "https://www.google.com/maps/search/"),
+        ("facebook", "Facebook", "facebook", "https://www.google.com/search?q=site%3Afacebook.com+"),
+        ("tiktok", "TikTok", "tiktok", "https://www.google.com/search?q=site%3Atiktok.com+"),
+    ]
+    existing = {url for url in (existing_urls or []) if url}
+    cards: list[dict[str, Any]] = []
+    for index, (result_type, label, platform, base_url) in enumerate(source_types[offset % len(source_types):] + source_types[:offset % len(source_types)], start=1):
+        modifier = "" if offset == 0 else f" alternative {offset + index}"
+        query = "+".join(part for part in [service, location, f"competitors{modifier}"] if part).replace(" ", "+")
+        url = f"{base_url}{query}"
+        if url in existing:
+            continue
+        title_prefix = "نتيجة منافس" if str(language).startswith("ar") else "Competitor result"
+        snippet = (
+            f"نتيجة تجريبية من {label} مبنية على {service}. سيتم استبدالها بنتيجة SerpAPI فعلية."
+            if str(language).startswith("ar")
+            else f"Mock {label} result for {service}. This will be replaced by a real SerpAPI result."
+        )
+        cards.append({
+            "id": f"mock-{result_type}-{offset + index}",
+            "name": f"{title_prefix}: {service}",
+            "title": f"{title_prefix}: {service}",
+            "platform": platform,
+            "result_type": result_type,
+            "url": url,
+            "reason": snippet,
+            "offer": label,
+            "evidence": service,
+            "snippet": snippet,
+            "opportunity": "استخدم هذه النتيجة لتقييم الرسائل والعروض." if str(language).startswith("ar") else "Use this result to assess messaging and offers.",
+            "confidence": "mock",
+            "classification_tags": [],
+            "research_lead": True,
+        })
+        existing.add(url)
+        if len(cards) >= 6:
+            break
+    return cards
+
+
 def _save_competitor_scratch(suite: Suite, language: str | None = None) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
-    intelligence = normalize_marketing_intelligence(
-        {"phase": "competitors"},
-        suite_research_payload(suite),
-        output_language,
-    )
+    intelligence = normalize_marketing_intelligence({"phase": "competitors"}, suite_research_payload(suite), output_language)
+    intelligence["competitors"] = _mock_competitors(suite, output_language)
+    intelligence["status"] = "competitors_ready"
     return _save_marketing_intelligence(suite, intelligence)
+
+
+def _append_competitor_scratch(suite: Suite, language: str | None = None) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    existing = _strategy(suite).get("marketing_intelligence")
+    base = normalize_marketing_intelligence(existing if isinstance(existing, dict) else {"phase": "competitors"}, suite_research_payload(suite), output_language)
+    current = list(base.get("competitors") or [])
+    existing_urls = [str(item.get("url") or "") for item in current if isinstance(item, dict)]
+    current.extend(_mock_competitors(suite, output_language, existing_urls, offset=len(current)))
+    base["competitors"] = current[:36]
+    base["status"] = "competitors_ready"
+    return _save_marketing_intelligence(suite, base)
 
 
 def _save_demand_supply_scratch(suite: Suite, language: str | None = None) -> dict[str, Any]:
@@ -348,6 +531,108 @@ async def generate_marketing_competitors(
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or GenerateMarketingPlanRequest()
     _save_competitor_scratch(suite, request_data.language)
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "market_ready")
+
+
+@router.post("/suites/{suite_id}/marketing-plan/competitors/generate-more")
+async def generate_more_marketing_competitors(
+    suite_id: str,
+    payload: MarketingStageRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    request_data = payload or MarketingStageRequest()
+    _append_competitor_scratch(suite, request_data.language)
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "market_ready")
+
+
+@router.patch("/suites/{suite_id}/marketing-plan/competitors/{competitor_id}")
+async def update_marketing_competitor(
+    suite_id: str,
+    competitor_id: str,
+    payload: CompetitorClassificationRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    language = infer_plan_language(suite)
+    intelligence = normalize_marketing_intelligence(
+        _strategy(suite).get("marketing_intelligence"),
+        suite_research_payload(suite),
+        language,
+    )
+    allowed = {"not_competitor", "good_competitor", "local_competitor", "global_competitor"}
+    tags = [tag for tag in _unique_strings(payload.classification_tags, 8) if tag in allowed]
+    competitors = []
+    found = False
+    for competitor in intelligence.get("competitors") or []:
+        if isinstance(competitor, dict) and competitor.get("id") == competitor_id:
+            competitor = {**competitor, "classification_tags": tags}
+            found = True
+        competitors.append(competitor)
+    if not found:
+        raise HTTPException(status_code=404, detail="Competitor not found")
+    intelligence["competitors"] = competitors
+    _save_marketing_intelligence(suite, intelligence)
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "market_ready")
+
+
+@router.post("/suites/{suite_id}/marketing-plan/keywords/generate")
+async def generate_marketing_keywords(
+    suite_id: str,
+    payload: MarketingStageRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    request_data = payload or MarketingStageRequest()
+    output_language = infer_plan_language(suite, request_data.language)
+    intelligence = normalize_marketing_intelligence(
+        _strategy(suite).get("marketing_intelligence") if isinstance(_strategy(suite).get("marketing_intelligence"), dict) else {},
+        suite_research_payload(suite),
+        output_language,
+    )
+    keywords = await _generate_keywords(suite, output_language, [], more=False)
+    intelligence["keywords"] = keywords
+    intelligence["status"] = "keywords_ready"
+    intelligence["generated_at"] = datetime.now(timezone.utc).isoformat()
+    _save_marketing_intelligence(suite, intelligence)
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "market_ready")
+
+
+@router.post("/suites/{suite_id}/marketing-plan/keywords/generate-more")
+async def generate_more_marketing_keywords(
+    suite_id: str,
+    payload: MarketingStageRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    request_data = payload or MarketingStageRequest()
+    output_language = infer_plan_language(suite, request_data.language)
+    intelligence = normalize_marketing_intelligence(
+        _strategy(suite).get("marketing_intelligence") if isinstance(_strategy(suite).get("marketing_intelligence"), dict) else {},
+        suite_research_payload(suite),
+        output_language,
+    )
+    current = list(intelligence.get("keywords") or [])
+    existing_texts = [str(item.get("text") or "") for item in current if isinstance(item, dict)]
+    more_keywords = await _generate_keywords(suite, output_language, [*existing_texts, *request_data.existing_values], more=True)
+    seen = {item.casefold() for item in existing_texts if item}
+    for keyword in more_keywords:
+        marker = str(keyword.get("text") or "").casefold()
+        if marker and marker not in seen:
+            current.append(keyword)
+            seen.add(marker)
+    intelligence["keywords"] = current[:80]
+    intelligence["status"] = "keywords_ready"
+    intelligence["generated_at"] = datetime.now(timezone.utc).isoformat()
+    _save_marketing_intelligence(suite, intelligence)
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 

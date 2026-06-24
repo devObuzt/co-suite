@@ -54,3 +54,65 @@ def test_save_competitor_scratch_writes_visible_competitors_without_deck():
     assert suite.strategy["marketing_intelligence"]["status"] == "competitors_ready"
     assert intelligence["competitors"]
     assert intelligence["demand_signals"] == []
+
+
+def test_keyword_candidates_skip_existing_terms():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec", "industry": "Marketing", "services": ["Websites"]},
+        strategy={},
+    )
+
+    first = marketing_plans._keyword_candidates(suite, "en")
+    more = marketing_plans._keyword_candidates(suite, "en", [item["text"] for item in first], more=True)
+
+    assert first
+    assert more
+    assert not {item["text"].casefold() for item in first} & {item["text"].casefold() for item in more}
+
+
+def test_append_competitor_scratch_adds_more_mock_results():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec", "services": ["Websites"]},
+        strategy={},
+    )
+
+    first = marketing_plans._save_competitor_scratch(suite, "ar")
+    second = marketing_plans._append_competitor_scratch(suite, "ar")
+
+    assert len(second["competitors"]) > len(first["competitors"])
+    assert any(item["result_type"] == "maps" for item in second["competitors"])
+
+
+def test_normalized_competitor_preserves_classification_tags():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec", "services": ["Websites"]},
+        strategy={
+            "marketing_intelligence": {
+                "competitors": [
+                    {
+                        "id": "competitor-1",
+                        "name": "Competitor",
+                        "url": "https://example.com",
+                        "result_type": "google_organic",
+                        "classification_tags": ["good_competitor", "local_competitor"],
+                    }
+                ]
+            }
+        },
+    )
+
+    intelligence = marketing_plans._intelligence(suite)
+
+    assert intelligence["competitors"][0]["classification_tags"] == ["good_competitor", "local_competitor"]

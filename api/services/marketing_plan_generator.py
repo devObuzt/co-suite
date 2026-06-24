@@ -339,17 +339,67 @@ def _normalize_competitor(raw: Any, index: int) -> dict[str, Any] | None:
             platform = "website"
         else:
             platform = "other"
-    return {
+    item = {
         "id": str(raw.get("id") or _stable_slug(name or url, f"competitor-{index}")),
         "name": name or url,
+        "title": str(raw.get("title") or name or url).strip(),
         "platform": platform,
+        "result_type": str(raw.get("result_type") or raw.get("type") or platform).strip(),
         "url": url,
         "reason": str(raw.get("reason") or raw.get("why_relevant") or raw.get("relevance") or "").strip(),
         "offer": str(raw.get("offer") or raw.get("category") or raw.get("description") or "").strip(),
         "evidence": str(raw.get("evidence") or raw.get("snippet") or raw.get("summary") or "").strip(),
+        "snippet": str(raw.get("snippet") or raw.get("summary") or raw.get("evidence") or raw.get("description") or "").strip(),
         "opportunity": str(raw.get("opportunity") or raw.get("gap") or raw.get("threat") or "").strip(),
         "confidence": str(raw.get("confidence") or "medium").strip().lower(),
     }
+    tags = _string_list(raw.get("classification_tags") or raw.get("tags"), 8)
+    if tags:
+        item["classification_tags"] = tags
+    if raw.get("research_lead") is not None:
+        item["research_lead"] = bool(raw.get("research_lead"))
+    return item
+
+
+def _normalize_keyword(raw: Any, index: int) -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        return {
+            "id": _stable_slug(text, f"keyword-{index}"),
+            "text": text,
+            "intent": "general",
+            "source": "generated",
+            "confidence": "starter",
+        }
+    if not isinstance(raw, dict):
+        return None
+    text = str(raw.get("text") or raw.get("keyword") or raw.get("name") or raw.get("title") or "").strip()
+    if not text:
+        return None
+    return {
+        "id": str(raw.get("id") or _stable_slug(text, f"keyword-{index}")).strip(),
+        "text": text,
+        "intent": str(raw.get("intent") or raw.get("category") or "general").strip(),
+        "source": str(raw.get("source") or "generated").strip(),
+        "confidence": str(raw.get("confidence") or "medium").strip().lower(),
+    }
+
+
+def _normalize_keywords(raw: Any, limit: int = 80) -> list[dict[str, Any]]:
+    keywords: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(_list(raw), start=1):
+        keyword = _normalize_keyword(item, index)
+        if not keyword:
+            continue
+        marker = keyword["text"].casefold()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        keywords.append(keyword)
+    return keywords[:limit]
 
 
 def _business_keywords(brand: dict[str, Any], strategy: dict[str, Any]) -> list[str]:
@@ -633,6 +683,7 @@ def normalize_marketing_intelligence(
         "language": language,
         "generated_at": raw.get("generated_at") or datetime.now(timezone.utc).isoformat(),
         "status": raw.get("status") or ("competitors_ready" if competitor_only and competitors else "ready" if competitors or demand_signals or source_links else "needs_research"),
+        "keywords": _normalize_keywords(raw.get("keywords")),
         "competitors": competitors,
         "demand_signals": [{"id": f"demand-{i}", "title": item, "source": "profile"} for i, item in enumerate(demand_signals, start=1)],
         "supply_signals": [{"id": f"supply-{i}", "title": item, "source": "research"} for i, item in enumerate(supply_signals, start=1)],
