@@ -290,11 +290,53 @@ async def test_demand_supply_saves_clear_warning_state_when_google_ads_unavailab
     intelligence = await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
 
     demand_supply = intelligence["demand_supply"]
-    assert demand_supply["warning"] == "Google Ads account is not connected."
+    assert "داخليًا" in demand_supply["warning"]
+    assert "Google Ads account is not connected" not in demand_supply["warning"]
     assert demand_supply["summary"]["analyzed_keywords"] == 0
     assert intelligence["demand_signals"]
     assert intelligence["supply_signals"]
     assert intelligence["opportunities"]
+    assert intelligence["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_demand_supply_uses_platform_google_ads_credentials(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "industry": "تعليم تداول", "services": ["دورات تداول"]},
+        connections={},
+        strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "دورات تداول"}]}},
+    )
+    calls = []
+
+    async def fake_fetch_keyword_planner_ideas(customer_id, refresh_token, *_args, **_kwargs):
+        calls.append((customer_id, refresh_token))
+        return {
+            "keyword_metrics": [{"keyword": "دورات تداول", "average_monthly_searches": 500, "competition_index": 44}],
+            "suggested_keywords": [],
+            "summary": {
+                "analyzed_keywords": 1,
+                "average_monthly_searches": 500,
+                "competition_level": "MEDIUM",
+                "average_competition_index": 44,
+                "market_pressure_score": 35,
+                "suggested_keywords": 0,
+            },
+        }
+
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "123-456-7890")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
+    monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
+
+    intelligence = await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
+
+    assert calls == [("123-456-7890", "platform-refresh-token")]
+    assert intelligence["demand_supply"]["credential_source"] == "platform"
+    assert intelligence["demand_supply"]["warning"] is None
+    assert intelligence["demand_supply"]["summary"]["average_monthly_searches"] == 500
 
 
 def test_marketing_intelligence_redacts_stored_serpapi_keys():

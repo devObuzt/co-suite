@@ -872,24 +872,48 @@ def _demand_supply_unavailable_signals(planner: dict[str, Any], language: str) -
     )
 
 
+def _google_ads_keyword_planner_credentials(suite: Suite) -> tuple[str, str, str]:
+    customer_id = str(settings.google_ads_customer_id or "").strip()
+    refresh_token = str(settings.google_ads_refresh_token or "").strip()
+    if customer_id and refresh_token:
+        return customer_id, refresh_token, "platform"
+    google_ads = (suite.connections or {}).get("google_ads") if isinstance(suite.connections, dict) else {}
+    return (
+        str((google_ads or {}).get("customer_id") or ""),
+        str((google_ads or {}).get("refresh_token") or ""),
+        "suite_connection",
+    )
+
+
+def _public_demand_supply_warning(warning: str | None, language: str, credential_source: str) -> str | None:
+    if not warning:
+        return None
+    marker = str(warning).casefold()
+    missing_connection = "account is not connected" in marker or "refresh_token" in marker or "customer_id" in marker
+    if credential_source == "platform" and not missing_connection:
+        return str(warning)
+    if str(language).startswith("ar"):
+        return "مصدر بيانات العرض والطلب غير جاهز داخليًا بعد. سنعرض تقديرًا تمهيديًا الآن، وبعد تفعيل مصدر Google Ads المركزي ستظهر أرقام البحث والمنافسة."
+    return "The internal demand and supply data source is not ready yet. We are showing a starter estimate now; once the platform Google Ads source is active, search and competition metrics will appear."
+
+
 async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None = None) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
     existing = _strategy(suite).get("marketing_intelligence")
     base = existing if isinstance(existing, dict) else {"phase": "competitors"}
     base = normalize_marketing_intelligence(base, suite_research_payload(suite), output_language)
-    google_ads = (suite.connections or {}).get("google_ads") if isinstance(suite.connections, dict) else {}
+    customer_id, refresh_token, credential_source = _google_ads_keyword_planner_credentials(suite)
     planner = await fetch_keyword_planner_ideas(
-        str((google_ads or {}).get("customer_id") or ""),
-        str((google_ads or {}).get("refresh_token") or ""),
+        customer_id,
+        refresh_token,
         _marketing_keywords_for_planner(suite),
         output_language,
         _suite_location(suite),
         _suite_website_url(suite),
     )
     summary = planner.get("summary") or {}
-    warnings = list(base.get("warnings") or [])
-    if planner.get("warning"):
-        warnings.append(str(planner["warning"]))
+    warnings: list[str] = []
+    public_warning = _public_demand_supply_warning(planner.get("warning"), output_language, credential_source)
     has_keyword_metrics = bool(planner.get("keyword_metrics"))
     demand_title = (
         f"متوسط البحث الشهري: {summary.get('average_monthly_searches', 0)}"
@@ -906,7 +930,8 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         if str(output_language).startswith("ar")
         else f"Market pressure: {summary.get('market_pressure_score', 0)}/100"
     )
-    fallback_demand, fallback_supply, fallback_opportunities = _demand_supply_unavailable_signals(planner, output_language)
+    fallback_planner = {**planner, "warning": public_warning}
+    fallback_demand, fallback_supply, fallback_opportunities = _demand_supply_unavailable_signals(fallback_planner, output_language)
     intelligence = {
         **base,
         "phase": "demand_supply",
@@ -925,7 +950,8 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         "keyword_metrics": planner.get("keyword_metrics") or [],
         "suggested_keywords": planner.get("suggested_keywords") or [],
         "request": planner.get("request") or {},
-        "warning": planner.get("warning"),
+        "warning": public_warning,
+        "credential_source": credential_source,
     }
     return _save_marketing_intelligence(suite, intelligence)
 

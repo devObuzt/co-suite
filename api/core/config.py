@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     google_ads_client_id: str = ""
     google_ads_client_secret: str = ""
     google_ads_login_customer_id: str = ""
+    google_ads_customer_id: str = ""
+    google_ads_refresh_token: str = ""
     serpapi_api_key: str = ""
     serpapi_cost_per_search_usd: float = 0.0
     google_ads_keyword_planner_cost_usd: float = 0.0
