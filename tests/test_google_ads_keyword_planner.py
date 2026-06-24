@@ -41,3 +41,45 @@ def test_build_keyword_planner_summary_scores_demand_and_competition():
     assert summary["average_competition_index"] == 50
     assert summary["competition_level"] == "MEDIUM"
     assert summary["demand_level"] == "MEDIUM"
+
+
+def test_keyword_planner_empty_response_returns_warning(monkeypatch):
+    async def fake_refresh_google_ads_access_token(_refresh_token):
+        return "access-token"
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"results": []}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(google_ads, "refresh_google_ads_access_token", fake_refresh_google_ads_access_token)
+    monkeypatch.setattr(google_ads.httpx, "AsyncClient", FakeClient)
+
+    import asyncio
+
+    result = asyncio.run(
+        google_ads.fetch_keyword_planner_ideas(
+            "1234567890",
+            "refresh-token",
+            ["dental clinic"],
+            "en",
+            "Israel",
+        )
+    )
+
+    assert result["keyword_metrics"] == []
+    assert "No keyword ideas" in result["warning"]

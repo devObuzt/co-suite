@@ -198,7 +198,7 @@ async def fetch_keyword_planner_ideas(
                 suggestions.append(item)
         summary = build_keyword_planner_summary(metrics)
         summary["suggested_keywords"] = len(suggestions)
-        return {
+        result = {
             "keyword_metrics": metrics,
             "suggested_keywords": suggestions[:30],
             "summary": summary,
@@ -208,6 +208,9 @@ async def fetch_keyword_planner_ideas(
                 "keyword_count": len(body.get("keywordSeed", {}).get("keywords") or body.get("keywordAndUrlSeed", {}).get("keywords") or []),
             },
         }
+        if not metrics:
+            result["warning"] = "No keyword ideas or historical metrics were returned by Google Ads Keyword Planner for the selected country, language, and keywords."
+        return result
     except Exception as e:
         return {"keyword_metrics": [], "suggested_keywords": [], "summary": build_keyword_planner_summary([]), "warning": str(e)}
 

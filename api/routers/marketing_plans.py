@@ -668,6 +668,7 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
     warnings = list(base.get("warnings") or [])
     if planner.get("warning"):
         warnings.append(str(planner["warning"]))
+    has_keyword_metrics = bool(planner.get("keyword_metrics"))
     demand_title = (
         f"متوسط البحث الشهري: {summary.get('average_monthly_searches', 0)}"
         if str(output_language).startswith("ar")
@@ -683,20 +684,18 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         if str(output_language).startswith("ar")
         else f"Market pressure: {summary.get('market_pressure_score', 0)}/100"
     )
-    intelligence = normalize_marketing_intelligence(
-        {
-            **base,
-            "phase": "demand_supply",
-            "status": "demand_supply_ready",
-            "competitors": base.get("competitors") or [],
-            "demand_signals": [{"id": "google-ads-demand", "title": demand_title, "source": "google_ads"}],
-            "supply_signals": [{"id": "google-ads-competition", "title": competition_title, "source": "google_ads"}],
-            "opportunities": [{"id": "google-ads-pressure", "title": pressure_title, "source": "google_ads"}],
-            "warnings": warnings,
-        },
-        suite_research_payload(suite),
-        output_language,
-    )
+    intelligence = {
+        **base,
+        "phase": "demand_supply",
+        "status": "demand_supply_ready",
+        "language": output_language,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "competitors": base.get("competitors") or [],
+        "demand_signals": [{"id": "google-ads-demand", "title": demand_title, "source": "google_ads"}] if has_keyword_metrics else [],
+        "supply_signals": [{"id": "google-ads-competition", "title": competition_title, "source": "google_ads"}] if has_keyword_metrics else [],
+        "opportunities": [{"id": "google-ads-pressure", "title": pressure_title, "source": "google_ads"}] if has_keyword_metrics else [],
+        "warnings": warnings,
+    }
     intelligence["demand_supply"] = {
         "provider": "google_ads_keyword_planner",
         "summary": summary,
