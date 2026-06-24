@@ -458,6 +458,36 @@ SERPAPI_SOURCE_SPECS = (
 )
 
 
+def _serpapi_country_code(location: str) -> str:
+    lowered = str(location or "").casefold()
+    if any(item in lowered for item in ("israel", "إسرائيل", "ישראל")):
+        return "il"
+    if any(item in lowered for item in ("palestine", "فلسطين")):
+        return "ps"
+    if any(item in lowered for item in ("jordan", "الأردن", "اردن")):
+        return "jo"
+    if any(item in lowered for item in ("united states", "usa", "us", "أمريكا", "امريكا")):
+        return "us"
+    if any(item in lowered for item in ("saudi", "السعودية")):
+        return "sa"
+    if any(item in lowered for item in ("uae", "emirates", "الإمارات", "الامارات")):
+        return "ae"
+    return ""
+
+
+def _serpapi_error_message(label: str, exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            payload = response.json()
+            detail = payload.get("error") or payload.get("message") or str(payload)[:180]
+        except Exception:
+            detail = (getattr(response, "text", "") or str(exc)).split("api_key=")[0][:180]
+        status_code = getattr(response, "status_code", "")
+        return f"SerpAPI {label} failed{f' ({status_code})' if status_code else ''}: {detail}"
+    return f"SerpAPI {label} failed: {str(exc).split('api_key=')[0][:180]}"
+
+
 def _competitor_search_terms(suite: Suite, language: str, offset: int = 0) -> list[str]:
     brand = suite.brand if isinstance(suite.brand, dict) else {}
     category = str(brand.get("industry") or brand.get("category") or brand.get("niche") or "").strip()
@@ -550,8 +580,11 @@ async def _fetch_serpapi_source(
         "num": 10,
     }
     location = str(brand.get("location") or brand.get("audience_location") or "").strip()
-    if location:
-        params["location"] = location
+    country_code = _serpapi_country_code(location)
+    if country_code:
+        params["gl"] = country_code
+    if spec["engine"] == "google_maps":
+        params["type"] = "search"
     response = await client.get("https://serpapi.com/search.json", params=params)
     response.raise_for_status()
     payload = response.json()
@@ -583,7 +616,7 @@ async def _serpapi_competitors(suite: Suite, language: str, existing_urls: list[
                 if not source_items:
                     warnings.append(f"SerpAPI returned no usable {spec['label']} results.")
             except Exception as exc:
-                warnings.append(f"SerpAPI {spec['label']} failed: {str(exc)[:180]}")
+                warnings.append(_serpapi_error_message(spec["label"], exc))
                 continue
     return competitors, warnings
 
@@ -605,9 +638,9 @@ async def _save_competitor_scratch_from_search(suite: Suite, language: str | Non
         if serpapi_warnings:
             intelligence["warnings"] = [*list(intelligence.get("warnings") or []), *serpapi_warnings[:5]]
     else:
-        intelligence["competitors"] = _mock_competitors(suite, output_language)
+        intelligence["competitors"] = []
         intelligence["warnings"] = [
-            "SerpAPI did not return usable direct competitor results; showing starter source leads.",
+            "SerpAPI did not return usable direct competitor results.",
             *serpapi_warnings[:5],
         ]
     intelligence["status"] = "competitors_ready"
@@ -634,10 +667,10 @@ async def _append_competitor_scratch_from_search(suite: Suite, language: str | N
     existing_urls = [str(item.get("url") or item.get("title") or "") for item in current if isinstance(item, dict)]
     more, serpapi_warnings = await _serpapi_competitors(suite, output_language, existing_urls, offset=len(current))
     if not more:
-        more = _mock_competitors(suite, output_language, existing_urls, offset=len(current))
+        more = []
         base["warnings"] = [
             *list(base.get("warnings") or []),
-            "SerpAPI did not return additional direct competitor results; showing starter source leads.",
+            "SerpAPI did not return additional direct competitor results.",
             *serpapi_warnings[:5],
         ]
     current.extend(more)

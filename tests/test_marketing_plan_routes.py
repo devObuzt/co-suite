@@ -191,6 +191,24 @@ def test_serpapi_results_are_grouped_by_source():
     assert maps[0]["url"] == "https://maps.example"
 
 
+def test_serpapi_error_message_redacts_api_key():
+    class FakeResponse:
+        status_code = 400
+        text = "Bad request https://serpapi.com/search.json?api_key=secret&engine=google"
+
+        def json(self):
+            return {"error": "Invalid location"}
+
+    class FakeError(Exception):
+        response = FakeResponse()
+
+    message = marketing_plans._serpapi_error_message("Google organic", FakeError("boom api_key=secret"))
+
+    assert "Invalid location" in message
+    assert "secret" not in message
+    assert "api_key" not in message
+
+
 @pytest.mark.asyncio
 async def test_serpapi_failures_return_source_warnings(monkeypatch):
     suite = Suite(
