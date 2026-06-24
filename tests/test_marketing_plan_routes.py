@@ -200,6 +200,46 @@ def test_serpapi_results_are_grouped_by_source():
     assert maps[0]["url"] == "https://maps.example"
 
 
+def test_social_competitor_filter_removes_unrelated_results():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={
+            "name": "Smart Line Academy",
+            "industry": "تعليم تداول",
+            "services": ["دورات تداول", "تعليم الاستثمار", "تحليل الأسهم"],
+        },
+        strategy={
+            "marketing_intelligence": {
+                "keywords": [
+                    {"id": "kw-1", "text": "دورات تداول"},
+                    {"id": "kw-2", "text": "تعليم الأسهم"},
+                ]
+            }
+        },
+    )
+    unrelated = {
+        "id": "serpapi-instagram-story",
+        "title": "#شهريزاد",
+        "snippet": "في هذا المشهد التخيلي المولد بالذكاء الاصطناعي سرب هجومي من طائرات اليعسوب.",
+        "url": "https://www.instagram.com/p/story/",
+        "result_type": "instagram",
+    }
+    relevant = {
+        "id": "serpapi-instagram-trading",
+        "title": "أكاديمية تداول وأسهم",
+        "snippet": "دورات تداول وتحليل الأسهم للمبتدئين.",
+        "url": "https://www.instagram.com/tradingacademy/",
+        "result_type": "instagram",
+    }
+
+    filtered = marketing_plans._filter_relevant_competitors(suite, "ar", "instagram", [unrelated, relevant])
+
+    assert filtered == [relevant]
+
+
 def test_serpapi_error_message_redacts_api_key():
     class FakeResponse:
         status_code = 400
@@ -216,6 +256,45 @@ def test_serpapi_error_message_redacts_api_key():
     assert "Invalid location" in message
     assert "secret" not in message
     assert "api_key" not in message
+
+
+@pytest.mark.asyncio
+async def test_demand_supply_saves_clear_warning_state_when_google_ads_unavailable(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "industry": "تعليم تداول", "services": ["دورات تداول"]},
+        connections={},
+        strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "دورات تداول"}]}},
+    )
+
+    async def fake_fetch_keyword_planner_ideas(*_args, **_kwargs):
+        return {
+            "keyword_metrics": [],
+            "suggested_keywords": [],
+            "summary": {
+                "analyzed_keywords": 0,
+                "average_monthly_searches": 0,
+                "competition_level": "UNKNOWN",
+                "average_competition_index": 0,
+                "market_pressure_score": 0,
+                "suggested_keywords": 0,
+            },
+            "warning": "Google Ads account is not connected.",
+        }
+
+    monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
+
+    intelligence = await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
+
+    demand_supply = intelligence["demand_supply"]
+    assert demand_supply["warning"] == "Google Ads account is not connected."
+    assert demand_supply["summary"]["analyzed_keywords"] == 0
+    assert intelligence["demand_signals"]
+    assert intelligence["supply_signals"]
+    assert intelligence["opportunities"]
 
 
 def test_marketing_intelligence_redacts_stored_serpapi_keys():

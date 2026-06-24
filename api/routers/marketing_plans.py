@@ -527,6 +527,52 @@ def _competitor_search_terms(suite: Suite, language: str, offset: int = 0) -> li
     return terms or [suite.name]
 
 
+def _competitor_relevance_terms(suite: Suite, language: str, limit: int = 40) -> list[str]:
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    intelligence = _intelligence(suite)
+    raw_terms: list[str] = [
+        str(brand.get("industry") or ""),
+        str(brand.get("category") or ""),
+        str(brand.get("niche") or ""),
+        *_suite_services(suite),
+        *[
+            str(item.get("text") or item.get("keyword") or "")
+            for item in intelligence.get("keywords") or []
+            if isinstance(item, dict)
+        ],
+    ]
+    brand_markers = _brand_keyword_markers(str(brand.get("name") or suite.name or ""))
+    blocked = {
+        "best", "services", "service", "company", "business", "near", "nearby",
+        "أفضل", "افضل", "خدمات", "شركة", "قريب", "محلي",
+        "שירות", "שירותים", "חברה", "קרוב", "מקומי",
+    } | brand_markers
+    terms: list[str] = []
+    for raw in raw_terms:
+        phrase = " ".join(str(raw or "").casefold().split())
+        if not phrase or phrase in blocked or _mentions_brand_keyword(phrase, str(brand.get("name") or suite.name or "")):
+            continue
+        terms.append(phrase)
+        for token in re.split(r"[\s,،/|()\\[\\]{}:;.!?\\-]+", phrase):
+            token = token.strip().casefold()
+            if len(token) < 3 or token in blocked:
+                continue
+            terms.append(token)
+    if not terms:
+        terms = [item["text"].casefold() for item in _keyword_candidates(suite, language)[:8]]
+    return _unique_strings(terms, limit)
+
+
+def _is_relevant_social_competitor(suite: Suite, language: str, item: dict[str, Any]) -> bool:
+    haystack = " ".join(
+        str(item.get(key) or "")
+        for key in ("title", "name", "snippet", "reason", "evidence", "offer", "url")
+    ).casefold()
+    if not haystack:
+        return False
+    return any(term in haystack for term in _competitor_relevance_terms(suite, language))
+
+
 def _serpapi_competitors_from_payload(payload: dict[str, Any], result_type: str, limit: int = 5) -> list[dict[str, Any]]:
     if result_type == "maps":
         local_results = payload.get("local_results")
@@ -578,6 +624,13 @@ def _serpapi_competitors_from_payload(payload: dict[str, Any], result_type: str,
         if len(items) >= limit:
             break
     return items
+
+
+def _filter_relevant_competitors(suite: Suite, language: str, source: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if source not in {"instagram", "facebook", "tiktok"}:
+        return items
+    filtered = [item for item in items if _is_relevant_social_competitor(suite, language, item)]
+    return filtered
 
 
 def _fallback_competitor_for_source(
@@ -683,6 +736,7 @@ async def _fetch_serpapi_source(
     response.raise_for_status()
     payload = response.json()
     candidates = _serpapi_competitors_from_payload(payload, str(spec["result_type"]), 5)
+    candidates = _filter_relevant_competitors(suite, language, str(spec["result_type"]), candidates)
     unique: list[dict[str, Any]] = []
     for item in candidates:
         url = str(item.get("url") or "")
@@ -800,6 +854,24 @@ def _save_demand_supply_scratch(suite: Suite, language: str | None = None) -> di
     return _save_marketing_intelligence(suite, intelligence)
 
 
+def _demand_supply_unavailable_signals(planner: dict[str, Any], language: str) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+    warning = str(planner.get("warning") or "").strip()
+    ar = str(language).startswith("ar")
+    if ar:
+        demand = "لا توجد أرقام طلب من Keyword Planner بعد. اربط Google Ads أو تأكد من صلاحية الحساب والكلمات."
+        supply = "لا توجد كثافة منافسة فعلية بعد لأن Google Ads لم يرجع Metrics قابلة للاستخدام."
+        opportunity = warning or "بعد الربط، أعد التوليد لعرض البحث الشهري، المنافسة، واقتراحات الكلمات."
+    else:
+        demand = "No Keyword Planner demand metrics yet. Connect Google Ads or verify account and keyword access."
+        supply = "No real competition density yet because Google Ads did not return usable metrics."
+        opportunity = warning or "After connection, regenerate to show monthly searches, competition, and keyword suggestions."
+    return (
+        [{"id": "google-ads-demand-unavailable", "title": demand, "source": "google_ads"}],
+        [{"id": "google-ads-competition-unavailable", "title": supply, "source": "google_ads"}],
+        [{"id": "google-ads-next-step", "title": opportunity, "source": "google_ads"}],
+    )
+
+
 async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None = None) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
     existing = _strategy(suite).get("marketing_intelligence")
@@ -834,6 +906,7 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         if str(output_language).startswith("ar")
         else f"Market pressure: {summary.get('market_pressure_score', 0)}/100"
     )
+    fallback_demand, fallback_supply, fallback_opportunities = _demand_supply_unavailable_signals(planner, output_language)
     intelligence = {
         **base,
         "phase": "demand_supply",
@@ -841,9 +914,9 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         "language": output_language,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "competitors": base.get("competitors") or [],
-        "demand_signals": [{"id": "google-ads-demand", "title": demand_title, "source": "google_ads"}] if has_keyword_metrics else [],
-        "supply_signals": [{"id": "google-ads-competition", "title": competition_title, "source": "google_ads"}] if has_keyword_metrics else [],
-        "opportunities": [{"id": "google-ads-pressure", "title": pressure_title, "source": "google_ads"}] if has_keyword_metrics else [],
+        "demand_signals": [{"id": "google-ads-demand", "title": demand_title, "source": "google_ads"}] if has_keyword_metrics else fallback_demand,
+        "supply_signals": [{"id": "google-ads-competition", "title": competition_title, "source": "google_ads"}] if has_keyword_metrics else fallback_supply,
+        "opportunities": [{"id": "google-ads-pressure", "title": pressure_title, "source": "google_ads"}] if has_keyword_metrics else fallback_opportunities,
         "warnings": warnings,
     }
     intelligence["demand_supply"] = {
