@@ -1,4 +1,6 @@
 """Google Ads OAuth and read-only reporting helpers."""
+from typing import Any
+
 import httpx
 
 from ..core.config import settings
@@ -14,9 +16,200 @@ GOOGLE_ADS_SCOPE = " ".join([
     "profile",
 ])
 
+LANGUAGE_CONSTANTS = {
+    "ar": "languageConstants/1019",
+    "arabic": "languageConstants/1019",
+    "he": "languageConstants/1027",
+    "hebrew": "languageConstants/1027",
+    "en": "languageConstants/1000",
+    "english": "languageConstants/1000",
+}
+
+GEO_TARGET_CONSTANTS = {
+    "israel": "geoTargetConstants/2376",
+    "il": "geoTargetConstants/2376",
+    "palestine": "geoTargetConstants/2275",
+    "ps": "geoTargetConstants/2275",
+    "united states": "geoTargetConstants/2840",
+    "usa": "geoTargetConstants/2840",
+    "us": "geoTargetConstants/2840",
+    "jordan": "geoTargetConstants/2400",
+    "jo": "geoTargetConstants/2400",
+    "saudi arabia": "geoTargetConstants/2682",
+    "saudi": "geoTargetConstants/2682",
+    "uae": "geoTargetConstants/2784",
+    "united arab emirates": "geoTargetConstants/2784",
+}
+
 
 def _clean_customer_id(customer_id: str) -> str:
     return (customer_id or "").replace("-", "").strip()
+
+
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _micros_to_unit(value: Any) -> float:
+    return round(_int_value(value) / 1_000_000, 2)
+
+
+def language_constant(language: str | None) -> str:
+    marker = str(language or "").strip().casefold()
+    return LANGUAGE_CONSTANTS.get(marker) or LANGUAGE_CONSTANTS.get(marker[:2]) or LANGUAGE_CONSTANTS["en"]
+
+
+def geo_target_constants(country_or_location: str | None) -> list[str]:
+    text = str(country_or_location or "").strip()
+    if not text:
+        return []
+    if text.startswith("geoTargetConstants/"):
+        return [text]
+    if text.isdigit():
+        return [f"geoTargetConstants/{text}"]
+    lowered = text.casefold()
+    matches = []
+    for key, resource_name in GEO_TARGET_CONSTANTS.items():
+        if key in lowered:
+            matches.append(resource_name)
+    return list(dict.fromkeys(matches))
+
+
+def normalize_keyword_idea(raw: dict[str, Any], source: str = "google_suggested") -> dict[str, Any]:
+    metrics = raw.get("keywordIdeaMetrics") or raw.get("keyword_idea_metrics") or {}
+    monthly = metrics.get("monthlySearchVolumes") or metrics.get("monthly_search_volumes") or []
+    return {
+        "keyword": str(raw.get("text") or raw.get("keyword") or "").strip(),
+        "source": source,
+        "average_monthly_searches": _int_value(metrics.get("avgMonthlySearches") or metrics.get("avg_monthly_searches")),
+        "competition": str(metrics.get("competition") or "UNKNOWN").upper(),
+        "competition_index": _int_value(metrics.get("competitionIndex") or metrics.get("competition_index")),
+        "low_top_of_page_bid": _micros_to_unit(metrics.get("lowTopOfPageBidMicros") or metrics.get("low_top_of_page_bid_micros")),
+        "high_top_of_page_bid": _micros_to_unit(metrics.get("highTopOfPageBidMicros") or metrics.get("high_top_of_page_bid_micros")),
+        "monthly_search_volumes": [
+            {
+                "year": _int_value(item.get("year")),
+                "month": str(item.get("month") or "").upper(),
+                "monthly_searches": _int_value(item.get("monthlySearches") or item.get("monthly_searches")),
+            }
+            for item in monthly
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def build_keyword_planner_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    analyzed = [item for item in items if item.get("keyword")]
+    count = len(analyzed)
+    total_searches = sum(_int_value(item.get("average_monthly_searches")) for item in analyzed)
+    average_searches = round(total_searches / count) if count else 0
+    competition_values = [
+        _int_value(item.get("competition_index"))
+        for item in analyzed
+        if item.get("competition_index") is not None
+    ]
+    average_competition = round(sum(competition_values) / len(competition_values)) if competition_values else 0
+    competition_level = "HIGH" if average_competition >= 67 else "MEDIUM" if average_competition >= 34 else "LOW" if count else "UNKNOWN"
+    demand_level = "HIGH" if average_searches >= 1000 else "MEDIUM" if average_searches >= 100 else "LOW" if count else "UNKNOWN"
+    pressure_score = round((min(100, average_competition) + min(100, average_searches / 20)) / 2) if count else 0
+    return {
+        "analyzed_keywords": count,
+        "average_monthly_searches": average_searches,
+        "total_monthly_searches": total_searches,
+        "average_competition_index": average_competition,
+        "competition_level": competition_level,
+        "demand_level": demand_level,
+        "market_pressure_score": pressure_score,
+    }
+
+
+def _keyword_idea_request(keywords: list[str], language: str | None, location: str | None, page_url: str | None = None) -> dict[str, Any]:
+    unique_keywords = []
+    seen = set()
+    for keyword in keywords:
+        text = str(keyword or "").strip()
+        marker = text.casefold()
+        if not text or marker in seen:
+            continue
+        seen.add(marker)
+        unique_keywords.append(text)
+        if len(unique_keywords) >= 20:
+            break
+    body: dict[str, Any] = {
+        "language": language_constant(language),
+        "geoTargetConstants": geo_target_constants(location),
+        "includeAdultKeywords": False,
+        "keywordPlanNetwork": "GOOGLE_SEARCH",
+        "pageSize": 50,
+    }
+    url = str(page_url or "").strip()
+    if unique_keywords and url:
+        body["keywordAndUrlSeed"] = {"keywords": unique_keywords, "url": url}
+    elif unique_keywords:
+        body["keywordSeed"] = {"keywords": unique_keywords}
+    elif url:
+        body["urlSeed"] = {"url": url}
+    else:
+        raise ValueError("At least one keyword or website URL is required for Keyword Planner.")
+    return body
+
+
+async def fetch_keyword_planner_ideas(
+    customer_id: str,
+    refresh_token: str,
+    keywords: list[str],
+    language: str | None,
+    location: str | None,
+    page_url: str | None = None,
+) -> dict[str, Any]:
+    if not customer_id or not refresh_token:
+        return {"keyword_metrics": [], "suggested_keywords": [], "summary": build_keyword_planner_summary([]), "warning": "Google Ads account is not connected."}
+    try:
+        access_token = await refresh_google_ads_access_token(refresh_token)
+        body = _keyword_idea_request(keywords, language, location, page_url)
+        async with httpx.AsyncClient(timeout=45) as client:
+            resp = await client.post(
+                f"{GOOGLE_ADS_API}/customers/{_clean_customer_id(customer_id)}:generateKeywordIdeas",
+                headers=_headers(access_token),
+                json=body,
+            )
+        if resp.status_code >= 400:
+            try:
+                detail = resp.json().get("error", {}).get("message", "Google Ads Keyword Planner request failed")
+            except Exception:
+                detail = resp.text or "Google Ads Keyword Planner request failed"
+            raise RuntimeError(detail)
+        payload = resp.json()
+        original_markers = {str(keyword or "").strip().casefold() for keyword in keywords if str(keyword or "").strip()}
+        metrics = []
+        suggestions = []
+        for raw in payload.get("results") or []:
+            if not isinstance(raw, dict):
+                continue
+            source = "existing_keyword" if str(raw.get("text") or "").strip().casefold() in original_markers else "google_suggested"
+            item = normalize_keyword_idea(raw, source=source)
+            if not item["keyword"]:
+                continue
+            metrics.append(item)
+            if source == "google_suggested":
+                suggestions.append(item)
+        summary = build_keyword_planner_summary(metrics)
+        summary["suggested_keywords"] = len(suggestions)
+        return {
+            "keyword_metrics": metrics,
+            "suggested_keywords": suggestions[:30],
+            "summary": summary,
+            "request": {
+                "language": body.get("language"),
+                "geo_target_constants": body.get("geoTargetConstants") or [],
+                "keyword_count": len(body.get("keywordSeed", {}).get("keywords") or body.get("keywordAndUrlSeed", {}).get("keywords") or []),
+            },
+        }
+    except Exception as e:
+        return {"keyword_metrics": [], "suggested_keywords": [], "summary": build_keyword_planner_summary([]), "warning": str(e)}
 
 
 def _redirect_uri() -> str:

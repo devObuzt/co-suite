@@ -21,6 +21,7 @@ from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
 from ..models.user import User
 from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job
+from ..services.google_ads import fetch_keyword_planner_ideas
 from ..services.marketing_plan_generator import (
     infer_plan_language,
     normalize_marketing_action_plan,
@@ -230,6 +231,36 @@ def _audience_keyword_languages(suite: Suite, fallback_language: str) -> list[st
         4,
     )
     return candidates or [fallback_language]
+
+
+def _suite_location(suite: Suite) -> str:
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    for key in ("audience_country", "country", "location", "audience_location", "target_country"):
+        value = str(brand.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _suite_website_url(suite: Suite) -> str:
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    for key in ("website", "url", "website_url", "site_url"):
+        value = str(brand.get(key) or "").strip()
+        if value.startswith(("http://", "https://")):
+            return value
+    return ""
+
+
+def _marketing_keywords_for_planner(suite: Suite, limit: int = 20) -> list[str]:
+    intelligence = _intelligence(suite)
+    keywords = [
+        str(item.get("text") or item.get("keyword") or "").strip()
+        for item in intelligence.get("keywords") or []
+        if isinstance(item, dict)
+    ]
+    if keywords:
+        return _unique_strings(keywords, limit)
+    return [item["text"] for item in _keyword_candidates(suite, infer_plan_language(suite))[:limit]]
 
 
 def _brand_keyword_markers(brand_name: str) -> set[str]:
@@ -619,6 +650,64 @@ def _save_demand_supply_scratch(suite: Suite, language: str | None = None) -> di
     return _save_marketing_intelligence(suite, intelligence)
 
 
+async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None = None) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    existing = _strategy(suite).get("marketing_intelligence")
+    base = existing if isinstance(existing, dict) else {"phase": "competitors"}
+    base = normalize_marketing_intelligence(base, suite_research_payload(suite), output_language)
+    google_ads = (suite.connections or {}).get("google_ads") if isinstance(suite.connections, dict) else {}
+    planner = await fetch_keyword_planner_ideas(
+        str((google_ads or {}).get("customer_id") or ""),
+        str((google_ads or {}).get("refresh_token") or ""),
+        _marketing_keywords_for_planner(suite),
+        output_language,
+        _suite_location(suite),
+        _suite_website_url(suite),
+    )
+    summary = planner.get("summary") or {}
+    warnings = list(base.get("warnings") or [])
+    if planner.get("warning"):
+        warnings.append(str(planner["warning"]))
+    demand_title = (
+        f"متوسط البحث الشهري: {summary.get('average_monthly_searches', 0)}"
+        if str(output_language).startswith("ar")
+        else f"Average monthly searches: {summary.get('average_monthly_searches', 0)}"
+    )
+    competition_title = (
+        f"المنافسة: {summary.get('competition_level', 'UNKNOWN')}"
+        if str(output_language).startswith("ar")
+        else f"Competition: {summary.get('competition_level', 'UNKNOWN')}"
+    )
+    pressure_title = (
+        f"ضغط السوق: {summary.get('market_pressure_score', 0)}/100"
+        if str(output_language).startswith("ar")
+        else f"Market pressure: {summary.get('market_pressure_score', 0)}/100"
+    )
+    intelligence = normalize_marketing_intelligence(
+        {
+            **base,
+            "phase": "demand_supply",
+            "status": "demand_supply_ready",
+            "competitors": base.get("competitors") or [],
+            "demand_signals": [{"id": "google-ads-demand", "title": demand_title, "source": "google_ads"}],
+            "supply_signals": [{"id": "google-ads-competition", "title": competition_title, "source": "google_ads"}],
+            "opportunities": [{"id": "google-ads-pressure", "title": pressure_title, "source": "google_ads"}],
+            "warnings": warnings,
+        },
+        suite_research_payload(suite),
+        output_language,
+    )
+    intelligence["demand_supply"] = {
+        "provider": "google_ads_keyword_planner",
+        "summary": summary,
+        "keyword_metrics": planner.get("keyword_metrics") or [],
+        "suggested_keywords": planner.get("suggested_keywords") or [],
+        "request": planner.get("request") or {},
+        "warning": planner.get("warning"),
+    }
+    return _save_marketing_intelligence(suite, intelligence)
+
+
 def _marketing_plan_response(
     suite: Suite,
     suite_id: str,
@@ -899,7 +988,7 @@ async def generate_marketing_demand_supply(
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or GenerateMarketingPlanRequest()
-    _save_demand_supply_scratch(suite, request_data.language)
+    await _save_demand_supply_from_google_ads(suite, request_data.language)
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
