@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from api.models.suite import Suite
 from api.routers import marketing_plans
 
@@ -75,7 +79,7 @@ def test_keyword_candidates_skip_existing_terms():
     assert all(1 <= len(item["text"].split()) <= 3 for item in first + more)
 
 
-def test_keyword_candidates_use_name_category_and_services():
+def test_keyword_candidates_use_category_and_services_not_brand_name():
     suite = Suite(
         id="suite-1",
         owner_id="user-1",
@@ -87,9 +91,42 @@ def test_keyword_candidates_use_name_category_and_services():
 
     keywords = [item["text"].casefold() for item in marketing_plans._keyword_candidates(suite, "en")]
 
-    assert "one clinic" in keywords
+    assert "one clinic" not in keywords
+    assert "best one" not in keywords
     assert "dental clinic" in keywords
     assert "teeth whitening" in keywords
+
+
+@pytest.mark.asyncio
+async def test_generate_keywords_filters_brand_name_from_ai_response(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "industry": "Academy", "services": ["Courses"]},
+        strategy={},
+    )
+
+    async def fake_call_text_ai(**_kwargs):
+        return json.dumps(
+            {
+                "keywords": [
+                    {"text": "Smart Line Academy", "intent": "core"},
+                    {"text": "أفضل Smart Line", "intent": "commercial"},
+                    {"text": "دورات مهنية", "intent": "core"},
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(marketing_plans, "call_text_ai", fake_call_text_ai)
+
+    keywords = [item["text"].casefold() for item in await marketing_plans._generate_keywords(suite, "ar")]
+
+    assert "smart line academy" not in keywords
+    assert "أفضل smart line".casefold() not in keywords
+    assert "دورات مهنية" in keywords
 
 
 def test_keyword_phase_does_not_auto_generate_competitors():

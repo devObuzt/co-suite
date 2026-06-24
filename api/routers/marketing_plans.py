@@ -4,6 +4,7 @@ from __future__ import annotations
 import secrets
 from datetime import datetime, timezone
 import json
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -229,22 +230,42 @@ def _audience_keyword_languages(suite: Suite, fallback_language: str) -> list[st
     return candidates or [fallback_language]
 
 
+def _brand_keyword_markers(brand_name: str) -> set[str]:
+    normalized = " ".join(str(brand_name or "").casefold().split())
+    if not normalized:
+        return set()
+    tokens = [token for token in re.split(r"\s+", normalized) if len(token) > 1]
+    markers = {normalized}
+    if len(tokens) >= 2:
+        markers.add(" ".join(tokens[:2]))
+    elif tokens:
+        markers.add(tokens[0])
+    return {marker for marker in markers if marker}
+
+
+def _mentions_brand_keyword(text: str, brand_name: str) -> bool:
+    normalized = " ".join(str(text or "").casefold().split())
+    return bool(normalized and any(marker in normalized for marker in _brand_keyword_markers(brand_name)))
+
+
 def _keyword_candidates(suite: Suite, language: str, existing: list[str] | None = None, more: bool = False) -> list[dict[str, Any]]:
     brand = suite.brand if isinstance(suite.brand, dict) else {}
     services = _suite_services(suite)
     category = str(brand.get("industry") or brand.get("category") or brand.get("niche") or suite.name or "").strip()
     brand_name = str(brand.get("name") or suite.name or "").strip()
-    base_terms = _unique_strings([brand_name, category, *services], 80)
+    base_terms = _unique_strings([category, *services], 80)
+    if not base_terms:
+        base_terms = ["business services"]
     existing_markers = {item.casefold() for item in _unique_strings(existing or [])}
     languages = " ".join(_audience_keyword_languages(suite, language)).lower()
     wants_ar = str(language).startswith("ar") or "arabic" in languages or "العربية" in languages or "ar" in languages.split()
     wants_he = str(language).startswith("he") or "hebrew" in languages or "עברית" in languages or "he" in languages.split()
     if wants_ar:
-        modifiers = ["", "أفضل", "أسعار", "عروض", "حجز", "خدمات"]
+        modifiers = ["", "أسعار", "عروض", "حجز", "خدمات"]
     elif wants_he:
-        modifiers = ["", "מחירים", "מבצעים", "הזמנה", "שירותי", "מומלץ"]
+        modifiers = ["", "מחירים", "מבצעים", "הזמנה", "שירותי"]
     else:
-        modifiers = ["", "prices", "offers", "booking", "services", "best"]
+        modifiers = ["", "prices", "offers", "booking", "services"]
     if more:
         if wants_ar:
             modifiers = ["مقارنة", "احترافي", "محلي", "قريب", "استشارة", "مختص"]
@@ -267,7 +288,7 @@ def _keyword_candidates(suite: Suite, language: str, existing: list[str] | None 
             if len(words) > 3:
                 text = " ".join(words[:3])
             marker = text.casefold()
-            if not text or marker in existing_markers:
+            if not text or marker in existing_markers or _mentions_brand_keyword(text, brand_name):
                 continue
             keywords.append({
                 "id": f"kw-{len(keywords) + 1}",
@@ -301,7 +322,7 @@ async def _generate_keywords(suite: Suite, language: str, existing: list[str] | 
             },
             "existing_keywords": existing or [],
             "mode": "generate_more" if more else "generate",
-            "instructions": "Return JSON only: {\"keywords\":[{\"text\":\"...\",\"intent\":\"core|commercial|local|problem|comparison\",\"confidence\":\"medium\"}]}. Write every keyword in the target audience's native country language and selected audience language. Each keyword must be a short business-search term of 1 to 3 words. It should be useful as part of a search for a business like this Suite. Depend on the Suite name, business category, and services/products. Do not return English keywords unless English is one of the audience languages.",
+            "instructions": "Return JSON only: {\"keywords\":[{\"text\":\"...\",\"intent\":\"core|commercial|local|problem|comparison\",\"confidence\":\"medium\"}]}. Write every keyword in the target audience's native country language and selected audience language. Each keyword must be a short generic business-search term of 1 to 3 words. It should be useful as part of a search for a business like this Suite. Use the Suite name only as context to understand the business; do not return the brand/business name, partial brand-name keywords, or modifier phrases combined with the business name. Base keywords on the business category, services, products, audience needs, and location. Do not return English keywords unless English is one of the audience languages.",
         }
         raw = await call_text_ai(
             max_tokens=1200,
@@ -324,7 +345,7 @@ async def _generate_keywords(suite: Suite, language: str, existing: list[str] | 
                 confidence = str(item.get("confidence") or "medium").strip()
             else:
                 continue
-            if not text or text.casefold() in existing_markers:
+            if not text or text.casefold() in existing_markers or _mentions_brand_keyword(text, str(brand.get("name") or suite.name or "")):
                 continue
             generated.append({
                 "id": f"kw-{len(generated) + 1}",
