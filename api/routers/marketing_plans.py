@@ -580,6 +580,76 @@ def _serpapi_competitors_from_payload(payload: dict[str, Any], result_type: str,
     return items
 
 
+def _fallback_competitor_for_source(
+    suite: Suite,
+    language: str,
+    source: str,
+    existing_markers: set[str],
+    offset: int = 0,
+) -> dict[str, Any] | None:
+    spec = next((item for item in SERPAPI_SOURCE_SPECS if item["result_type"] == source), None)
+    if not spec:
+        return None
+    term = (_competitor_search_terms(suite, language, offset) or [suite.name])[0]
+    encoded = term.replace(" ", "+")
+    if source == "maps":
+        url = f"https://www.google.com/maps/search/{encoded}"
+    elif spec.get("site"):
+        url = f"https://www.google.com/search?q={spec['site'].replace(':', '%3A')}+{encoded}"
+    else:
+        url = f"https://www.google.com/search?q={encoded}"
+    marker = url or f"{source}:{term}".casefold()
+    if marker in existing_markers:
+        return None
+    existing_markers.add(marker)
+    title_prefix = "مصدر بحث" if str(language).startswith("ar") else "Source lead"
+    snippet = (
+        f"لم تصل نتيجة مباشرة من {spec['label']} لهذا المصدر. استخدم هذا الرابط كبداية بحث وتحقق يدويًا من المنافسين."
+        if str(language).startswith("ar")
+        else f"No direct {spec['label']} result came back for this source. Use this as a starter search lead and verify competitors manually."
+    )
+    return {
+        "id": f"fallback-{source}-{_stable_slug(term, str(offset + 1))}",
+        "name": f"{title_prefix}: {term}",
+        "title": f"{title_prefix}: {term}",
+        "platform": spec["platform"],
+        "result_type": source,
+        "url": url,
+        "reason": snippet,
+        "offer": spec["label"],
+        "evidence": term,
+        "snippet": snippet,
+        "opportunity": "",
+        "confidence": "starter",
+        "classification_tags": [],
+        "research_lead": True,
+    }
+
+
+def _ensure_competitor_source_coverage(
+    suite: Suite,
+    language: str,
+    competitors: list[dict[str, Any]],
+    existing_urls: list[str] | None = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    covered = {str(item.get("result_type") or item.get("platform") or "").lower() for item in competitors if isinstance(item, dict)}
+    markers = {
+        str(item.get("url") or item.get("title") or "").casefold()
+        for item in competitors
+        if isinstance(item, dict)
+    }
+    markers.update(str(value or "").casefold() for value in (existing_urls or []) if value)
+    filled = list(competitors)
+    for index, source in enumerate(["google_organic", "maps", "instagram", "facebook", "tiktok"]):
+        if source in covered:
+            continue
+        fallback = _fallback_competitor_for_source(suite, language, source, markers, offset + index)
+        if fallback:
+            filled.append(fallback)
+    return filled
+
+
 async def _fetch_serpapi_source(
     client: httpx.AsyncClient,
     suite: Suite,
@@ -658,21 +728,22 @@ async def _save_competitor_scratch_from_search(suite: Suite, language: str | Non
     existing = _strategy(suite).get("marketing_intelligence")
     existing_payload = existing if isinstance(existing, dict) else {}
     intelligence = normalize_marketing_intelligence(
-        {**existing_payload, "phase": "competitors"},
+        {**existing_payload, "phase": "competitors", "warnings": []},
         suite_research_payload(suite),
         output_language,
     )
     competitors, serpapi_warnings = await _serpapi_competitors(suite, output_language)
+    competitors = _ensure_competitor_source_coverage(suite, output_language, competitors)
     if competitors:
         intelligence["competitors"] = competitors
-        if serpapi_warnings:
-            intelligence["warnings"] = [*list(intelligence.get("warnings") or []), *serpapi_warnings[:5]]
+        intelligence["warnings"] = []
+        intelligence["source_warnings"] = serpapi_warnings[:5]
     else:
         intelligence["competitors"] = []
         intelligence["warnings"] = [
             "SerpAPI did not return usable direct competitor results.",
-            *serpapi_warnings[:5],
         ]
+        intelligence["source_warnings"] = serpapi_warnings[:5]
     intelligence["status"] = "competitors_ready"
     return _save_marketing_intelligence(suite, intelligence)
 
@@ -696,13 +767,15 @@ async def _append_competitor_scratch_from_search(suite: Suite, language: str | N
     current = list(base.get("competitors") or [])
     existing_urls = [str(item.get("url") or item.get("title") or "") for item in current if isinstance(item, dict)]
     more, serpapi_warnings = await _serpapi_competitors(suite, output_language, existing_urls, offset=len(current))
+    more = _ensure_competitor_source_coverage(suite, output_language, more, existing_urls, offset=len(current))
     if not more:
         more = []
         base["warnings"] = [
-            *list(base.get("warnings") or []),
             "SerpAPI did not return additional direct competitor results.",
-            *serpapi_warnings[:5],
         ]
+    else:
+        base["warnings"] = []
+    base["source_warnings"] = serpapi_warnings[:5]
     current.extend(more)
     base["competitors"] = current[:60]
     base["status"] = "competitors_ready"
@@ -949,7 +1022,7 @@ async def generate_marketing_competitors(
         provider="serpapi",
         operation="marketing_competitors.generate",
         endpoint="search.json",
-        status="partial" if intelligence.get("warnings") else "success",
+        status="partial" if intelligence.get("source_warnings") or intelligence.get("warnings") else "success",
         actual_cost_usd=estimate_serpapi_cost_usd(len(SERPAPI_SOURCE_SPECS)),
         suite_id=suite.id,
         user_id=current_user.id,
@@ -957,7 +1030,7 @@ async def generate_marketing_competitors(
             "search_count": len(SERPAPI_SOURCE_SPECS),
             "cost_basis": "configured_per_search" if settings.serpapi_cost_per_search_usd else "missing_serpapi_unit_cost",
             "competitors": len(intelligence.get("competitors") or []),
-            "warnings": list(intelligence.get("warnings") or [])[:5],
+            "warnings": list(intelligence.get("source_warnings") or intelligence.get("warnings") or [])[:5],
         },
     )
     await record_audit_log(
@@ -989,7 +1062,7 @@ async def generate_more_marketing_competitors(
         provider="serpapi",
         operation="marketing_competitors.generate_more",
         endpoint="search.json",
-        status="partial" if intelligence.get("warnings") else "success",
+        status="partial" if intelligence.get("source_warnings") or intelligence.get("warnings") else "success",
         actual_cost_usd=estimate_serpapi_cost_usd(len(SERPAPI_SOURCE_SPECS)),
         suite_id=suite.id,
         user_id=current_user.id,
@@ -997,7 +1070,7 @@ async def generate_more_marketing_competitors(
             "search_count": len(SERPAPI_SOURCE_SPECS),
             "cost_basis": "configured_per_search" if settings.serpapi_cost_per_search_usd else "missing_serpapi_unit_cost",
             "competitors": len(intelligence.get("competitors") or []),
-            "warnings": list(intelligence.get("warnings") or [])[-5:],
+            "warnings": list(intelligence.get("source_warnings") or intelligence.get("warnings") or [])[-5:],
         },
     )
     await record_audit_log(

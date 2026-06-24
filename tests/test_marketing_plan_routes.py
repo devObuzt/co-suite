@@ -331,6 +331,57 @@ async def test_competitor_generation_preserves_existing_keywords(monkeypatch):
     assert intelligence["competitors"][0]["url"] == "https://competitor.example"
 
 
+@pytest.mark.asyncio
+async def test_competitor_generation_clears_old_warnings_and_fills_missing_sources(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "industry": "Trading academy", "services": ["Trading courses"]},
+        strategy={
+            "marketing_intelligence": {
+                "phase": "competitors",
+                "status": "competitors_ready",
+                "keywords": [{"id": "kw-1", "text": "دورات تداول"}],
+                "warnings": ["old SerpAPI failure should not stay visible"],
+                "competitors": [],
+                "demand_signals": [],
+                "supply_signals": [],
+                "opportunities": [],
+                "source_links": [],
+            }
+        },
+    )
+
+    async def fake_serpapi_competitors(*_args, **_kwargs):
+        return (
+            [
+                {
+                    "id": "serpapi-google-a",
+                    "name": "Competitor A",
+                    "title": "Competitor A",
+                    "platform": "google",
+                    "result_type": "google_organic",
+                    "url": "https://competitor.example",
+                    "snippet": "Direct competitor",
+                }
+            ],
+            ["SerpAPI Google Maps failed: 400"],
+        )
+
+    monkeypatch.setattr(marketing_plans, "_serpapi_competitors", fake_serpapi_competitors)
+
+    intelligence = await marketing_plans._save_competitor_scratch_from_search(suite, "ar")
+    sources = {item["result_type"] for item in intelligence["competitors"]}
+
+    assert intelligence["warnings"] == []
+    assert "old SerpAPI failure should not stay visible" not in str(intelligence)
+    assert intelligence["source_warnings"] == ["SerpAPI Google Maps failed: 400"]
+    assert {"google_organic", "maps", "instagram", "facebook", "tiktok"}.issubset(sources)
+    assert [item["text"] for item in intelligence["keywords"]] == ["دورات تداول"]
+
+
 def test_normalized_competitor_preserves_classification_tags():
     suite = Suite(
         id="suite-1",
