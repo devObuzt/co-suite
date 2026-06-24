@@ -23,6 +23,7 @@ from ..models.user import User
 from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job
 from ..services.google_ads import fetch_keyword_planner_ideas
 from ..services.admin_audit import record_audit_log, record_provider_usage
+from ..services.provider_pricing import estimate_google_ads_keyword_planner_cost_usd, estimate_serpapi_cost_usd
 from ..services.marketing_plan_generator import (
     infer_plan_language,
     normalize_marketing_action_plan,
@@ -949,9 +950,12 @@ async def generate_marketing_competitors(
         operation="marketing_competitors.generate",
         endpoint="search.json",
         status="partial" if intelligence.get("warnings") else "success",
+        actual_cost_usd=estimate_serpapi_cost_usd(len(SERPAPI_SOURCE_SPECS)),
         suite_id=suite.id,
         user_id=current_user.id,
         metadata={
+            "search_count": len(SERPAPI_SOURCE_SPECS),
+            "cost_basis": "configured_per_search" if settings.serpapi_cost_per_search_usd else "missing_serpapi_unit_cost",
             "competitors": len(intelligence.get("competitors") or []),
             "warnings": list(intelligence.get("warnings") or [])[:5],
         },
@@ -986,9 +990,12 @@ async def generate_more_marketing_competitors(
         operation="marketing_competitors.generate_more",
         endpoint="search.json",
         status="partial" if intelligence.get("warnings") else "success",
+        actual_cost_usd=estimate_serpapi_cost_usd(len(SERPAPI_SOURCE_SPECS)),
         suite_id=suite.id,
         user_id=current_user.id,
         metadata={
+            "search_count": len(SERPAPI_SOURCE_SPECS),
+            "cost_basis": "configured_per_search" if settings.serpapi_cost_per_search_usd else "missing_serpapi_unit_cost",
             "competitors": len(intelligence.get("competitors") or []),
             "warnings": list(intelligence.get("warnings") or [])[-5:],
         },
@@ -1042,7 +1049,7 @@ async def update_marketing_competitor(
         status="success",
         suite_id=suite.id,
         user_id=current_user.id,
-        metadata={"keywords": len(keywords), "language": output_language},
+        metadata={"keywords": len(keywords), "language": output_language, "cost_basis": "missing_provider_usage"},
     )
     await record_audit_log(
         db,
@@ -1088,7 +1095,7 @@ async def generate_marketing_keywords(
         status="success",
         suite_id=suite.id,
         user_id=current_user.id,
-        metadata={"keywords": len(current), "language": output_language},
+        metadata={"keywords": len(current), "language": output_language, "cost_basis": "missing_provider_usage"},
     )
     await record_audit_log(
         db,
@@ -1167,9 +1174,12 @@ async def generate_marketing_demand_supply(
         model="Google Ads Keyword Planner",
         endpoint="google_ads.keyword_plan_idea_service",
         status="warning" if demand_supply.get("warning") else "success",
+        actual_cost_usd=estimate_google_ads_keyword_planner_cost_usd(1),
         suite_id=suite.id,
         user_id=current_user.id,
         metadata={
+            "request_count": 1,
+            "cost_basis": "configured_per_request" if settings.google_ads_keyword_planner_cost_usd else "no_direct_api_cost_configured",
             "analyzed_keywords": summary.get("analyzed_keywords"),
             "suggested_keywords": summary.get("suggested_keywords"),
             "warning": demand_supply.get("warning"),

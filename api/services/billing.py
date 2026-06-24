@@ -18,6 +18,8 @@ from ..models.billing import (
     UsageEvent,
 )
 from ..models.suite import Suite
+from .admin_audit import record_provider_usage
+from .provider_pricing import infer_provider_usage_from_billing_event
 
 # ── Pricing ───────────────────────────────────────────────────────────────────
 
@@ -456,6 +458,24 @@ async def record_usage(
         event_data=metadata,
     )
     db.add(event)
+    provider_payload = infer_provider_usage_from_billing_event(
+        event_type,
+        actual_cost_usd=actual_cost_usd,
+        metadata=metadata,
+    )
+    await record_provider_usage(
+        db,
+        provider=provider_payload["provider"],
+        model=provider_payload.get("model"),
+        operation=provider_payload["operation"],
+        status="success",
+        input_tokens=provider_payload.get("input_tokens") or 0,
+        output_tokens=provider_payload.get("output_tokens") or 0,
+        total_tokens=provider_payload.get("total_tokens") or 0,
+        actual_cost_usd=provider_payload["actual_cost_usd"],
+        suite_id=suite_id,
+        metadata=provider_payload["metadata"],
+    )
 
     sub.credit_balance = round(sub.credit_balance - billed, 4)
 

@@ -22,6 +22,7 @@ from ..services.admin_audit import (
     require_super_admin,
     serialize_user_public,
 )
+from ..services.provider_pricing import infer_provider_usage_from_billing_event
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -409,6 +410,11 @@ def _provider_usage_out(event: ProviderUsageEvent) -> dict[str, Any]:
 
 
 def _billing_usage_out(event: UsageEvent, suite_name: str | None = None, owner_email: str | None = None) -> dict[str, Any]:
+    provider = infer_provider_usage_from_billing_event(
+        event.event_type,
+        actual_cost_usd=event.actual_cost_usd,
+        metadata=event.event_data,
+    )
     return {
         "id": event.id,
         "suite_id": event.suite_id,
@@ -426,5 +432,9 @@ def _billing_usage_out(event: UsageEvent, suite_name: str | None = None, owner_e
         "external_ref": event.external_ref,
         "idempotency_key": event.idempotency_key,
         "event_data": event.event_data or {},
+        "provider": provider["provider"],
+        "model": provider.get("model"),
+        "operation": provider["operation"],
+        "cost_basis": provider["metadata"].get("cost_basis"),
         "created_at": event.created_at,
     }
