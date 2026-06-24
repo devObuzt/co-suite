@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     google_ads_client_id: str = ""
     google_ads_client_secret: str = ""
     google_ads_login_customer_id: str = ""
+    serpapi_api_key: str = ""
 
     # Cloudflare R2
     r2_account_id: str = ""

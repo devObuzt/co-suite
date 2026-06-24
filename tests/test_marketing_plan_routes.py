@@ -167,6 +167,30 @@ def test_append_competitor_scratch_adds_more_mock_results():
     assert any(item["result_type"] == "maps" for item in second["competitors"])
 
 
+def test_serpapi_results_are_grouped_by_source():
+    organic_payload = {
+        "organic_results": [
+            {"title": "Clinic A", "link": "https://a.example", "snippet": "Dental clinic"},
+            {"title": "Clinic B", "link": "https://b.example", "snippet": "Dental services"},
+        ]
+    }
+    maps_payload = {
+        "local_results": {
+            "places": [
+                {"title": "Clinic Map", "website": "https://maps.example", "address": "Main street"},
+            ]
+        }
+    }
+
+    organic = marketing_plans._serpapi_competitors_from_payload(organic_payload, "google_organic", 5)
+    maps = marketing_plans._serpapi_competitors_from_payload(maps_payload, "maps", 5)
+
+    assert [item["result_type"] for item in organic] == ["google_organic", "google_organic"]
+    assert organic[0]["url"] == "https://a.example"
+    assert maps[0]["result_type"] == "maps"
+    assert maps[0]["url"] == "https://maps.example"
+
+
 def test_normalized_competitor_preserves_classification_tags():
     suite = Suite(
         id="suite-1",

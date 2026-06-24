@@ -7,11 +7,13 @@ import json
 import re
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.config import settings
 from ..core.database import get_db
 from ..core.llm_client import call_text_ai
 from ..core.security import get_current_user, hash_password, verify_password
@@ -248,6 +250,11 @@ def _mentions_brand_keyword(text: str, brand_name: str) -> bool:
     return bool(normalized and any(marker in normalized for marker in _brand_keyword_markers(brand_name)))
 
 
+def _stable_slug(value: str, fallback: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "").lower()).strip("-")
+    return text[:48] or fallback
+
+
 def _keyword_candidates(suite: Suite, language: str, existing: list[str] | None = None, more: bool = False) -> list[dict[str, Any]]:
     brand = suite.brand if isinstance(suite.brand, dict) else {}
     services = _suite_services(suite)
@@ -411,10 +418,158 @@ def _mock_competitors(suite: Suite, language: str, existing_urls: list[str] | No
     return cards
 
 
+SERPAPI_SOURCE_SPECS = (
+    {"result_type": "google_organic", "platform": "google", "engine": "google", "site": "", "label": "Google organic"},
+    {"result_type": "maps", "platform": "maps", "engine": "google_maps", "site": "", "label": "Google Maps"},
+    {"result_type": "instagram", "platform": "instagram", "engine": "google", "site": "site:instagram.com", "label": "Instagram"},
+    {"result_type": "facebook", "platform": "facebook", "engine": "google", "site": "site:facebook.com", "label": "Facebook"},
+    {"result_type": "tiktok", "platform": "tiktok", "engine": "google", "site": "site:tiktok.com", "label": "TikTok"},
+)
+
+
+def _competitor_search_terms(suite: Suite, language: str, offset: int = 0) -> list[str]:
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    category = str(brand.get("industry") or brand.get("category") or brand.get("niche") or "").strip()
+    location = str(brand.get("location") or brand.get("audience_location") or "").strip()
+    services = _suite_services(suite)
+    seeds = _unique_strings([category, *services], 10) or [suite.name]
+    rotated = seeds[offset % len(seeds):] + seeds[:offset % len(seeds)]
+    terms = []
+    for seed in rotated[:4]:
+        term = " ".join(part for part in [seed, location] if part).strip()
+        if term:
+            terms.append(term)
+    return terms or [suite.name]
+
+
+def _serpapi_competitors_from_payload(payload: dict[str, Any], result_type: str, limit: int = 5) -> list[dict[str, Any]]:
+    if result_type == "maps":
+        local_results = payload.get("local_results")
+        if isinstance(local_results, dict):
+            raw_items = local_results.get("places") or local_results.get("results") or []
+        else:
+            raw_items = local_results if isinstance(local_results, list) else []
+    elif result_type == "google_sponsored":
+        raw_items = payload.get("ads_results") or []
+    else:
+        raw_items = payload.get("organic_results") or []
+    if not isinstance(raw_items, list):
+        return []
+
+    items: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_items, start=1):
+        if not isinstance(raw, dict):
+            continue
+        title = str(raw.get("title") or raw.get("name") or "").strip()
+        url = str(raw.get("link") or raw.get("website") or raw.get("url") or raw.get("place_id_search") or "").strip()
+        snippet = str(raw.get("snippet") or raw.get("description") or raw.get("address") or raw.get("type") or "").strip()
+        if not title and not url:
+            continue
+        item = {
+            "id": f"serpapi-{result_type}-{_stable_slug(title or url, str(index))}",
+            "name": title or url,
+            "title": title or url,
+            "platform": "google" if result_type.startswith("google") else result_type,
+            "result_type": result_type,
+            "url": url,
+            "reason": snippet,
+            "offer": str(raw.get("displayed_link") or raw.get("type") or "").strip(),
+            "evidence": snippet,
+            "snippet": snippet,
+            "opportunity": "",
+            "confidence": "serpapi",
+            "classification_tags": [],
+            "research_lead": False,
+        }
+        if result_type == "maps":
+            item["platform"] = "maps"
+            if not item["url"] and raw.get("gps_coordinates"):
+                coordinates = raw.get("gps_coordinates") or {}
+                lat = coordinates.get("latitude")
+                lon = coordinates.get("longitude")
+                if lat and lon:
+                    item["url"] = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+        items.append(item)
+        if len(items) >= limit:
+            break
+    return items
+
+
+async def _fetch_serpapi_source(
+    client: httpx.AsyncClient,
+    suite: Suite,
+    language: str,
+    spec: dict[str, str],
+    existing_urls: set[str],
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    api_key = settings.serpapi_api_key.strip()
+    if not api_key:
+        return []
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    terms = _competitor_search_terms(suite, language, offset)
+    query = terms[0]
+    if spec.get("site"):
+        query = f"{spec['site']} {query}"
+    params: dict[str, Any] = {
+        "api_key": api_key,
+        "engine": spec["engine"],
+        "q": query,
+        "hl": "ar" if str(language).startswith("ar") else "he" if str(language).startswith("he") else "en",
+        "num": 10,
+    }
+    location = str(brand.get("location") or brand.get("audience_location") or "").strip()
+    if location:
+        params["location"] = location
+    response = await client.get("https://serpapi.com/search.json", params=params)
+    response.raise_for_status()
+    payload = response.json()
+    candidates = _serpapi_competitors_from_payload(payload, str(spec["result_type"]), 5)
+    unique: list[dict[str, Any]] = []
+    for item in candidates:
+        url = str(item.get("url") or "")
+        marker = url or str(item.get("title") or "").casefold()
+        if marker in existing_urls:
+            continue
+        existing_urls.add(marker)
+        unique.append(item)
+        if len(unique) >= 5:
+            break
+    return unique
+
+
+async def _serpapi_competitors(suite: Suite, language: str, existing_urls: list[str] | None = None, offset: int = 0) -> list[dict[str, Any]]:
+    if not settings.serpapi_api_key.strip():
+        return []
+    existing = {url for url in (existing_urls or []) if url}
+    competitors: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=18) as client:
+        for source_index, spec in enumerate(SERPAPI_SOURCE_SPECS):
+            try:
+                source_items = await _fetch_serpapi_source(client, suite, language, spec, existing, offset + source_index)
+                competitors.extend(source_items[:5])
+            except Exception:
+                continue
+    return competitors
+
+
 def _save_competitor_scratch(suite: Suite, language: str | None = None) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
     intelligence = normalize_marketing_intelligence({"phase": "competitors"}, suite_research_payload(suite), output_language)
     intelligence["competitors"] = _mock_competitors(suite, output_language)
+    intelligence["status"] = "competitors_ready"
+    return _save_marketing_intelligence(suite, intelligence)
+
+
+async def _save_competitor_scratch_from_search(suite: Suite, language: str | None = None) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    intelligence = normalize_marketing_intelligence({"phase": "competitors"}, suite_research_payload(suite), output_language)
+    competitors = await _serpapi_competitors(suite, output_language)
+    if competitors:
+        intelligence["competitors"] = competitors
+    else:
+        intelligence["competitors"] = _mock_competitors(suite, output_language)
+        intelligence["warnings"] = ["SerpAPI did not return usable competitor results; showing starter source leads."]
     intelligence["status"] = "competitors_ready"
     return _save_marketing_intelligence(suite, intelligence)
 
@@ -427,6 +582,21 @@ def _append_competitor_scratch(suite: Suite, language: str | None = None) -> dic
     existing_urls = [str(item.get("url") or "") for item in current if isinstance(item, dict)]
     current.extend(_mock_competitors(suite, output_language, existing_urls, offset=len(current)))
     base["competitors"] = current[:36]
+    base["status"] = "competitors_ready"
+    return _save_marketing_intelligence(suite, base)
+
+
+async def _append_competitor_scratch_from_search(suite: Suite, language: str | None = None) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    existing = _strategy(suite).get("marketing_intelligence")
+    base = normalize_marketing_intelligence(existing if isinstance(existing, dict) else {"phase": "competitors"}, suite_research_payload(suite), output_language)
+    current = list(base.get("competitors") or [])
+    existing_urls = [str(item.get("url") or item.get("title") or "") for item in current if isinstance(item, dict)]
+    more = await _serpapi_competitors(suite, output_language, existing_urls, offset=len(current))
+    if not more:
+        more = _mock_competitors(suite, output_language, existing_urls, offset=len(current))
+    current.extend(more)
+    base["competitors"] = current[:60]
     base["status"] = "competitors_ready"
     return _save_marketing_intelligence(suite, base)
 
@@ -607,7 +777,7 @@ async def generate_marketing_competitors(
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or GenerateMarketingPlanRequest()
-    _save_competitor_scratch(suite, request_data.language)
+    await _save_competitor_scratch_from_search(suite, request_data.language)
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
@@ -621,7 +791,7 @@ async def generate_more_marketing_competitors(
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or MarketingStageRequest()
-    _append_competitor_scratch(suite, request_data.language)
+    await _append_competitor_scratch_from_search(suite, request_data.language)
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
