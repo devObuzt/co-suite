@@ -72,6 +72,45 @@ def test_keyword_candidates_skip_existing_terms():
     assert first
     assert more
     assert not {item["text"].casefold() for item in first} & {item["text"].casefold() for item in more}
+    assert all(1 <= len(item["text"].split()) <= 3 for item in first + more)
+
+
+def test_keyword_candidates_use_name_category_and_services():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "One Clinic", "industry": "Dental clinic", "services": ["Teeth whitening"]},
+        strategy={},
+    )
+
+    keywords = [item["text"].casefold() for item in marketing_plans._keyword_candidates(suite, "en")]
+
+    assert "one clinic" in keywords
+    assert "dental clinic" in keywords
+    assert "teeth whitening" in keywords
+
+
+def test_keyword_phase_does_not_auto_generate_competitors():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec", "industry": "Marketing", "services": ["Websites"]},
+        strategy={},
+    )
+
+    intelligence = marketing_plans.normalize_marketing_intelligence(
+        {"phase": "keywords", "keywords": [{"text": "Websites"}]},
+        marketing_plans.suite_research_payload(suite),
+        "en",
+    )
+
+    assert intelligence["keywords"]
+    assert intelligence["competitors"] == []
+    assert intelligence["demand_signals"] == []
 
 
 def test_append_competitor_scratch_adds_more_mock_results():

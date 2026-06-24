@@ -582,6 +582,7 @@ def normalize_marketing_intelligence(
     raw = _dict(raw)
     phase = str(raw.get("phase") or "").strip()
     competitor_only = phase == "competitors"
+    keyword_only = phase == "keywords"
     brand = _dict(suite_payload.get("brand"))
     strategy = _dict(suite_payload.get("strategy"))
     deck = _dict(strategy.get("marketing_plan_deck"))
@@ -631,10 +632,12 @@ def normalize_marketing_intelligence(
         for item in (_normalize_competitor(raw_competitor, index) for index, raw_competitor in enumerate(competitor_sources, start=1))
         if item
     ][:24]
-    if not competitors:
+    if keyword_only:
+        competitors = []
+    elif not competitors:
         competitors = _fallback_competitor_research(brand, strategy, language)
 
-    if competitor_only:
+    if competitor_only or keyword_only:
         demand_signals: list[str] = []
         supply_signals: list[str] = []
         opportunities: list[str] = []
@@ -667,7 +670,7 @@ def normalize_marketing_intelligence(
     warnings = _text_list(raw.get("warnings") or research.get("limitations"), 8)
     if competitors and any(item.get("research_lead") for item in competitors):
         warnings.append(_fallback_market_copy(language)["warning"])
-    if not demand_signals:
+    if not demand_signals and not keyword_only:
         warnings.append("Demand signals are based on the Suite profile until external research is generated.")
 
     deduped_sources: list[dict[str, Any]] = []

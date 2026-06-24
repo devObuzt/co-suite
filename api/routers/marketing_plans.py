@@ -233,39 +233,46 @@ def _keyword_candidates(suite: Suite, language: str, existing: list[str] | None 
     brand = suite.brand if isinstance(suite.brand, dict) else {}
     services = _suite_services(suite)
     category = str(brand.get("industry") or brand.get("category") or brand.get("niche") or suite.name or "").strip()
-    location = brand.get("location") or brand.get("target_location") or ""
-    if isinstance(brand.get("audience_location"), dict):
-        loc = brand["audience_location"]
-        location = " ".join(_unique_strings([*(loc.get("cities") or []), *(loc.get("countries") or [])], 3))
-    base_terms = services or [category or suite.name]
+    brand_name = str(brand.get("name") or suite.name or "").strip()
+    base_terms = _unique_strings([brand_name, category, *services], 80)
     existing_markers = {item.casefold() for item in _unique_strings(existing or [])}
     languages = " ".join(_audience_keyword_languages(suite, language)).lower()
     wants_ar = str(language).startswith("ar") or "arabic" in languages or "العربية" in languages or "ar" in languages.split()
     wants_he = str(language).startswith("he") or "hebrew" in languages or "עברית" in languages or "he" in languages.split()
     if wants_ar:
-        prefixes = ["", "أفضل", "قريب مني", "أسعار", "عروض", "تقييمات"]
+        modifiers = ["", "أفضل", "أسعار", "عروض", "حجز", "خدمات"]
     elif wants_he:
-        prefixes = ["", "הכי טוב", "קרוב אליי", "מחירים", "מבצעים", "ביקורות"]
+        modifiers = ["", "מחירים", "מבצעים", "הזמנה", "שירותי", "מומלץ"]
     else:
-        prefixes = ["", "best", "near me", "prices", "offers", "reviews"]
+        modifiers = ["", "prices", "offers", "booking", "services", "best"]
     if more:
         if wants_ar:
-            prefixes = ["مقارنة", "احترافي", "مناسب", "فاخر", "حجز", "استشارة"]
+            modifiers = ["مقارنة", "احترافي", "محلي", "قريب", "استشارة", "مختص"]
         elif wants_he:
-            prefixes = ["השוואה", "מקצועי", "משתלם", "פרימיום", "הזמנה", "ייעוץ"]
+            modifiers = ["השוואה", "מקצועי", "מקומי", "קרוב", "ייעוץ", "מומחה"]
         else:
-            prefixes = ["compare", "professional", "affordable", "premium", "booking", "consultation"]
+            modifiers = ["compare", "professional", "local", "nearby", "consultation", "specialist"]
     keywords: list[dict[str, Any]] = []
-    for service in base_terms:
-        for prefix in prefixes:
-            text = " ".join(part for part in [prefix, service, category if service != category else "", str(location or "")] if part).strip()
+    for term in base_terms:
+        term_words = term.split()
+        trimmed_term = " ".join(term_words[:3])
+        for modifier in modifiers:
+            if not modifier:
+                text = trimmed_term
+            elif wants_he and modifier == "שירותי":
+                text = " ".join([modifier, *term_words[:2]]).strip()
+            else:
+                text = " ".join([modifier, *term_words[:2]]).strip()
+            words = text.split()
+            if len(words) > 3:
+                text = " ".join(words[:3])
             marker = text.casefold()
             if not text or marker in existing_markers:
                 continue
             keywords.append({
                 "id": f"kw-{len(keywords) + 1}",
                 "text": text,
-                "intent": "commercial" if prefix else "core",
+                "intent": "commercial" if modifier else "core",
                 "source": "fallback_more" if more else "fallback",
                 "confidence": "starter",
             })
@@ -294,7 +301,7 @@ async def _generate_keywords(suite: Suite, language: str, existing: list[str] | 
             },
             "existing_keywords": existing or [],
             "mode": "generate_more" if more else "generate",
-            "instructions": "Return JSON only: {\"keywords\":[{\"text\":\"...\",\"intent\":\"core|commercial|local|problem|comparison\",\"confidence\":\"medium\"}]}. Write every keyword in the target audience's native country language and selected audience language. Prefer natural local search phrases, 3 to 7 words each. Do not return English keywords unless English is one of the audience languages.",
+            "instructions": "Return JSON only: {\"keywords\":[{\"text\":\"...\",\"intent\":\"core|commercial|local|problem|comparison\",\"confidence\":\"medium\"}]}. Write every keyword in the target audience's native country language and selected audience language. Each keyword must be a short business-search term of 1 to 3 words. It should be useful as part of a search for a business like this Suite. Depend on the Suite name, business category, and services/products. Do not return English keywords unless English is one of the audience languages.",
         }
         raw = await call_text_ai(
             max_tokens=1200,
@@ -641,7 +648,10 @@ async def generate_marketing_keywords(
     request_data = payload or MarketingStageRequest()
     output_language = infer_plan_language(suite, request_data.language)
     intelligence = normalize_marketing_intelligence(
-        _strategy(suite).get("marketing_intelligence") if isinstance(_strategy(suite).get("marketing_intelligence"), dict) else {},
+        {
+            **(_strategy(suite).get("marketing_intelligence") if isinstance(_strategy(suite).get("marketing_intelligence"), dict) else {}),
+            "phase": "keywords",
+        },
         suite_research_payload(suite),
         output_language,
     )
@@ -665,7 +675,10 @@ async def generate_more_marketing_keywords(
     request_data = payload or MarketingStageRequest()
     output_language = infer_plan_language(suite, request_data.language)
     intelligence = normalize_marketing_intelligence(
-        _strategy(suite).get("marketing_intelligence") if isinstance(_strategy(suite).get("marketing_intelligence"), dict) else {},
+        {
+            **(_strategy(suite).get("marketing_intelligence") if isinstance(_strategy(suite).get("marketing_intelligence"), dict) else {}),
+            "phase": "keywords",
+        },
         suite_research_payload(suite),
         output_language,
     )
