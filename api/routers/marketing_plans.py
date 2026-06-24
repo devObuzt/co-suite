@@ -858,13 +858,13 @@ def _demand_supply_unavailable_signals(planner: dict[str, Any], language: str) -
     warning = str(planner.get("warning") or "").strip()
     ar = str(language).startswith("ar")
     if ar:
-        demand = "لا توجد أرقام طلب من Keyword Planner بعد. اربط Google Ads أو تأكد من صلاحية الحساب والكلمات."
+        demand = "لا توجد أرقام طلب من Keyword Planner بعد. مصدر Google Ads المركزي يُدار داخليًا من المنصة."
         supply = "لا توجد كثافة منافسة فعلية بعد لأن Google Ads لم يرجع Metrics قابلة للاستخدام."
-        opportunity = warning or "بعد الربط، أعد التوليد لعرض البحث الشهري، المنافسة، واقتراحات الكلمات."
+        opportunity = warning or "بعد جاهزية المصدر المركزي، أعد التوليد لعرض البحث الشهري، المنافسة، واقتراحات الكلمات."
     else:
-        demand = "No Keyword Planner demand metrics yet. Connect Google Ads or verify account and keyword access."
+        demand = "No Keyword Planner demand metrics yet. The platform-managed Google Ads source is handled internally."
         supply = "No real competition density yet because Google Ads did not return usable metrics."
-        opportunity = warning or "After connection, regenerate to show monthly searches, competition, and keyword suggestions."
+        opportunity = warning or "After the platform source is ready, regenerate to show monthly searches, competition, and keyword suggestions."
     return (
         [{"id": "google-ads-demand-unavailable", "title": demand, "source": "google_ads"}],
         [{"id": "google-ads-competition-unavailable", "title": supply, "source": "google_ads"}],
