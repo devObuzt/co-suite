@@ -244,6 +244,53 @@ async def test_serpapi_failures_return_source_warnings(monkeypatch):
     assert "Google organic" in warnings[0]
 
 
+@pytest.mark.asyncio
+async def test_competitor_generation_preserves_existing_keywords(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec", "industry": "Marketing", "services": ["Websites"]},
+        strategy={
+            "marketing_intelligence": {
+                "phase": "keywords",
+                "status": "keywords_ready",
+                "keywords": [{"id": "kw-1", "text": "digital marketing", "intent": "core"}],
+                "competitors": [],
+                "demand_signals": [],
+                "supply_signals": [],
+                "opportunities": [],
+                "source_links": [],
+                "warnings": [],
+            }
+        },
+    )
+
+    async def fake_serpapi_competitors(*_args, **_kwargs):
+        return (
+            [
+                {
+                    "id": "serpapi-google-a",
+                    "name": "Competitor A",
+                    "title": "Competitor A",
+                    "platform": "google",
+                    "result_type": "google_organic",
+                    "url": "https://competitor.example",
+                    "snippet": "Direct competitor",
+                }
+            ],
+            [],
+        )
+
+    monkeypatch.setattr(marketing_plans, "_serpapi_competitors", fake_serpapi_competitors)
+
+    intelligence = await marketing_plans._save_competitor_scratch_from_search(suite, "en")
+
+    assert [item["text"] for item in intelligence["keywords"]] == ["digital marketing"]
+    assert intelligence["competitors"][0]["url"] == "https://competitor.example"
+
+
 def test_normalized_competitor_preserves_classification_tags():
     suite = Suite(
         id="suite-1",

@@ -631,7 +631,13 @@ def _save_competitor_scratch(suite: Suite, language: str | None = None) -> dict[
 
 async def _save_competitor_scratch_from_search(suite: Suite, language: str | None = None) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
-    intelligence = normalize_marketing_intelligence({"phase": "competitors"}, suite_research_payload(suite), output_language)
+    existing = _strategy(suite).get("marketing_intelligence")
+    existing_payload = existing if isinstance(existing, dict) else {}
+    intelligence = normalize_marketing_intelligence(
+        {**existing_payload, "phase": "competitors"},
+        suite_research_payload(suite),
+        output_language,
+    )
     competitors, serpapi_warnings = await _serpapi_competitors(suite, output_language)
     if competitors:
         intelligence["competitors"] = competitors
