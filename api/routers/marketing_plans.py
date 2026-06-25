@@ -21,7 +21,7 @@ from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
 from ..models.user import User
 from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job
-from ..services.google_ads import fetch_keyword_planner_ideas
+from ..services.google_ads import build_keyword_planner_summary, fetch_keyword_planner_ideas
 from ..services.admin_audit import record_audit_log, record_provider_usage
 from ..services.provider_pricing import estimate_google_ads_keyword_planner_cost_usd, estimate_serpapi_cost_usd
 from ..services.marketing_plan_generator import (
@@ -281,7 +281,7 @@ def _audience_keyword_languages(suite: Suite, fallback_language: str) -> list[st
 def _suite_location(suite: Suite) -> str:
     brand = suite.brand if isinstance(suite.brand, dict) else {}
     for key in ("audience_country", "country", "location", "audience_location", "target_country"):
-        value = str(brand.get(key) or "").strip()
+        value = _clean_search_fragment(brand.get(key))
         if value:
             return value
     return ""
@@ -296,16 +296,62 @@ def _suite_website_url(suite: Suite) -> str:
     return ""
 
 
-def _marketing_keywords_for_planner(suite: Suite, limit: int = 20) -> list[str]:
+HEBREW_MARKET_TERM_MAP = {
+    "تداول": "מסחר",
+    "دورات تداول": "קורס מסחר",
+    "تعليم تداول": "לימודי מסחר",
+    "تعلم التداول": "לימוד מסחר",
+    "استثمار": "השקעות",
+    "تعليم الاستثمار": "לימודי השקעות",
+    "أسهم": "מניות",
+    "الأسهم": "מניות",
+    "تحليل الأسهم": "ניתוח מניות",
+    "اكاديمية": "אקדמיה",
+    "أكاديمية": "אקדמיה",
+}
+
+
+def _is_israel_market(suite: Suite) -> bool:
+    location = _suite_location(suite)
+    return bool(_serpapi_country_code(location) == "il" or any(term in location.casefold() for term in ("israel", "إسرائيل", "اسرائيل", "ישראל")))
+
+
+def _needs_hebrew_market_terms(suite: Suite, language: str) -> bool:
+    if not str(language or "").startswith("ar"):
+        return False
+    return _is_israel_market(suite)
+
+
+def _hebrew_market_terms(values: list[str], limit: int = 10) -> list[str]:
+    terms: list[str] = []
+    for value in values:
+        text = _clean_search_fragment(value)
+        lowered = text.casefold()
+        if not text:
+            continue
+        for arabic, hebrew in HEBREW_MARKET_TERM_MAP.items():
+            if arabic.casefold() in lowered:
+                terms.append(hebrew)
+        if any("\u0590" <= char <= "\u05ff" for char in text):
+            terms.append(text)
+    return _unique_strings(terms, limit)
+
+
+def _marketing_keywords_for_planner(suite: Suite, language: str | None = None, limit: int = 20) -> list[str]:
+    output_language = infer_plan_language(suite, language)
     intelligence = _intelligence(suite)
     keywords = [
-        str(item.get("text") or item.get("keyword") or "").strip()
+        _clean_search_fragment(item.get("text") or item.get("keyword") or "")
         for item in intelligence.get("keywords") or []
         if isinstance(item, dict)
     ]
     if keywords:
-        return _unique_strings(keywords, limit)
-    return [item["text"] for item in _keyword_candidates(suite, infer_plan_language(suite))[:limit]]
+        base = _unique_strings(keywords, limit)
+    else:
+        base = [item["text"] for item in _keyword_candidates(suite, output_language)[:limit]]
+    if _needs_hebrew_market_terms(suite, output_language):
+        base = _unique_strings([*base, *_hebrew_market_terms(base, 8)], limit)
+    return base
 
 
 def _brand_keyword_markers(brand_name: str) -> set[str]:
@@ -544,7 +590,13 @@ def _competitor_search_terms(suite: Suite, language: str, offset: int = 0) -> li
         for item in intelligence.get("keywords") or []
         if isinstance(item, dict)
     ]
-    seeds = _unique_strings([*keywords[:4], *services[:6], category], 12) or [_clean_search_fragment(suite.name)]
+    base_seed_values = _unique_strings([*keywords[:4], *services[:6], category], 12)
+    if _needs_hebrew_market_terms(suite, language):
+        hebrew_seed_values = _hebrew_market_terms(base_seed_values, 8)
+        seeds = _unique_strings([*base_seed_values[:3], *hebrew_seed_values, *base_seed_values[3:]], 16)
+    else:
+        seeds = base_seed_values
+    seeds = seeds or [_clean_search_fragment(suite.name)]
     rotated = seeds[offset % len(seeds):] + seeds[:offset % len(seeds)]
     terms = []
     for seed in rotated[:8]:
@@ -853,6 +905,7 @@ async def _save_competitor_scratch_from_search(suite: Suite, language: str | Non
     if competitors:
         intelligence["competitors"] = competitors
         intelligence["warnings"] = []
+        intelligence["suppress_starter_warnings"] = True
         intelligence["source_warnings"] = serpapi_warnings[:5]
     else:
         intelligence["competitors"] = []
@@ -891,6 +944,7 @@ async def _append_competitor_scratch_from_search(suite: Suite, language: str | N
         ]
     else:
         base["warnings"] = []
+    base["suppress_starter_warnings"] = True
     base["source_warnings"] = serpapi_warnings[:5]
     current.extend(more)
     base["competitors"] = current[:60]
@@ -959,20 +1013,79 @@ def _public_demand_supply_warning(warning: str | None, language: str, credential
     return "The internal demand and supply data source is not ready yet. We are showing a starter estimate now; once the platform Google Ads source is active, search and competition metrics will appear."
 
 
+def _merge_keyword_planner_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    metrics: list[dict[str, Any]] = []
+    suggestions: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    request_languages: list[Any] = []
+    seen_metrics: set[str] = set()
+    seen_suggestions: set[str] = set()
+    for result in results:
+        request = result.get("request") if isinstance(result.get("request"), dict) else {}
+        if request.get("language"):
+            request_languages.append(request.get("language"))
+        for item in result.get("keyword_metrics") or []:
+            if not isinstance(item, dict):
+                continue
+            marker = str(item.get("keyword") or "").casefold()
+            if not marker or marker in seen_metrics:
+                continue
+            seen_metrics.add(marker)
+            metrics.append(item)
+        for item in result.get("suggested_keywords") or []:
+            if not isinstance(item, dict):
+                continue
+            marker = str(item.get("keyword") or "").casefold()
+            if not marker or marker in seen_suggestions:
+                continue
+            seen_suggestions.add(marker)
+            suggestions.append(item)
+        if result.get("warning"):
+            warnings.append(str(result["warning"]))
+    summary = build_keyword_planner_summary(metrics)
+    summary["suggested_keywords"] = len(suggestions)
+    return {
+        "keyword_metrics": metrics,
+        "suggested_keywords": suggestions[:30],
+        "summary": summary,
+        "request": {
+            "languages": _unique_strings(request_languages, 4),
+            "attempts": len(results),
+        },
+        "warning": "; ".join(_unique_strings(warnings, 3)) if warnings and not metrics else None,
+    }
+
+
 async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None = None) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
     existing = _strategy(suite).get("marketing_intelligence")
     base = existing if isinstance(existing, dict) else {"phase": "competitors"}
     base = normalize_marketing_intelligence(base, suite_research_payload(suite), output_language)
     customer_id, refresh_token, credential_source = _google_ads_keyword_planner_credentials(suite)
-    planner = await fetch_keyword_planner_ideas(
-        customer_id,
-        refresh_token,
-        _marketing_keywords_for_planner(suite),
-        output_language,
-        _suite_location(suite),
-        _suite_website_url(suite),
-    )
+    planner_keywords = _marketing_keywords_for_planner(suite, output_language)
+    planner_results = [
+        await fetch_keyword_planner_ideas(
+            customer_id,
+            refresh_token,
+            planner_keywords,
+            output_language,
+            _suite_location(suite),
+            _suite_website_url(suite),
+        )
+    ]
+    hebrew_terms = _hebrew_market_terms(planner_keywords, 10) if _needs_hebrew_market_terms(suite, output_language) else []
+    if hebrew_terms:
+        planner_results.append(
+            await fetch_keyword_planner_ideas(
+                customer_id,
+                refresh_token,
+                _unique_strings(hebrew_terms, 10),
+                "he",
+                _suite_location(suite),
+                _suite_website_url(suite),
+            )
+        )
+    planner = _merge_keyword_planner_results(planner_results)
     summary = planner.get("summary") or {}
     warnings: list[str] = []
     public_warning = _public_demand_supply_warning(planner.get("warning"), output_language, credential_source)

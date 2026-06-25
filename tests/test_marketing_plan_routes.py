@@ -221,6 +221,7 @@ def test_competitor_search_terms_clean_structured_location():
     assert any("إسرائيل" in term for term in terms)
     assert "scope" not in " ".join(terms)
     assert "{" not in " ".join(terms)
+    assert any("קורס" in term or "מסחר" in term for term in terms)
 
 
 def test_competitor_source_coverage_fills_three_cards_per_source():
@@ -250,6 +251,38 @@ def test_competitor_source_coverage_fills_three_cards_per_source():
 
     for source in ["google_organic", "maps", "instagram", "facebook", "tiktok"]:
         assert counts[source] >= 3
+
+
+def test_normalize_can_suppress_starter_warning_after_real_search():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "industry": "تعليم تداول"},
+        strategy={},
+    )
+
+    intelligence = marketing_plans.normalize_marketing_intelligence(
+        {
+            "phase": "competitors",
+            "suppress_starter_warnings": True,
+            "competitors": [
+                {
+                    "id": "fallback-instagram-a",
+                    "title": "مصدر بحث: دورات تداول",
+                    "result_type": "instagram",
+                    "platform": "instagram",
+                    "url": "https://www.google.com/search?q=site%3Ainstagram.com+trading",
+                    "research_lead": True,
+                }
+            ],
+        },
+        marketing_plans.suite_research_payload(suite),
+        "ar",
+    )
+
+    assert intelligence["warnings"] == []
 
 
 def test_social_competitor_filter_removes_unrelated_results():
@@ -389,6 +422,100 @@ async def test_demand_supply_uses_platform_google_ads_credentials(monkeypatch):
     assert intelligence["demand_supply"]["credential_source"] == "platform"
     assert intelligence["demand_supply"]["warning"] is None
     assert intelligence["demand_supply"]["summary"]["average_monthly_searches"] == 500
+
+
+@pytest.mark.asyncio
+async def test_demand_supply_queries_hebrew_for_arabic_israel_market(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={
+            "name": "Smart Line Academy",
+            "industry": "تعليم تداول",
+            "services": ["دورات تداول"],
+            "audience_location": {"scope": "custom", "countries": ["إسرائيل"], "cities": []},
+        },
+        connections={},
+        strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "دورات تداول"}]}},
+    )
+    calls = []
+
+    async def fake_fetch_keyword_planner_ideas(customer_id, refresh_token, keywords, language, location, *_args, **_kwargs):
+        calls.append({"customer_id": customer_id, "refresh_token": refresh_token, "keywords": keywords, "language": language, "location": location})
+        keyword = keywords[0]
+        return {
+            "keyword_metrics": [{"keyword": keyword, "average_monthly_searches": 300 if language == "he" else 200, "competition_index": 40}],
+            "suggested_keywords": [],
+            "summary": {},
+            "request": {"language": language, "keyword_count": len(keywords)},
+        }
+
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "1234567890")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
+    monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
+
+    intelligence = await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
+
+    assert [call["language"] for call in calls] == ["ar", "he"]
+    assert calls[0]["location"] == "إسرائيل"
+    assert any("קורס" in keyword or "מסחר" in keyword for keyword in calls[1]["keywords"])
+    assert intelligence["demand_supply"]["summary"]["analyzed_keywords"] == 2
+    assert intelligence["demand_supply"]["summary"]["total_monthly_searches"] == 500
+
+
+@pytest.mark.asyncio
+async def test_generate_demand_supply_route_returns_planner_metrics(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "industry": "تعليم تداول", "services": ["دورات تداول"], "audience_country": "إسرائيل"},
+        connections={},
+        strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "دورات تداول"}]}},
+    )
+    user = User(id="user-1", email="owner@example.com", full_name="Owner", hashed_password="x")
+    db = FakeDb()
+    usage_calls = []
+
+    async def fake_get_owned_suite(*_args, **_kwargs):
+        return suite
+
+    async def fake_fetch_keyword_planner_ideas(_customer_id, _refresh_token, keywords, language, *_args, **_kwargs):
+        return {
+            "keyword_metrics": [{"keyword": keywords[0], "average_monthly_searches": 120, "competition_index": 35}],
+            "suggested_keywords": [],
+            "summary": {},
+            "request": {"language": language},
+        }
+
+    async def fake_record_provider_usage(_db, **kwargs):
+        usage_calls.append(kwargs)
+
+    async def fake_record_audit_log(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "1234567890")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
+    monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
+    monkeypatch.setattr(marketing_plans, "record_provider_usage", fake_record_provider_usage)
+    monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
+
+    response = await marketing_plans.generate_marketing_demand_supply(
+        "suite-1",
+        marketing_plans.GenerateMarketingPlanRequest(language="ar"),
+        user,
+        db,  # type: ignore[arg-type]
+    )
+
+    assert db.committed is True
+    assert response["intelligence"]["demand_supply"]["summary"]["analyzed_keywords"] == 2
+    assert response["intelligence"]["demand_supply"]["warning"] is None
+    assert usage_calls[0]["operation"] == "marketing_demand_supply.generate"
+    assert usage_calls[0]["status"] == "success"
 
 
 def test_marketing_intelligence_redacts_stored_serpapi_keys():

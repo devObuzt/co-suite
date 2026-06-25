@@ -668,9 +668,10 @@ def normalize_marketing_intelligence(
         elif len(opportunities) < 3:
             opportunities = _text_list([*opportunities, *fallback_opportunities], 10)
     warnings = _text_list(raw.get("warnings") or research.get("limitations"), 8)
-    if competitors and any(item.get("research_lead") for item in competitors):
+    suppress_starter_warnings = bool(raw.get("suppress_starter_warnings"))
+    if competitors and any(item.get("research_lead") for item in competitors) and not suppress_starter_warnings:
         warnings.append(_fallback_market_copy(language)["warning"])
-    if not demand_signals and not keyword_only:
+    if not demand_signals and not keyword_only and not competitor_only:
         warnings.append("Demand signals are based on the Suite profile until external research is generated.")
 
     deduped_sources: list[dict[str, Any]] = []
@@ -693,6 +694,9 @@ def normalize_marketing_intelligence(
         "opportunities": [{"id": f"opportunity-{i}", "title": item} for i, item in enumerate(opportunities, start=1)],
         "source_links": deduped_sources[:20],
         "warnings": warnings,
+        "source_warnings": _text_list(raw.get("source_warnings"), 12),
+        "demand_supply": _dict(raw.get("demand_supply")),
+        "suppress_starter_warnings": suppress_starter_warnings,
     }
 
 
