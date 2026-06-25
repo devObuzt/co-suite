@@ -988,22 +988,41 @@ def _demand_supply_unavailable_signals(planner: dict[str, Any], language: str) -
     )
 
 
-def _google_ads_keyword_planner_credentials(suite: Suite) -> tuple[str, str, str]:
-    customer_id = str(settings.google_ads_customer_id or "").strip()
-    refresh_token = str(settings.google_ads_refresh_token or "").strip()
-    if customer_id and refresh_token:
-        return customer_id, refresh_token, "platform"
-    google_ads = (suite.connections or {}).get("google_ads") if isinstance(suite.connections, dict) else {}
+def _missing_platform_google_ads_config() -> list[str]:
+    required = {
+        "GOOGLE_ADS_CUSTOMER_ID": settings.google_ads_customer_id,
+        "GOOGLE_ADS_REFRESH_TOKEN": settings.google_ads_refresh_token,
+        "GOOGLE_ADS_CLIENT_ID": settings.google_ads_client_id,
+        "GOOGLE_ADS_CLIENT_SECRET": settings.google_ads_client_secret,
+        "GOOGLE_ADS_DEVELOPER_TOKEN": settings.google_ads_developer_token,
+    }
+    return [name for name, value in required.items() if not str(value or "").strip()]
+
+
+def _google_ads_keyword_planner_credentials() -> tuple[str, str, str, list[str]]:
+    missing = _missing_platform_google_ads_config()
+    if missing:
+        return "", "", "platform_missing", missing
     return (
-        str((google_ads or {}).get("customer_id") or ""),
-        str((google_ads or {}).get("refresh_token") or ""),
-        "suite_connection",
+        str(settings.google_ads_customer_id or "").strip(),
+        str(settings.google_ads_refresh_token or "").strip(),
+        "platform",
+        [],
     )
+
+
+def _platform_google_ads_missing_warning(missing: list[str], language: str) -> str:
+    missing_text = ", ".join(missing)
+    if str(language).startswith("ar"):
+        return f"إعداد Google Ads المركزي ناقص على خدمة API: {missing_text}. أضف هذه المتغيرات على خدمة الباكند في Railway ثم أعد النشر."
+    return f"Google Ads platform configuration is missing on the API service: {missing_text}. Add these variables to the backend service in Railway, then redeploy."
 
 
 def _public_demand_supply_warning(warning: str | None, language: str, credential_source: str) -> str | None:
     if not warning:
         return None
+    if credential_source in {"platform", "platform_missing"}:
+        return str(warning)
     marker = str(warning).casefold()
     missing_connection = "account is not connected" in marker or "refresh_token" in marker or "customer_id" in marker
     if credential_source == "platform" and not missing_connection:
@@ -1061,31 +1080,40 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
     existing = _strategy(suite).get("marketing_intelligence")
     base = existing if isinstance(existing, dict) else {"phase": "competitors"}
     base = normalize_marketing_intelligence(base, suite_research_payload(suite), output_language)
-    customer_id, refresh_token, credential_source = _google_ads_keyword_planner_credentials(suite)
+    customer_id, refresh_token, credential_source, missing_config = _google_ads_keyword_planner_credentials()
     planner_keywords = _marketing_keywords_for_planner(suite, output_language)
-    planner_results = [
-        await fetch_keyword_planner_ideas(
-            customer_id,
-            refresh_token,
-            planner_keywords,
-            output_language,
-            _suite_location(suite),
-            _suite_website_url(suite),
-        )
-    ]
-    hebrew_terms = _hebrew_market_terms(planner_keywords, 10) if _needs_hebrew_market_terms(suite, output_language) else []
-    if hebrew_terms:
-        planner_results.append(
+    if missing_config:
+        planner = {
+            "keyword_metrics": [],
+            "suggested_keywords": [],
+            "summary": build_keyword_planner_summary([]),
+            "request": {"attempts": 0, "missing_config": missing_config},
+            "warning": _platform_google_ads_missing_warning(missing_config, output_language),
+        }
+    else:
+        planner_results = [
             await fetch_keyword_planner_ideas(
                 customer_id,
                 refresh_token,
-                _unique_strings(hebrew_terms, 10),
-                "he",
+                planner_keywords,
+                output_language,
                 _suite_location(suite),
                 _suite_website_url(suite),
             )
-        )
-    planner = _merge_keyword_planner_results(planner_results)
+        ]
+        hebrew_terms = _hebrew_market_terms(planner_keywords, 10) if _needs_hebrew_market_terms(suite, output_language) else []
+        if hebrew_terms:
+            planner_results.append(
+                await fetch_keyword_planner_ideas(
+                    customer_id,
+                    refresh_token,
+                    _unique_strings(hebrew_terms, 10),
+                    "he",
+                    _suite_location(suite),
+                    _suite_website_url(suite),
+                )
+            )
+        planner = _merge_keyword_planner_results(planner_results)
     summary = planner.get("summary") or {}
     warnings: list[str] = []
     public_warning = _public_demand_supply_warning(planner.get("warning"), output_language, credential_source)
@@ -1126,7 +1154,9 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         "suggested_keywords": planner.get("suggested_keywords") or [],
         "request": planner.get("request") or {},
         "warning": public_warning,
+        "internal_warning": planner.get("warning"),
         "credential_source": credential_source,
+        "missing_config": missing_config,
     }
     return _save_marketing_intelligence(suite, intelligence)
 
@@ -1520,6 +1550,8 @@ async def generate_marketing_demand_supply(
             "analyzed_keywords": summary.get("analyzed_keywords"),
             "suggested_keywords": summary.get("suggested_keywords"),
             "warning": demand_supply.get("warning"),
+            "credential_source": demand_supply.get("credential_source"),
+            "missing_config": demand_supply.get("missing_config"),
         },
     )
     await record_audit_log(

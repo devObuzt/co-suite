@@ -356,27 +356,24 @@ async def test_demand_supply_saves_clear_warning_state_when_google_ads_unavailab
     )
 
     async def fake_fetch_keyword_planner_ideas(*_args, **_kwargs):
-        return {
-            "keyword_metrics": [],
-            "suggested_keywords": [],
-            "summary": {
-                "analyzed_keywords": 0,
-                "average_monthly_searches": 0,
-                "competition_level": "UNKNOWN",
-                "average_competition_index": 0,
-                "market_pressure_score": 0,
-                "suggested_keywords": 0,
-            },
-            "warning": "Google Ads account is not connected.",
-        }
+        raise AssertionError("Google Ads should not be called when platform config is missing")
 
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_secret", "")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_developer_token", "")
     monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
 
     intelligence = await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
 
     demand_supply = intelligence["demand_supply"]
-    assert "داخليًا" in demand_supply["warning"]
+    assert "GOOGLE_ADS_CUSTOMER_ID" in demand_supply["warning"]
+    assert "Railway" in demand_supply["warning"]
     assert "Google Ads account is not connected" not in demand_supply["warning"]
+    assert demand_supply["credential_source"] == "platform_missing"
+    assert "GOOGLE_ADS_REFRESH_TOKEN" in demand_supply["missing_config"]
+    assert demand_supply["request"]["attempts"] == 0
     assert demand_supply["summary"]["analyzed_keywords"] == 0
     assert intelligence["demand_signals"]
     assert intelligence["supply_signals"]
@@ -414,6 +411,9 @@ async def test_demand_supply_uses_platform_google_ads_credentials(monkeypatch):
 
     monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "123-456-7890")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "platform-client")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_secret", "platform-secret")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_developer_token", "platform-dev-token")
     monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
 
     intelligence = await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
@@ -454,6 +454,9 @@ async def test_demand_supply_queries_hebrew_for_arabic_israel_market(monkeypatch
 
     monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "1234567890")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "platform-client")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_secret", "platform-secret")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_developer_token", "platform-dev-token")
     monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
 
     intelligence = await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
@@ -500,6 +503,9 @@ async def test_generate_demand_supply_route_returns_planner_metrics(monkeypatch)
     monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
     monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "1234567890")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "platform-client")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_secret", "platform-secret")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_developer_token", "platform-dev-token")
     monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
     monkeypatch.setattr(marketing_plans, "record_provider_usage", fake_record_provider_usage)
     monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
@@ -516,6 +522,7 @@ async def test_generate_demand_supply_route_returns_planner_metrics(monkeypatch)
     assert response["intelligence"]["demand_supply"]["warning"] is None
     assert usage_calls[0]["operation"] == "marketing_demand_supply.generate"
     assert usage_calls[0]["status"] == "success"
+    assert usage_calls[0]["metadata"]["credential_source"] == "platform"
 
 
 def test_marketing_intelligence_redacts_stored_serpapi_keys():
