@@ -200,6 +200,58 @@ def test_serpapi_results_are_grouped_by_source():
     assert maps[0]["url"] == "https://maps.example"
 
 
+def test_competitor_search_terms_clean_structured_location():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={
+            "name": "Smart Line Academy",
+            "industry": "تعليم تداول",
+            "services": ["دورات تداول"],
+            "audience_location": {"scope": "custom", "countries": ["إسرائيل"], "cities": []},
+        },
+        strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "دورات تداول"}]}},
+    )
+
+    terms = marketing_plans._competitor_search_terms(suite, "ar")
+
+    assert terms
+    assert any("إسرائيل" in term for term in terms)
+    assert "scope" not in " ".join(terms)
+    assert "{" not in " ".join(terms)
+
+
+def test_competitor_source_coverage_fills_three_cards_per_source():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "industry": "تعليم تداول", "services": ["دورات تداول"]},
+        strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "دورات تداول"}]}},
+    )
+    competitors = [
+        {
+            "id": "serpapi-google-a",
+            "title": "Competitor A",
+            "result_type": "google_organic",
+            "platform": "google",
+            "url": "https://competitor.example",
+        }
+    ]
+
+    filled = marketing_plans._ensure_competitor_source_coverage(suite, "ar", competitors)
+    counts: dict[str, int] = {}
+    for item in filled:
+        source = item["result_type"]
+        counts[source] = counts.get(source, 0) + 1
+
+    for source in ["google_organic", "maps", "instagram", "facebook", "tiktok"]:
+        assert counts[source] >= 3
+
+
 def test_social_competitor_filter_removes_unrelated_results():
     suite = Suite(
         id="suite-1",

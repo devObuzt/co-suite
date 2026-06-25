@@ -217,6 +217,27 @@ def _unique_strings(values: Any, limit: int = 80) -> list[str]:
     return items[:limit]
 
 
+def _clean_search_fragment(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key in ("name", "label", "country", "city", "location", "audience_location"):
+            if value.get(key):
+                parts.append(_clean_search_fragment(value.get(key)))
+        for key in ("countries", "cities"):
+            nested = value.get(key)
+            if isinstance(nested, list):
+                parts.extend(_clean_search_fragment(item) for item in nested[:3])
+        return " ".join(part for part in _unique_strings(parts, 4) if part).strip()
+    if isinstance(value, list):
+        return " ".join(part for part in (_clean_search_fragment(item) for item in value[:3]) if part).strip()
+    text = str(value or "").strip()
+    if not text or text.startswith("{") or text.startswith("["):
+        return ""
+    return re.sub(r"\s+", " ", text)
+
+
 def _suite_services(suite: Suite) -> list[str]:
     brand = suite.brand if isinstance(suite.brand, dict) else {}
     strategy = _strategy(suite)
@@ -226,15 +247,15 @@ def _suite_services(suite: Suite) -> list[str]:
         return value if isinstance(value, list) else ([value] if value else [])
     return _unique_strings(
         [
-            *values("services", brand),
-            *values("products", brand),
-            *values("products_services", brand),
-            *values("services", strategy),
-            *values("products", strategy),
-            *values("products_services", strategy),
-            *values("services", marketing_plan),
-            *values("products", marketing_plan),
-            *values("products_services", marketing_plan),
+            *[_clean_search_fragment(item) for item in values("services", brand)],
+            *[_clean_search_fragment(item) for item in values("products", brand)],
+            *[_clean_search_fragment(item) for item in values("products_services", brand)],
+            *[_clean_search_fragment(item) for item in values("services", strategy)],
+            *[_clean_search_fragment(item) for item in values("products", strategy)],
+            *[_clean_search_fragment(item) for item in values("products_services", strategy)],
+            *[_clean_search_fragment(item) for item in values("services", marketing_plan)],
+            *[_clean_search_fragment(item) for item in values("products", marketing_plan)],
+            *[_clean_search_fragment(item) for item in values("products_services", marketing_plan)],
         ],
         60,
     )
@@ -514,17 +535,28 @@ def _serpapi_error_message(label: str, exc: Exception) -> str:
 
 def _competitor_search_terms(suite: Suite, language: str, offset: int = 0) -> list[str]:
     brand = suite.brand if isinstance(suite.brand, dict) else {}
-    category = str(brand.get("industry") or brand.get("category") or brand.get("niche") or "").strip()
-    location = str(brand.get("location") or brand.get("audience_location") or "").strip()
+    category = _clean_search_fragment(brand.get("industry") or brand.get("category") or brand.get("niche") or "")
+    location = _clean_search_fragment(brand.get("location") or brand.get("audience_location") or brand.get("audience_country") or "")
     services = _suite_services(suite)
-    seeds = _unique_strings([category, *services], 10) or [suite.name]
+    intelligence = _intelligence(suite)
+    keywords = [
+        _clean_search_fragment(item.get("text") or item.get("keyword") or "")
+        for item in intelligence.get("keywords") or []
+        if isinstance(item, dict)
+    ]
+    seeds = _unique_strings([*keywords[:4], *services[:6], category], 12) or [_clean_search_fragment(suite.name)]
     rotated = seeds[offset % len(seeds):] + seeds[:offset % len(seeds)]
     terms = []
-    for seed in rotated[:4]:
+    for seed in rotated[:8]:
+        seed = _clean_search_fragment(seed)
+        if not seed:
+            continue
         term = " ".join(part for part in [seed, location] if part).strip()
         if term:
             terms.append(term)
-    return terms or [suite.name]
+        if seed and seed != term:
+            terms.append(seed)
+    return _unique_strings(terms, 8) or [_clean_search_fragment(suite.name)]
 
 
 def _competitor_relevance_terms(suite: Suite, language: str, limit: int = 40) -> list[str]:
@@ -643,7 +675,22 @@ def _fallback_competitor_for_source(
     spec = next((item for item in SERPAPI_SOURCE_SPECS if item["result_type"] == source), None)
     if not spec:
         return None
-    term = (_competitor_search_terms(suite, language, offset) or [suite.name])[0]
+    terms = _competitor_search_terms(suite, language, offset) or [_clean_search_fragment(suite.name)]
+    if str(language).startswith("ar"):
+        modifiers = ["", "منافسين", "أكاديميات", "شركات"]
+    elif str(language).startswith("he"):
+        modifiers = ["", "מתחרים", "אקדמיות", "חברות"]
+    else:
+        modifiers = ["", "competitors", "academy", "companies"]
+    fallback_terms = _unique_strings(
+        [
+            " ".join(part for part in [term, modifier] if part).strip()
+            for term in terms
+            for modifier in modifiers
+        ],
+        24,
+    )
+    term = fallback_terms[offset % len(fallback_terms)] if fallback_terms else _clean_search_fragment(suite.name)
     encoded = term.replace(" ", "+")
     if source == "maps":
         url = f"https://www.google.com/maps/search/{encoded}"
@@ -657,9 +704,9 @@ def _fallback_competitor_for_source(
     existing_markers.add(marker)
     title_prefix = "مصدر بحث" if str(language).startswith("ar") else "Source lead"
     snippet = (
-        f"لم تصل نتيجة مباشرة من {spec['label']} لهذا المصدر. استخدم هذا الرابط كبداية بحث وتحقق يدويًا من المنافسين."
+        f"لم تصل نتائج مباشرة كافية من {spec['label']} لهذا المصطلح بعد عدة محاولات. هذا رابط بحث جاهز للمراجعة اليدوية."
         if str(language).startswith("ar")
-        else f"No direct {spec['label']} result came back for this source. Use this as a starter search lead and verify competitors manually."
+        else f"Not enough direct {spec['label']} results came back for this term after retries. This is a ready search lead for manual review."
     )
     return {
         "id": f"fallback-{source}-{_stable_slug(term, str(offset + 1))}",
@@ -686,7 +733,13 @@ def _ensure_competitor_source_coverage(
     existing_urls: list[str] | None = None,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    covered = {str(item.get("result_type") or item.get("platform") or "").lower() for item in competitors if isinstance(item, dict)}
+    minimum_per_source = 3
+    counts: dict[str, int] = {}
+    for item in competitors:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("result_type") or item.get("platform") or "").lower()
+        counts[source] = counts.get(source, 0) + 1
     markers = {
         str(item.get("url") or item.get("title") or "").casefold()
         for item in competitors
@@ -695,11 +748,15 @@ def _ensure_competitor_source_coverage(
     markers.update(str(value or "").casefold() for value in (existing_urls or []) if value)
     filled = list(competitors)
     for index, source in enumerate(["google_organic", "maps", "instagram", "facebook", "tiktok"]):
-        if source in covered:
-            continue
-        fallback = _fallback_competitor_for_source(suite, language, source, markers, offset + index)
-        if fallback:
+        source_count = counts.get(source, 0)
+        attempts = 0
+        while source_count < minimum_per_source and attempts < 8:
+            fallback = _fallback_competitor_for_source(suite, language, source, markers, offset + index + attempts)
+            attempts += 1
+            if not fallback:
+                continue
             filled.append(fallback)
+            source_count += 1
     return filled
 
 
@@ -716,37 +773,42 @@ async def _fetch_serpapi_source(
         return []
     brand = suite.brand if isinstance(suite.brand, dict) else {}
     terms = _competitor_search_terms(suite, language, offset)
-    query = terms[0]
-    if spec.get("site"):
-        query = f"{spec['site']} {query}"
-    params: dict[str, Any] = {
-        "api_key": api_key,
-        "engine": spec["engine"],
-        "q": query,
-        "hl": "ar" if str(language).startswith("ar") else "he" if str(language).startswith("he") else "en",
-        "num": 10,
-    }
-    location = str(brand.get("location") or brand.get("audience_location") or "").strip()
+    location = _clean_search_fragment(brand.get("location") or brand.get("audience_location") or brand.get("audience_country") or "")
     country_code = _serpapi_country_code(location)
-    if country_code:
-        params["gl"] = country_code
-    if spec["engine"] == "google_maps":
-        params["type"] = "search"
-    response = await client.get("https://serpapi.com/search.json", params=params)
-    response.raise_for_status()
-    payload = response.json()
-    candidates = _serpapi_competitors_from_payload(payload, str(spec["result_type"]), 5)
-    candidates = _filter_relevant_competitors(suite, language, str(spec["result_type"]), candidates)
     unique: list[dict[str, Any]] = []
-    for item in candidates:
-        url = str(item.get("url") or "")
-        marker = url or str(item.get("title") or "").casefold()
-        if marker in existing_urls:
-            continue
-        existing_urls.add(marker)
-        unique.append(item)
-        if len(unique) >= 5:
-            break
+    target_count = 5
+    search_terms = terms[:5]
+    if spec["engine"] == "google_maps":
+        search_terms = [term for term in terms if location and location in term][:3] or terms[:3]
+    for term in search_terms:
+        query = term
+        if spec.get("site"):
+            query = f"{spec['site']} {term}"
+        params: dict[str, Any] = {
+            "api_key": api_key,
+            "engine": spec["engine"],
+            "q": query,
+            "hl": "ar" if str(language).startswith("ar") else "he" if str(language).startswith("he") else "en",
+            "num": 10,
+        }
+        if country_code:
+            params["gl"] = country_code
+        if spec["engine"] == "google_maps":
+            params["type"] = "search"
+        response = await client.get("https://serpapi.com/search.json", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        candidates = _serpapi_competitors_from_payload(payload, str(spec["result_type"]), 8)
+        candidates = _filter_relevant_competitors(suite, language, str(spec["result_type"]), candidates)
+        for item in candidates:
+            url = str(item.get("url") or "")
+            marker = url or str(item.get("title") or "").casefold()
+            if marker in existing_urls:
+                continue
+            existing_urls.add(marker)
+            unique.append(item)
+            if len(unique) >= target_count:
+                return unique
     return unique
 
 
