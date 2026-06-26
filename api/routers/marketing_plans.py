@@ -989,8 +989,9 @@ def _demand_supply_unavailable_signals(planner: dict[str, Any], language: str) -
 
 
 def _missing_platform_google_ads_config() -> list[str]:
+    customer_id = settings.google_ads_customer_id or settings.google_ads_login_customer_id
     required = {
-        "GOOGLE_ADS_CUSTOMER_ID": settings.google_ads_customer_id,
+        "GOOGLE_ADS_CUSTOMER_ID": customer_id,
         "GOOGLE_ADS_REFRESH_TOKEN": settings.google_ads_refresh_token,
         "GOOGLE_ADS_CLIENT_ID": settings.google_ads_client_id,
         "GOOGLE_ADS_CLIENT_SECRET": settings.google_ads_client_secret,
@@ -1004,7 +1005,7 @@ def _google_ads_keyword_planner_credentials() -> tuple[str, str, str, list[str]]
     if missing:
         return "", "", "platform_missing", missing
     return (
-        str(settings.google_ads_customer_id or "").strip(),
+        str(settings.google_ads_customer_id or settings.google_ads_login_customer_id or "").strip(),
         str(settings.google_ads_refresh_token or "").strip(),
         "platform",
         [],

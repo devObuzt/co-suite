@@ -359,6 +359,7 @@ async def test_demand_supply_saves_clear_warning_state_when_google_ads_unavailab
         raise AssertionError("Google Ads should not be called when platform config is missing")
 
     monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_login_customer_id", "")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_client_secret", "")
@@ -422,6 +423,43 @@ async def test_demand_supply_uses_platform_google_ads_credentials(monkeypatch):
     assert intelligence["demand_supply"]["credential_source"] == "platform"
     assert intelligence["demand_supply"]["warning"] is None
     assert intelligence["demand_supply"]["summary"]["average_monthly_searches"] == 500
+
+
+@pytest.mark.asyncio
+async def test_demand_supply_uses_login_customer_id_as_customer_fallback(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "industry": "تعليم تداول", "services": ["دورات تداول"]},
+        connections={},
+        strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "دورات تداول"}]}},
+    )
+    calls = []
+
+    async def fake_fetch_keyword_planner_ideas(customer_id, refresh_token, *_args, **_kwargs):
+        calls.append((customer_id, refresh_token))
+        return {
+            "keyword_metrics": [{"keyword": "دورات تداول", "average_monthly_searches": 500, "competition_index": 44}],
+            "suggested_keywords": [],
+            "summary": {},
+        }
+
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_login_customer_id", "1520081637")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "platform-client")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_secret", "platform-secret")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_developer_token", "platform-dev-token")
+    monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
+
+    intelligence = await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
+
+    assert calls == [("1520081637", "platform-refresh-token")]
+    assert intelligence["demand_supply"]["credential_source"] == "platform"
+    assert intelligence["demand_supply"]["missing_config"] == []
+    assert intelligence["demand_supply"]["warning"] is None
 
 
 @pytest.mark.asyncio
