@@ -27,8 +27,13 @@ LANGUAGE_CONSTANTS = {
 
 GEO_TARGET_CONSTANTS = {
     "israel": "geoTargetConstants/2376",
+    "إسرائيل": "geoTargetConstants/2376",
+    "اسرائيل": "geoTargetConstants/2376",
+    "ישראל": "geoTargetConstants/2376",
     "il": "geoTargetConstants/2376",
     "palestine": "geoTargetConstants/2275",
+    "فلسطين": "geoTargetConstants/2275",
+    "פלסטין": "geoTargetConstants/2275",
     "ps": "geoTargetConstants/2275",
     "united states": "geoTargetConstants/2840",
     "usa": "geoTargetConstants/2840",
@@ -62,8 +67,28 @@ def language_constant(language: str | None) -> str:
     return LANGUAGE_CONSTANTS.get(marker) or LANGUAGE_CONSTANTS.get(marker[:2]) or LANGUAGE_CONSTANTS["en"]
 
 
-def geo_target_constants(country_or_location: str | None) -> list[str]:
-    text = str(country_or_location or "").strip()
+def _location_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key in ("name", "label", "country", "city", "location", "audience_location"):
+            if value.get(key):
+                parts.append(_location_text(value.get(key)))
+        for key in ("countries", "cities", "regions"):
+            nested = value.get(key)
+            if isinstance(nested, list):
+                parts.extend(_location_text(item) for item in nested[:4])
+            elif nested:
+                parts.append(_location_text(nested))
+        return " ".join(part for part in parts if part).strip()
+    if isinstance(value, list):
+        return " ".join(part for part in (_location_text(item) for item in value[:4]) if part).strip()
+    return str(value or "").strip()
+
+
+def geo_target_constants(country_or_location: Any) -> list[str]:
+    text = _location_text(country_or_location)
     if not text:
         return []
     if text.startswith("geoTargetConstants/"):
@@ -73,7 +98,12 @@ def geo_target_constants(country_or_location: str | None) -> list[str]:
     lowered = text.casefold()
     matches = []
     for key, resource_name in GEO_TARGET_CONSTANTS.items():
-        if key in lowered:
+        marker = key.casefold()
+        if len(marker) <= 2:
+            found = any(token == marker for token in lowered.replace("/", " ").replace(",", " ").split())
+        else:
+            found = marker in lowered
+        if found:
             matches.append(resource_name)
     return list(dict.fromkeys(matches))
 
@@ -157,6 +187,28 @@ def _keyword_idea_request(keywords: list[str], language: str | None, location: s
     return body
 
 
+def _google_ads_error_detail(payload: dict[str, Any] | None, fallback: str = "Google Ads request failed") -> str:
+    error = (payload or {}).get("error") if isinstance(payload, dict) else {}
+    message = str((error or {}).get("message") or fallback).strip()
+    details: list[str] = []
+    for detail in (error or {}).get("details") or []:
+        for item in detail.get("errors") or []:
+            code = item.get("errorCode") or item.get("error_code") or {}
+            code_text = next((f"{key}: {value}" for key, value in code.items() if value), "")
+            field_path = ".".join(
+                str(part.get("fieldName") or part.get("field_name") or "")
+                for part in (item.get("location") or {}).get("fieldPathElements", [])
+                if part.get("fieldName") or part.get("field_name")
+            )
+            item_message = str(item.get("message") or "").strip()
+            parts = [part for part in (code_text, field_path, item_message) if part]
+            if parts:
+                details.append(" | ".join(parts))
+    if details:
+        return f"{message} Details: " + "; ".join(details[:3])
+    return message
+
+
 async def fetch_keyword_planner_ideas(
     customer_id: str,
     refresh_token: str,
@@ -173,12 +225,12 @@ async def fetch_keyword_planner_ideas(
         async with httpx.AsyncClient(timeout=45) as client:
             resp = await client.post(
                 f"{GOOGLE_ADS_API}/customers/{_clean_customer_id(customer_id)}:generateKeywordIdeas",
-                headers=_headers(access_token),
+                headers=_headers(access_token, customer_id),
                 json=body,
             )
         if resp.status_code >= 400:
             try:
-                detail = resp.json().get("error", {}).get("message", "Google Ads Keyword Planner request failed")
+                detail = _google_ads_error_detail(resp.json(), "Google Ads Keyword Planner request failed")
             except Exception:
                 detail = resp.text or "Google Ads Keyword Planner request failed"
             raise RuntimeError(detail)
@@ -291,14 +343,14 @@ async def refresh_google_ads_access_token(refresh_token: str) -> str:
         return resp.json()["access_token"]
 
 
-def _headers(access_token: str) -> dict:
+def _headers(access_token: str, customer_id: str | None = None) -> dict:
     headers = {
         "Authorization": f"Bearer {access_token}",
         "developer-token": settings.google_ads_developer_token,
         "Content-Type": "application/json",
     }
     login_customer_id = _clean_customer_id(settings.google_ads_login_customer_id)
-    if login_customer_id:
+    if login_customer_id and login_customer_id != _clean_customer_id(customer_id or ""):
         headers["login-customer-id"] = login_customer_id
     return headers
 

@@ -43,6 +43,54 @@ def test_build_keyword_planner_summary_scores_demand_and_competition():
     assert summary["demand_level"] == "MEDIUM"
 
 
+def test_geo_target_constants_handles_structured_arabic_israel_location():
+    location = {"scope": "custom", "countries": ["إسرائيل"], "cities": []}
+
+    assert google_ads.geo_target_constants(location) == ["geoTargetConstants/2376"]
+
+
+def test_geo_target_constants_does_not_match_us_inside_countries():
+    location = {"scope": "custom", "countries": ["Jordan"], "cities": []}
+
+    assert google_ads.geo_target_constants(location) == ["geoTargetConstants/2400"]
+
+
+def test_google_ads_error_detail_includes_field_and_error_code():
+    payload = {
+        "error": {
+            "message": "Request contains an invalid argument.",
+            "details": [
+                {
+                    "errors": [
+                        {
+                            "errorCode": {"requestError": "RESOURCE_NAME_MALFORMED"},
+                            "message": "Invalid resource name.",
+                            "location": {"fieldPathElements": [{"fieldName": "language"}]},
+                        }
+                    ]
+                }
+            ],
+        }
+    }
+
+    detail = google_ads._google_ads_error_detail(payload)
+
+    assert "Request contains an invalid argument" in detail
+    assert "requestError: RESOURCE_NAME_MALFORMED" in detail
+    assert "language" in detail
+    assert "Invalid resource name" in detail
+
+
+def test_google_ads_headers_omit_login_customer_when_same_customer(monkeypatch):
+    monkeypatch.setattr(google_ads.settings, "google_ads_login_customer_id", "123-456-7890")
+    monkeypatch.setattr(google_ads.settings, "google_ads_developer_token", "dev-token")
+
+    headers = google_ads._headers("access-token", "1234567890")
+
+    assert headers["developer-token"] == "dev-token"
+    assert "login-customer-id" not in headers
+
+
 def test_keyword_planner_empty_response_returns_warning(monkeypatch):
     async def fake_refresh_google_ads_access_token(_refresh_token):
         return "access-token"
