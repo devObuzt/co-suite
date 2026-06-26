@@ -462,6 +462,18 @@ async def test_demand_supply_uses_login_customer_id_as_customer_fallback(monkeyp
     assert intelligence["demand_supply"]["warning"] is None
 
 
+def test_public_demand_supply_warning_localizes_google_ads_permission_error():
+    warning = (
+        "The caller does not have permission Details: "
+        "authorizationError: USER_PERMISSION_DENIED"
+    )
+
+    public = marketing_plans._public_demand_supply_warning(warning, "ar", "platform")
+
+    assert "حساب Google Ads المركزي" in public
+    assert "GOOGLE_ADS_CUSTOMER_ID" in public
+
+
 @pytest.mark.asyncio
 async def test_demand_supply_queries_hebrew_for_arabic_israel_market(monkeypatch):
     suite = Suite(

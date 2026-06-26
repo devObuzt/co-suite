@@ -1022,9 +1022,14 @@ def _platform_google_ads_missing_warning(missing: list[str], language: str) -> s
 def _public_demand_supply_warning(warning: str | None, language: str, credential_source: str) -> str | None:
     if not warning:
         return None
+    marker = str(warning).casefold()
+    if str(language).startswith("ar"):
+        if "user_permission_denied" in marker or "does not have permission" in marker:
+            return "حساب Google Ads المركزي لا يملك صلاحية على حساب الإعلانات المستخدم لقراءة Keyword Planner. حدّث GOOGLE_ADS_CUSTOMER_ID أو GOOGLE_ADS_LOGIN_CUSTOMER_ID لحساب يملك صلاحية، ثم أعد النشر."
+        if "unsupported_version" in marker or "version" in marker and "deprecated" in marker:
+            return "نسخة Google Ads API المستخدمة غير مدعومة حاليًا. حدّث خدمة الباكند ثم أعد التوليد."
     if credential_source in {"platform", "platform_missing"}:
         return str(warning)
-    marker = str(warning).casefold()
     missing_connection = "account is not connected" in marker or "refresh_token" in marker or "customer_id" in marker
     if credential_source == "platform" and not missing_connection:
         return str(warning)
