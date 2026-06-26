@@ -1031,18 +1031,32 @@ def _normalize_section(section_id: str, fallback_title: str, source: dict[str, A
     }
 
 
+def _language_code(value: str | None) -> str:
+    marker = str(value or "").strip().casefold()
+    if not marker:
+        return ""
+    if marker.startswith("ar") or marker in {"arabic", "العربية", "عربي", "arab"}:
+        return "ar"
+    if marker.startswith("he") or marker in {"hebrew", "עברית", "hebr"}:
+        return "he"
+    if marker.startswith("en") or marker in {"english", "إنجليزي", "انجليزي"}:
+        return "en"
+    return marker
+
+
 def infer_plan_language(suite: Suite, requested_language: str | None = None) -> str:
     if requested_language:
-        return requested_language
+        return _language_code(requested_language)
     brand = _dict(suite.brand)
     strategy = _dict(suite.strategy)
     for value in (
         strategy.get("language"),
         brand.get("app_language"),
+        brand.get("primary_language"),
         (_list(brand.get("audience_languages")) or [None])[0],
     ):
         if isinstance(value, str) and value:
-            return value
+            return _language_code(value)
     return "en"
 
 

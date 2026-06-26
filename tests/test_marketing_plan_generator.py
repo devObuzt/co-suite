@@ -23,6 +23,20 @@ def make_suite() -> Suite:
     )
 
 
+def test_infer_plan_language_normalizes_arabic_language_name():
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Arabic Suite",
+        slug="arabic-suite",
+        brand={"audience_languages": ["العربية"]},
+        strategy={},
+        connections={},
+    )
+
+    assert mpg.infer_plan_language(suite) == "ar"
+
+
 def complete_plan_payload(title: str = "Connec plan") -> dict:
     return {
         "cover": {"title": title, "subtitle": "Practical growth"},
