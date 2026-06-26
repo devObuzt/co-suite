@@ -8,7 +8,7 @@ from ..core.config import settings
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-GOOGLE_ADS_API = "https://googleads.googleapis.com/v20"
+GOOGLE_ADS_API = "https://googleads.googleapis.com/v24"
 GOOGLE_ADS_SCOPE = " ".join([
     "https://www.googleapis.com/auth/adwords",
     "openid",
