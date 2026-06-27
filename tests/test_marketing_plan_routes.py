@@ -863,12 +863,14 @@ async def test_generate_personas_route_saves_personas_and_preserves_market_data(
     async def fake_get_owned_suite(*_args, **_kwargs):
         return suite
 
-    async def fake_generate_personas(suite_arg, language, *_args, **_kwargs):
+    async def fake_generate_personas(suite_arg, language, *_args, existing_persona_values=None, append=False, **_kwargs):
         existing = marketing_plans.normalize_marketing_intelligence(
             suite_arg.strategy["marketing_intelligence"],
             marketing_plans.suite_research_payload(suite_arg),
             language,
         )
+        assert existing_persona_values == []
+        assert append is False
         return {
             **existing,
             "phase": "personas",
@@ -887,7 +889,7 @@ async def test_generate_personas_route_saves_personas_and_preserves_market_data(
                     "solution": "حل واضح",
                     "avatar_seed": f"persona-{index}",
                 }
-                for index in range(1, 11)
+                for index in range(1, 6)
             ],
         }
 
@@ -912,11 +914,101 @@ async def test_generate_personas_route_saves_personas_and_preserves_market_data(
     intelligence = response["intelligence"]
     assert db.committed is True
     assert intelligence["status"] == "personas_ready"
-    assert len(intelligence["personas"]) == 10
+    assert len(intelligence["personas"]) == 5
     assert intelligence["keywords"][0]["text"] == "دورات تداول"
     assert intelligence["competitors"][0]["name"] == "CFI"
     assert usage_calls[0]["operation"] == "marketing_personas.generate"
-    assert usage_calls[0]["metadata"]["personas"] == 10
+    assert usage_calls[0]["metadata"]["personas"] == 5
+
+
+@pytest.mark.asyncio
+async def test_generate_more_personas_route_appends_existing_personas(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "audience_language": "ar", "services": ["دورات تداول"]},
+        strategy={
+            "marketing_intelligence": {
+                "personas": [
+                    {
+                        "id": "persona-1",
+                        "name": "ليان",
+                        "age": 28,
+                        "gender": "female",
+                        "economic_status": "متوسطة",
+                        "profession": "صاحبة مشروع",
+                        "challenge": "تحدي",
+                        "need": "حاجة",
+                        "motivation": "دافع",
+                        "solution": "حل",
+                    }
+                ]
+            }
+        },
+    )
+    user = User(id="user-1", email="owner@example.com", full_name="Owner", hashed_password="x")
+    db = FakeDb()
+
+    async def fake_get_owned_suite(*_args, **_kwargs):
+        return suite
+
+    async def fake_generate_personas(suite_arg, language, *_args, existing_persona_values=None, append=False, **_kwargs):
+        assert language == "ar"
+        assert existing_persona_values == ["ليان"]
+        assert append is True
+        existing = marketing_plans.normalize_marketing_intelligence(
+            suite_arg.strategy["marketing_intelligence"],
+            marketing_plans.suite_research_payload(suite_arg),
+            language,
+        )
+        return {
+            **existing,
+            "phase": "personas",
+            "status": "personas_ready",
+            "personas": [
+                *existing["personas"],
+                *[
+                    {
+                        "id": f"persona-more-{index}",
+                        "name": f"عميل إضافي {index}",
+                        "age": 35 + index,
+                        "gender": "male",
+                        "economic_status": "مستقرة",
+                        "profession": "مستقل",
+                        "challenge": "تحدي إضافي",
+                        "need": "حاجة إضافية",
+                        "motivation": "دافع إضافي",
+                        "solution": "حل إضافي",
+                    }
+                    for index in range(1, 6)
+                ],
+            ],
+        }
+
+    async def fake_record_provider_usage(*_args, **_kwargs):
+        return None
+
+    async def fake_record_audit_log(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans, "generate_marketing_customer_personas_research", fake_generate_personas)
+    monkeypatch.setattr(marketing_plans, "record_provider_usage", fake_record_provider_usage)
+    monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
+
+    response = await marketing_plans.generate_marketing_personas(
+        "suite-1",
+        marketing_plans.MarketingStageRequest(language="ar", existing_values=["ليان"]),
+        user,
+        db,  # type: ignore[arg-type]
+    )
+
+    personas = response["intelligence"]["personas"]
+    assert len(personas) == 6
+    assert personas[0]["name"] == "ليان"
+    assert personas[-1]["name"] == "عميل إضافي 5"
 
 
 @pytest.mark.asyncio

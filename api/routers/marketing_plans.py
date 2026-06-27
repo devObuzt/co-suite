@@ -1585,27 +1585,41 @@ async def generate_marketing_personas(
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or MarketingStageRequest()
     output_language = infer_plan_language(suite, request_data.language)
-    intelligence = await generate_marketing_customer_personas_research(suite, output_language)
+    existing_values = _unique_strings(request_data.existing_values, limit=20)
+    append = bool(existing_values)
+    intelligence = await generate_marketing_customer_personas_research(
+        suite,
+        output_language,
+        count=5,
+        existing_persona_values=existing_values,
+        append=append,
+    )
     _save_marketing_intelligence(suite, intelligence)
     personas = intelligence.get("personas") if isinstance(intelligence.get("personas"), list) else []
     await record_provider_usage(
         db,
         provider=settings.ai_text_provider,
-        operation="marketing_personas.generate",
+        operation="marketing_personas.generate_more" if append else "marketing_personas.generate",
         model=settings.openai_text_model if settings.ai_text_provider == "openai" else settings.anthropic_text_model,
         status="success",
         suite_id=suite.id,
         user_id=current_user.id,
-        metadata={"personas": len(personas), "language": output_language, "cost_basis": "missing_provider_usage"},
+        metadata={
+            "personas": len(personas),
+            "batch_size": 5,
+            "append": append,
+            "language": output_language,
+            "cost_basis": "missing_provider_usage",
+        },
     )
     await record_audit_log(
         db,
-        action="marketing.personas.generate",
+        action="marketing.personas.generate_more" if append else "marketing.personas.generate",
         resource_type="marketing_intelligence",
         resource_id=suite.id,
         suite_id=suite.id,
         actor=current_user,
-        metadata={"personas": len(personas)},
+        metadata={"personas": len(personas), "batch_size": 5, "append": append},
     )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")

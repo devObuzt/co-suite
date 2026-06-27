@@ -1205,6 +1205,8 @@ def infer_plan_language(suite: Suite, requested_language: str | None = None) -> 
     for value in (
         strategy.get("language"),
         brand.get("app_language"),
+        brand.get("audience_language"),
+        brand.get("target_audience_language"),
         brand.get("primary_language"),
         (_list(brand.get("audience_languages")) or [None])[0],
     ):
@@ -1367,13 +1369,17 @@ def build_marketing_customer_personas_prompt(
     suite_payload: dict[str, Any],
     existing_intelligence: dict[str, Any],
     language: str,
+    count: int = 5,
+    existing_personas: list[dict[str, Any]] | None = None,
 ) -> str:
     lang_name = LANG_NAMES.get(language, language or "English")
     payload_json = _json_for_prompt(suite_payload)
     intelligence_json = _json_for_prompt(existing_intelligence)
+    existing_personas_json = _json_for_prompt({"personas": existing_personas or []})
     return f"""Analyze the target audience and build fictional customer personas for this OneShare marketing plan.
 
 Language: {lang_name}.
+ALL visible persona fields must be written in {lang_name}. Do not use English visible text unless the requested audience language is English.
 Return STRICT JSON only. No markdown, no comments, no surrounding text.
 Return one top-level key: "marketing_intelligence".
 
@@ -1401,7 +1407,7 @@ Shape:
 }}
 
 Rules:
-- Return exactly 10 personas.
+- Return exactly {count} personas.
 - Make the profiles diverse across economic status, profession/career, gender, and age/generation.
 - Include young adults, middle-age customers, and older customers when relevant.
 - Include practical professions/life roles, not generic segments.
@@ -1409,6 +1415,10 @@ Rules:
 - Do not replace keywords, competitors, demand_supply, demand_signals, supply_signals, or opportunities.
 - Keep every visible field in the requested language except stable enum-like ids.
 - Personas are fictional but should be plausible for the target country, audience language, and business category.
+- Do not repeat any existing persona by name, profession, need, or challenge.
+
+Existing personas to avoid:
+{existing_personas_json}
 
 Existing market intelligence:
 {intelligence_json}
@@ -1498,12 +1508,30 @@ async def generate_marketing_customer_personas_research(
     suite: Suite,
     language: str | None,
     planning_inputs: dict[str, Any] | None = None,
+    count: int = 5,
+    existing_persona_values: list[str] | None = None,
+    append: bool = False,
 ) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
     payload = suite_research_payload(suite, planning_inputs)
     existing = _dict(_dict(suite.strategy).get("marketing_intelligence"))
     existing = normalize_marketing_intelligence(existing, payload, output_language) if existing else normalize_marketing_intelligence({}, payload, output_language)
-    prompt = build_marketing_customer_personas_prompt(payload, existing, output_language)
+    existing_values = {str(value or "").strip().casefold() for value in (existing_persona_values or []) if str(value or "").strip()}
+    existing_personas = _normalize_personas(existing.get("personas"), output_language)
+    if existing_values:
+        existing_personas = [
+            persona
+            for persona in existing_personas
+            if str(persona.get("name") or "").strip().casefold() in existing_values
+            or str(persona.get("id") or "").strip().casefold() in existing_values
+        ] or existing_personas
+    prompt = build_marketing_customer_personas_prompt(
+        payload,
+        existing,
+        output_language,
+        count=count,
+        existing_personas=existing_personas if append or existing_values else [],
+    )
     try:
         raw = await call_text_ai(
             provider="anthropic",
@@ -1519,24 +1547,48 @@ async def generate_marketing_customer_personas_research(
         log.warning("Customer personas AI failed; using profile-based personas: %s", exc)
         brand = _dict(payload.get("brand"))
         strategy = _dict(payload.get("strategy"))
+        fallback = _fallback_customer_personas(brand, strategy, output_language)
+        if existing_values:
+            fallback = [
+                persona
+                for persona in fallback
+                if str(persona.get("name") or "").strip().casefold() not in existing_values
+                and str(persona.get("id") or "").strip().casefold() not in existing_values
+            ]
         incoming = {
             "phase": "personas",
-            "personas": _fallback_customer_personas(brand, strategy, output_language),
+            "personas": fallback[:count],
             "warnings": ["AI provider failed during customer persona generation; showing profile-based personas."],
         }
-    personas = _normalize_personas(incoming.get("personas"), output_language)
-    if len(personas) < 10:
+    new_personas = _normalize_personas(incoming.get("personas"), output_language, limit=count)
+    if len(new_personas) < count:
         brand = _dict(payload.get("brand"))
         strategy = _dict(payload.get("strategy"))
         fallback = _normalize_personas(_fallback_customer_personas(brand, strategy, output_language), output_language)
-        seen = {str(item.get("id") or item.get("name") or "").casefold() for item in personas}
+        seen = {
+            str(item.get("id") or item.get("name") or "").casefold()
+            for item in [*(existing_personas if append else []), *new_personas]
+        }
+        seen.update(existing_values)
         for item in fallback:
             marker = str(item.get("id") or item.get("name") or "").casefold()
             if marker not in seen:
-                personas.append(item)
+                new_personas.append(item)
                 seen.add(marker)
-            if len(personas) >= 10:
+            if len(new_personas) >= count:
                 break
+    if append:
+        merged_personas: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in [*_normalize_personas(existing.get("personas"), output_language), *new_personas]:
+            marker = str(item.get("id") or item.get("name") or "").casefold()
+            if not marker or marker in seen:
+                continue
+            seen.add(marker)
+            merged_personas.append(item)
+        personas = merged_personas[:10]
+    else:
+        personas = new_personas[:count]
     merged = {
         **existing,
         **incoming,
@@ -1553,7 +1605,7 @@ async def generate_marketing_customer_personas_research(
             *_list(incoming.get("source_links")),
         ],
         "warnings": _list(incoming.get("warnings")),
-        "personas": personas[:10],
+        "personas": personas,
     }
     return normalize_marketing_intelligence(merged, payload, output_language)
 

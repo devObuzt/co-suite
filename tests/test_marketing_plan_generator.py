@@ -352,14 +352,19 @@ def test_normalize_marketing_intelligence_preserves_customer_personas():
     assert persona["avatar_seed"]
 
 
-def test_build_customer_personas_prompt_requests_ten_diverse_profiles():
+def test_build_customer_personas_prompt_requests_five_diverse_profiles_in_audience_language():
     prompt = mpg.build_marketing_customer_personas_prompt(
         mpg.suite_research_payload(make_suite()),
         {"keywords": [{"text": "إدارة سوشيال"}], "competitors": [{"name": "Market peer"}]},
         "ar",
+        count=5,
+        existing_personas=[{"name": "ليان", "profession": "صاحبة مشروع"}],
     )
 
-    assert "10" in prompt
+    assert "exactly 5 personas" in prompt
+    assert "ALL visible persona fields must be written in Arabic" in prompt
+    assert "ليان" in prompt
+    assert "Do not repeat" in prompt
     assert "personas" in prompt
     assert "economic_status" in prompt
     assert "profession" in prompt
@@ -382,12 +387,77 @@ async def test_generate_marketing_customer_personas_returns_diverse_fallback_whe
 
     personas = intelligence["personas"]
     assert intelligence["status"] == "personas_ready"
-    assert len(personas) == 10
+    assert len(personas) == 5
     assert len({item["gender"] for item in personas}) >= 2
-    assert len({item["economic_status"] for item in personas}) >= 3
+    assert len({item["economic_status"] for item in personas}) >= 2
     assert len({item["profession"] for item in personas}) >= 5
     assert all(item["challenge"] and item["need"] and item["motivation"] and item["solution"] for item in personas)
     assert all(item["avatar_seed"] for item in personas)
+
+
+@pytest.mark.asyncio
+async def test_generate_marketing_customer_personas_appends_five_more_without_repeating(monkeypatch):
+    suite = make_suite()
+    suite.strategy = {
+        "marketing_intelligence": {
+            "personas": [
+                {
+                    "id": "persona-1",
+                    "name": "ليان",
+                    "age": 28,
+                    "gender": "female",
+                    "economic_status": "متوسطة",
+                    "profession": "صاحبة مشروع صغير",
+                    "challenge": "تحدي",
+                    "need": "حاجة",
+                    "motivation": "دافع",
+                    "solution": "حل",
+                }
+            ]
+        }
+    }
+
+    async def fake_call_text_ai(**kwargs):
+        prompt = kwargs["messages"][0]["content"]
+        assert "Do not repeat" in prompt
+        assert "ليان" in prompt
+        return json.dumps(
+            {
+                "marketing_intelligence": {
+                    "phase": "personas",
+                    "personas": [
+                        {
+                            "id": f"new-persona-{index}",
+                            "name": f"عميل جديد {index}",
+                            "age": 30 + index,
+                            "gender": "male" if index % 2 else "female",
+                            "economic_status": "متوسطة",
+                            "profession": f"مهنة {index}",
+                            "challenge": "تحدي جديد",
+                            "need": "حاجة جديدة",
+                            "motivation": "دافع جديد",
+                            "solution": "حل جديد",
+                        }
+                        for index in range(1, 6)
+                    ],
+                }
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+
+    intelligence = await mpg.generate_marketing_customer_personas_research(
+        suite,
+        "ar",
+        existing_persona_values=["ليان"],
+        append=True,
+    )
+
+    personas = intelligence["personas"]
+    assert len(personas) == 6
+    assert personas[0]["name"] == "ليان"
+    assert [item["name"] for item in personas[1:]] == [f"عميل جديد {index}" for index in range(1, 6)]
 
 
 def test_competitor_only_intelligence_does_not_fill_demand_supply_fallbacks():
