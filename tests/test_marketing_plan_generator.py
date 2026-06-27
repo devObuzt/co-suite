@@ -316,6 +316,80 @@ def test_build_marketing_demand_supply_prompt_uses_existing_competitors():
     assert "Do not replace the competitor list" in prompt
 
 
+def test_normalize_marketing_intelligence_preserves_customer_personas():
+    payload = mpg.suite_research_payload(make_suite())
+
+    intelligence = mpg.normalize_marketing_intelligence(
+        {
+            "phase": "personas",
+            "keywords": [{"text": "إدارة سوشيال"}],
+            "competitors": [{"name": "Market peer", "url": "https://peer.example"}],
+            "personas": [
+                {
+                    "name": "ليان",
+                    "age": 28,
+                    "gender": "female",
+                    "economic_status": "متوسطة",
+                    "profession": "صاحبة مشروع صغير",
+                    "challenge": "لا تعرف كيف تحول المتابعين لعملاء.",
+                    "need": "عرض واضح وسهل الفهم.",
+                    "motivation": "تريد نمو مبيعات بدون هدر ميزانية.",
+                    "solution": "نوضح العرض ونبني محتوى يقود للاستفسار.",
+                }
+            ],
+        },
+        payload,
+        "ar",
+    )
+
+    assert intelligence["status"] == "personas_ready"
+    assert intelligence["keywords"][0]["text"] == "إدارة سوشيال"
+    assert intelligence["competitors"][0]["name"] == "Market peer"
+    persona = intelligence["personas"][0]
+    assert persona["name"] == "ليان"
+    assert persona["age"] == 28
+    assert persona["economic_status"] == "متوسطة"
+    assert persona["avatar_seed"]
+
+
+def test_build_customer_personas_prompt_requests_ten_diverse_profiles():
+    prompt = mpg.build_marketing_customer_personas_prompt(
+        mpg.suite_research_payload(make_suite()),
+        {"keywords": [{"text": "إدارة سوشيال"}], "competitors": [{"name": "Market peer"}]},
+        "ar",
+    )
+
+    assert "10" in prompt
+    assert "personas" in prompt
+    assert "economic_status" in prompt
+    assert "profession" in prompt
+    assert "challenge" in prompt
+    assert "motivation" in prompt
+    assert "solution" in prompt
+    assert "Arabic" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_marketing_customer_personas_returns_diverse_fallback_when_ai_fails(monkeypatch):
+    suite = make_suite()
+
+    async def failing_call_text_ai(**_kwargs):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(mpg, "call_text_ai", failing_call_text_ai)
+
+    intelligence = await mpg.generate_marketing_customer_personas_research(suite, "ar")
+
+    personas = intelligence["personas"]
+    assert intelligence["status"] == "personas_ready"
+    assert len(personas) == 10
+    assert len({item["gender"] for item in personas}) >= 2
+    assert len({item["economic_status"] for item in personas}) >= 3
+    assert len({item["profession"] for item in personas}) >= 5
+    assert all(item["challenge"] and item["need"] and item["motivation"] and item["solution"] for item in personas)
+    assert all(item["avatar_seed"] for item in personas)
+
+
 def test_competitor_only_intelligence_does_not_fill_demand_supply_fallbacks():
     payload = mpg.suite_research_payload(make_suite())
 

@@ -25,6 +25,7 @@ from ..services.google_ads import build_keyword_planner_summary, fetch_keyword_p
 from ..services.admin_audit import record_audit_log, record_provider_usage
 from ..services.provider_pricing import estimate_google_ads_keyword_planner_cost_usd, estimate_serpapi_cost_usd
 from ..services.marketing_plan_generator import (
+    generate_marketing_customer_personas_research,
     infer_plan_language,
     normalize_marketing_action_plan,
     normalize_marketing_intelligence,
@@ -177,6 +178,7 @@ def _empty_marketing_intelligence(language: str) -> dict[str, Any]:
         "demand_signals": [],
         "supply_signals": [],
         "opportunities": [],
+        "personas": [],
         "source_links": [],
         "warnings": [],
     }
@@ -1568,6 +1570,42 @@ async def generate_marketing_demand_supply(
         suite_id=suite.id,
         actor=current_user,
         metadata={"summary": summary},
+    )
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "market_ready")
+
+
+@router.post("/suites/{suite_id}/marketing-plan/personas/generate")
+async def generate_marketing_personas(
+    suite_id: str,
+    payload: MarketingStageRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    request_data = payload or MarketingStageRequest()
+    output_language = infer_plan_language(suite, request_data.language)
+    intelligence = await generate_marketing_customer_personas_research(suite, output_language)
+    _save_marketing_intelligence(suite, intelligence)
+    personas = intelligence.get("personas") if isinstance(intelligence.get("personas"), list) else []
+    await record_provider_usage(
+        db,
+        provider=settings.ai_text_provider,
+        operation="marketing_personas.generate",
+        model=settings.openai_text_model if settings.ai_text_provider == "openai" else settings.anthropic_text_model,
+        status="success",
+        suite_id=suite.id,
+        user_id=current_user.id,
+        metadata={"personas": len(personas), "language": output_language, "cost_basis": "missing_provider_usage"},
+    )
+    await record_audit_log(
+        db,
+        action="marketing.personas.generate",
+        resource_type="marketing_intelligence",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"personas": len(personas)},
     )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")

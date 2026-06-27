@@ -842,6 +842,84 @@ async def test_generate_keywords_route_saves_keywords_and_records_usage(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_generate_personas_route_saves_personas_and_preserves_market_data(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "industry": "تعليم تداول", "services": ["دورات تداول"]},
+        strategy={
+            "marketing_intelligence": {
+                "keywords": [{"id": "kw-1", "text": "دورات تداول"}],
+                "competitors": [{"id": "competitor-1", "name": "CFI", "url": "https://cfi.example"}],
+            }
+        },
+    )
+    user = User(id="user-1", email="owner@example.com", full_name="Owner", hashed_password="x")
+    db = FakeDb()
+    usage_calls = []
+
+    async def fake_get_owned_suite(*_args, **_kwargs):
+        return suite
+
+    async def fake_generate_personas(suite_arg, language, *_args, **_kwargs):
+        existing = marketing_plans.normalize_marketing_intelligence(
+            suite_arg.strategy["marketing_intelligence"],
+            marketing_plans.suite_research_payload(suite_arg),
+            language,
+        )
+        return {
+            **existing,
+            "phase": "personas",
+            "status": "personas_ready",
+            "personas": [
+                {
+                    "id": f"persona-{index}",
+                    "name": f"عميل {index}",
+                    "age": 20 + index,
+                    "gender": "female" if index % 2 else "male",
+                    "economic_status": "متوسطة",
+                    "profession": "مستقل",
+                    "challenge": "تحدي واضح",
+                    "need": "حاجة واضحة",
+                    "motivation": "دافع واضح",
+                    "solution": "حل واضح",
+                    "avatar_seed": f"persona-{index}",
+                }
+                for index in range(1, 11)
+            ],
+        }
+
+    async def fake_record_provider_usage(_db, **kwargs):
+        usage_calls.append(kwargs)
+
+    async def fake_record_audit_log(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans, "generate_marketing_customer_personas_research", fake_generate_personas)
+    monkeypatch.setattr(marketing_plans, "record_provider_usage", fake_record_provider_usage)
+    monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
+
+    response = await marketing_plans.generate_marketing_personas(
+        "suite-1",
+        marketing_plans.MarketingStageRequest(language="ar"),
+        user,
+        db,  # type: ignore[arg-type]
+    )
+
+    intelligence = response["intelligence"]
+    assert db.committed is True
+    assert intelligence["status"] == "personas_ready"
+    assert len(intelligence["personas"]) == 10
+    assert intelligence["keywords"][0]["text"] == "دورات تداول"
+    assert intelligence["competitors"][0]["name"] == "CFI"
+    assert usage_calls[0]["operation"] == "marketing_personas.generate"
+    assert usage_calls[0]["metadata"]["personas"] == 10
+
+
+@pytest.mark.asyncio
 async def test_update_competitor_route_does_not_record_provider_usage(monkeypatch):
     suite = Suite(
         id="suite-1",

@@ -402,6 +402,77 @@ def _normalize_keywords(raw: Any, limit: int = 80) -> list[dict[str, Any]]:
     return keywords[:limit]
 
 
+def _persona_avatar_seed(name: str, gender: str, age: int | str) -> str:
+    return _stable_slug(f"{name}-{gender}-{age}", "persona")
+
+
+def _normalize_persona(raw: Any, index: int, language: str) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or raw.get("full_name") or raw.get("title") or "").strip()
+    profession = str(raw.get("profession") or raw.get("career") or raw.get("occupation") or "").strip()
+    challenge = str(raw.get("challenge") or raw.get("pain_point") or raw.get("problem") or "").strip()
+    need = str(raw.get("need") or raw.get("customer_need") or raw.get("job_to_be_done") or "").strip()
+    motivation = str(raw.get("motivation") or raw.get("trigger") or raw.get("driver") or "").strip()
+    solution = str(raw.get("solution") or raw.get("business_solution") or raw.get("how_we_help") or "").strip()
+    if not any([name, profession, challenge, need, motivation, solution]):
+        return None
+    try:
+        age = int(raw.get("age") or raw.get("age_years") or 0)
+    except (TypeError, ValueError):
+        age = 0
+    if age <= 0:
+        age = 24 + (index * 7 % 43)
+    gender = str(raw.get("gender") or raw.get("sex") or "").strip().lower()
+    if not gender:
+        gender = "female" if index % 2 else "male"
+    economic_status = str(
+        raw.get("economic_status")
+        or raw.get("income_level")
+        or raw.get("socioeconomic_status")
+        or raw.get("budget_level")
+        or ""
+    ).strip()
+    if not economic_status:
+        economic_status = {"ar": "متوسطة", "he": "בינוני"}.get(str(language)[:2], "middle income")
+    name = name or {"ar": f"شخصية {index}", "he": f"דמות {index}"}.get(str(language)[:2], f"Persona {index}")
+    avatar_prompt = str(raw.get("avatar_prompt") or raw.get("image_prompt") or "").strip()
+    if not avatar_prompt:
+        avatar_prompt = (
+            f"Small professional profile avatar for {name}, {age}, {gender}, {profession}. "
+            "Neutral background, realistic but generic, no logos."
+        )
+    return {
+        "id": str(raw.get("id") or _stable_slug(name, f"persona-{index}")).strip(),
+        "name": name,
+        "age": age,
+        "gender": gender,
+        "economic_status": economic_status,
+        "profession": profession,
+        "challenge": challenge,
+        "need": need,
+        "motivation": motivation,
+        "solution": solution,
+        "avatar_seed": str(raw.get("avatar_seed") or _persona_avatar_seed(name, gender, age)).strip(),
+        "avatar_prompt": avatar_prompt,
+    }
+
+
+def _normalize_personas(raw: Any, language: str, limit: int = 10) -> list[dict[str, Any]]:
+    personas: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(_list(raw), start=1):
+        persona = _normalize_persona(item, index, language)
+        if not persona:
+            continue
+        marker = str(persona.get("id") or persona.get("name") or "").casefold()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        personas.append(persona)
+    return personas[:limit]
+
+
 def _business_keywords(brand: dict[str, Any], strategy: dict[str, Any]) -> list[str]:
     keywords = _text_list(
         [
@@ -569,6 +640,83 @@ def _fallback_market_signals(
     return _text_list(demand, 10), _text_list(supply, 10), _text_list(opportunities, 10)
 
 
+def _fallback_customer_personas(
+    brand: dict[str, Any],
+    strategy: dict[str, Any],
+    language: str,
+) -> list[dict[str, Any]]:
+    services = _business_keywords(brand, strategy)[:4] or _text_list(brand.get("services") or brand.get("products"), 4)
+    service_text = ", ".join(services[:2]) if services else str(brand.get("industry") or brand.get("category") or "الخدمة").strip()
+    ar = str(language).startswith("ar")
+    he = str(language).startswith("he")
+    if ar:
+        templates = [
+            ("ليان", 28, "female", "متوسطة", "صاحبة مشروع صغير"),
+            ("أحمد", 41, "male", "مستقرة", "طبيب عيادة خاصة"),
+            ("سمر", 35, "female", "محدودة", "معلمة مدرسة"),
+            ("يوسف", 24, "male", "محدودة", "مستقل في بداية الطريق"),
+            ("نورا", 52, "female", "مرتفعة", "مديرة شركة عائلية"),
+            ("ماهر", 46, "male", "متوسطة", "صاحب متجر محلي"),
+            ("ريم", 31, "female", "متوسطة", "مسؤولة تسويق"),
+            ("كريم", 60, "male", "مستقرة", "مستثمر/صاحب أملاك"),
+            ("دانا", 22, "female", "محدودة", "طالبة جامعية"),
+            ("خالد", 38, "male", "مرتفعة", "مقاول خدمات"),
+        ]
+        challenge = "لا يعرف أي عرض يختار ولا يثق بسهولة بالرسائل العامة."
+        need = f"شرح واضح يربط {service_text} بنتيجة ملموسة لحياته أو عمله."
+        motivation = "يريد تقليل المخاطرة واتخاذ قرار أسرع بثقة."
+        solution = "نحوّل العرض إلى رسالة مباشرة: المشكلة، النتيجة، الدليل، وخطوة تواصل سهلة."
+    elif he:
+        templates = [
+            ("נועה", 28, "female", "בינוני", "בעלת עסק קטן"),
+            ("אדם", 41, "male", "יציב", "רופא עצמאי"),
+            ("מירה", 35, "female", "מוגבל", "מורה בבית ספר"),
+            ("יוסף", 24, "male", "מוגבל", "פרילנסר מתחיל"),
+            ("רונית", 52, "female", "גבוה", "מנהלת עסק משפחתי"),
+            ("מאיר", 46, "male", "בינוני", "בעל חנות מקומית"),
+            ("רים", 31, "female", "בינוני", "מנהלת שיווק"),
+            ("כרמל", 60, "male", "יציב", "משקיע"),
+            ("דנה", 22, "female", "מוגבל", "סטודנטית"),
+            ("חאלד", 38, "male", "גבוה", "קבלן שירותים"),
+        ]
+        challenge = "לא בטוח איזה פתרון מתאים לו ולא סומך על מסרים כלליים."
+        need = f"הסבר ברור שמחבר את {service_text} לתוצאה מעשית."
+        motivation = "רוצה לצמצם סיכון ולקבל החלטה בביטחון."
+        solution = "מחברים בעיה, תוצאה, הוכחת אמון ופעולת פנייה פשוטה."
+    else:
+        templates = [
+            ("Leen", 28, "female", "middle income", "small business owner"),
+            ("Adam", 41, "male", "comfortable", "private clinic doctor"),
+            ("Mira", 35, "female", "limited income", "school teacher"),
+            ("Yousef", 24, "male", "limited income", "early freelancer"),
+            ("Nora", 52, "female", "high income", "family business director"),
+            ("Maher", 46, "male", "middle income", "local store owner"),
+            ("Reem", 31, "female", "middle income", "marketing manager"),
+            ("Kareem", 60, "male", "comfortable", "investor"),
+            ("Dana", 22, "female", "limited income", "student"),
+            ("Khaled", 38, "male", "high income", "service contractor"),
+        ]
+        challenge = "Unsure which offer fits and does not trust generic claims."
+        need = f"A clear explanation that connects {service_text} to a practical outcome."
+        motivation = "Wants to reduce risk and make a confident decision faster."
+        solution = "Frame the offer around the problem, outcome, proof, and an easy next step."
+    return [
+        {
+            "id": f"persona-{index}",
+            "name": name,
+            "age": age,
+            "gender": gender,
+            "economic_status": economic_status,
+            "profession": profession,
+            "challenge": challenge,
+            "need": need,
+            "motivation": motivation,
+            "solution": solution,
+        }
+        for index, (name, age, gender, economic_status, profession) in enumerate(templates, start=1)
+    ]
+
+
 def normalize_marketing_intelligence(
     raw: dict[str, Any] | None,
     suite_payload: dict[str, Any],
@@ -583,6 +731,7 @@ def normalize_marketing_intelligence(
     phase = str(raw.get("phase") or "").strip()
     competitor_only = phase == "competitors"
     keyword_only = phase == "keywords"
+    personas_only = phase == "personas"
     brand = _dict(suite_payload.get("brand"))
     strategy = _dict(suite_payload.get("strategy"))
     deck = _dict(strategy.get("marketing_plan_deck"))
@@ -682,7 +831,7 @@ def normalize_marketing_intelligence(
             seen_source_urls.add(marker)
             deduped_sources.append(source)
 
-    return {
+    normalized = {
         "version": INTELLIGENCE_VERSION,
         "language": language,
         "generated_at": raw.get("generated_at") or datetime.now(timezone.utc).isoformat(),
@@ -692,12 +841,16 @@ def normalize_marketing_intelligence(
         "demand_signals": [{"id": f"demand-{i}", "title": item, "source": "profile"} for i, item in enumerate(demand_signals, start=1)],
         "supply_signals": [{"id": f"supply-{i}", "title": item, "source": "research"} for i, item in enumerate(supply_signals, start=1)],
         "opportunities": [{"id": f"opportunity-{i}", "title": item} for i, item in enumerate(opportunities, start=1)],
+        "personas": _normalize_personas(raw.get("personas"), language),
         "source_links": deduped_sources[:20],
         "warnings": warnings,
         "source_warnings": _text_list(raw.get("source_warnings"), 12),
         "demand_supply": _dict(raw.get("demand_supply")),
         "suppress_starter_warnings": suppress_starter_warnings,
     }
+    if personas_only:
+        normalized["status"] = raw.get("status") or "personas_ready"
+    return normalized
 
 
 def _required_assets_for_item(raw: dict[str, Any]) -> list[str]:
@@ -1210,6 +1363,61 @@ Business/profile data:
 """
 
 
+def build_marketing_customer_personas_prompt(
+    suite_payload: dict[str, Any],
+    existing_intelligence: dict[str, Any],
+    language: str,
+) -> str:
+    lang_name = LANG_NAMES.get(language, language or "English")
+    payload_json = _json_for_prompt(suite_payload)
+    intelligence_json = _json_for_prompt(existing_intelligence)
+    return f"""Analyze the target audience and build fictional customer personas for this OneShare marketing plan.
+
+Language: {lang_name}.
+Return STRICT JSON only. No markdown, no comments, no surrounding text.
+Return one top-level key: "marketing_intelligence".
+
+Shape:
+{{
+  "marketing_intelligence": {{
+    "phase": "personas",
+    "personas": [
+      {{
+        "id": "stable id",
+        "name": "fictional first name",
+        "age": 34,
+        "gender": "female|male|non_binary",
+        "economic_status": "low income|middle income|comfortable|high income or localized equivalent",
+        "profession": "specific profession or life role",
+        "challenge": "the practical problem this person faces",
+        "need": "what this person needs from a business like this",
+        "motivation": "trigger or motivation that would move them to act now",
+        "solution": "how this business should frame its offer to solve the need",
+        "avatar_prompt": "short prompt for a small neutral profile image"
+      }}
+    ],
+    "warnings": ["optional research limitations"]
+  }}
+}}
+
+Rules:
+- Return exactly 10 personas.
+- Make the profiles diverse across economic status, profession/career, gender, and age/generation.
+- Include young adults, middle-age customers, and older customers when relevant.
+- Include practical professions/life roles, not generic segments.
+- Tie every solution to the business category, services/products, keywords, competitors, and demand/supply context.
+- Do not replace keywords, competitors, demand_supply, demand_signals, supply_signals, or opportunities.
+- Keep every visible field in the requested language except stable enum-like ids.
+- Personas are fictional but should be plausible for the target country, audience language, and business category.
+
+Existing market intelligence:
+{intelligence_json}
+
+Business/profile data:
+{payload_json}
+"""
+
+
 async def generate_marketing_competitor_research(
     suite: Suite,
     language: str | None,
@@ -1282,6 +1490,70 @@ async def generate_marketing_demand_supply_research(
             *_list(existing.get("warnings")),
             *_list(incoming.get("warnings")),
         ],
+    }
+    return normalize_marketing_intelligence(merged, payload, output_language)
+
+
+async def generate_marketing_customer_personas_research(
+    suite: Suite,
+    language: str | None,
+    planning_inputs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    payload = suite_research_payload(suite, planning_inputs)
+    existing = _dict(_dict(suite.strategy).get("marketing_intelligence"))
+    existing = normalize_marketing_intelligence(existing, payload, output_language) if existing else normalize_marketing_intelligence({}, payload, output_language)
+    prompt = build_marketing_customer_personas_prompt(payload, existing, output_language)
+    try:
+        raw = await call_text_ai(
+            provider="anthropic",
+            model=settings.anthropic_text_model,
+            max_tokens=MARKET_RESEARCH_MAX_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+            system="You build practical fictional customer personas for client marketing plans. Return JSON only.",
+            timeout=MARKET_RESEARCH_TIMEOUT_SECONDS,
+        )
+        parsed = parse_marketing_plan_json(raw)
+        incoming = _dict(parsed.get("marketing_intelligence")) or parsed
+    except Exception as exc:
+        log.warning("Customer personas AI failed; using profile-based personas: %s", exc)
+        brand = _dict(payload.get("brand"))
+        strategy = _dict(payload.get("strategy"))
+        incoming = {
+            "phase": "personas",
+            "personas": _fallback_customer_personas(brand, strategy, output_language),
+            "warnings": ["AI provider failed during customer persona generation; showing profile-based personas."],
+        }
+    personas = _normalize_personas(incoming.get("personas"), output_language)
+    if len(personas) < 10:
+        brand = _dict(payload.get("brand"))
+        strategy = _dict(payload.get("strategy"))
+        fallback = _normalize_personas(_fallback_customer_personas(brand, strategy, output_language), output_language)
+        seen = {str(item.get("id") or item.get("name") or "").casefold() for item in personas}
+        for item in fallback:
+            marker = str(item.get("id") or item.get("name") or "").casefold()
+            if marker not in seen:
+                personas.append(item)
+                seen.add(marker)
+            if len(personas) >= 10:
+                break
+    merged = {
+        **existing,
+        **incoming,
+        "phase": "personas",
+        "status": "personas_ready",
+        "keywords": existing.get("keywords") or incoming.get("keywords") or [],
+        "competitors": existing.get("competitors") or incoming.get("competitors") or [],
+        "demand_signals": existing.get("demand_signals") or incoming.get("demand_signals") or [],
+        "supply_signals": existing.get("supply_signals") or incoming.get("supply_signals") or [],
+        "opportunities": existing.get("opportunities") or incoming.get("opportunities") or [],
+        "demand_supply": existing.get("demand_supply") or incoming.get("demand_supply") or {},
+        "source_links": [
+            *_list(existing.get("source_links")),
+            *_list(incoming.get("source_links")),
+        ],
+        "warnings": _list(incoming.get("warnings")),
+        "personas": personas[:10],
     }
     return normalize_marketing_intelligence(merged, payload, output_language)
 
