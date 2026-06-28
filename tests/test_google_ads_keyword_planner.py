@@ -131,3 +131,167 @@ def test_keyword_planner_empty_response_returns_warning(monkeypatch):
 
     assert result["keyword_metrics"] == []
     assert "No keyword ideas" in result["warning"]
+
+
+def test_keyword_planner_retries_without_login_customer_on_manager_permission(monkeypatch):
+    async def fake_refresh_google_ads_access_token(_refresh_token):
+        return "access-token"
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    permission_denied = {
+        "error": {
+            "message": "The caller does not have permission",
+            "details": [
+                {
+                    "errors": [
+                        {
+                            "errorCode": {"authorizationError": "USER_PERMISSION_DENIED"},
+                            "message": "User doesn't have permission to access customer.",
+                        }
+                    ]
+                }
+            ],
+        }
+    }
+    success = {
+        "results": [
+            {
+                "text": "dental clinic",
+                "keywordIdeaMetrics": {
+                    "avgMonthlySearches": 250,
+                    "competition": "MEDIUM",
+                    "competitionIndex": 44,
+                },
+            }
+        ]
+    }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **kwargs):
+            calls.append(kwargs["headers"])
+            return FakeResponse(403, permission_denied) if len(calls) == 1 else FakeResponse(200, success)
+
+    monkeypatch.setattr(google_ads.settings, "google_ads_login_customer_id", "152-008-1637")
+    monkeypatch.setattr(google_ads.settings, "google_ads_developer_token", "dev-token")
+    monkeypatch.setattr(google_ads, "refresh_google_ads_access_token", fake_refresh_google_ads_access_token)
+    monkeypatch.setattr(google_ads.httpx, "AsyncClient", FakeClient)
+
+    import asyncio
+
+    result = asyncio.run(
+        google_ads.fetch_keyword_planner_ideas(
+            "482-647-6729",
+            "refresh-token",
+            ["dental clinic"],
+            "en",
+            "Israel",
+        )
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["login-customer-id"] == "1520081637"
+    assert "login-customer-id" not in calls[1]
+    assert result["keyword_metrics"][0]["keyword"] == "dental clinic"
+    assert result["request"]["retried_without_login_customer"] is True
+
+
+def test_keyword_planner_retry_reports_token_approval_blocker(monkeypatch):
+    async def fake_refresh_google_ads_access_token(_refresh_token):
+        return "access-token"
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    permission_denied = {
+        "error": {
+            "message": "The caller does not have permission",
+            "details": [
+                {
+                    "errors": [
+                        {
+                            "errorCode": {"authorizationError": "USER_PERMISSION_DENIED"},
+                            "message": "User doesn't have permission to access customer.",
+                        }
+                    ]
+                }
+            ],
+        }
+    }
+    token_not_approved = {
+        "error": {
+            "message": "The caller does not have permission",
+            "details": [
+                {
+                    "errors": [
+                        {
+                            "errorCode": {"authorizationError": "DEVELOPER_TOKEN_NOT_APPROVED"},
+                            "message": "The developer token is only approved for use with test accounts.",
+                        }
+                    ]
+                }
+            ],
+        }
+    }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **kwargs):
+            calls.append(kwargs["headers"])
+            return FakeResponse(403, permission_denied) if len(calls) == 1 else FakeResponse(403, token_not_approved)
+
+    monkeypatch.setattr(google_ads.settings, "google_ads_login_customer_id", "152-008-1637")
+    monkeypatch.setattr(google_ads.settings, "google_ads_developer_token", "dev-token")
+    monkeypatch.setattr(google_ads, "refresh_google_ads_access_token", fake_refresh_google_ads_access_token)
+    monkeypatch.setattr(google_ads.httpx, "AsyncClient", FakeClient)
+
+    import asyncio
+
+    result = asyncio.run(
+        google_ads.fetch_keyword_planner_ideas(
+            "482-647-6729",
+            "refresh-token",
+            ["dental clinic"],
+            "en",
+            "Israel",
+        )
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["login-customer-id"] == "1520081637"
+    assert "login-customer-id" not in calls[1]
+    assert "DEVELOPER_TOKEN_NOT_APPROVED" in result["warning"]

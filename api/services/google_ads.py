@@ -209,6 +209,32 @@ def _google_ads_error_detail(payload: dict[str, Any] | None, fallback: str = "Go
     return message
 
 
+def _should_retry_without_login_customer(detail: str) -> bool:
+    if not _clean_customer_id(settings.google_ads_login_customer_id):
+        return False
+    marker = str(detail or "").casefold()
+    return (
+        "user_permission_denied" in marker
+        or "doesn't have permission" in marker
+        or "does not have permission" in marker
+    )
+
+
+async def _post_keyword_ideas(
+    client: httpx.AsyncClient,
+    customer_id: str,
+    access_token: str,
+    body: dict[str, Any],
+    *,
+    include_login_customer: bool = True,
+) -> httpx.Response:
+    return await client.post(
+        f"{GOOGLE_ADS_API}/customers/{_clean_customer_id(customer_id)}:generateKeywordIdeas",
+        headers=_headers(access_token, customer_id, include_login_customer=include_login_customer),
+        json=body,
+    )
+
+
 async def fetch_keyword_planner_ideas(
     customer_id: str,
     refresh_token: str,
@@ -222,12 +248,34 @@ async def fetch_keyword_planner_ideas(
     try:
         access_token = await refresh_google_ads_access_token(refresh_token)
         body = _keyword_idea_request(keywords, language, location, page_url)
+        retried_without_login_customer = False
         async with httpx.AsyncClient(timeout=45) as client:
-            resp = await client.post(
-                f"{GOOGLE_ADS_API}/customers/{_clean_customer_id(customer_id)}:generateKeywordIdeas",
-                headers=_headers(access_token, customer_id),
-                json=body,
-            )
+            resp = await _post_keyword_ideas(client, customer_id, access_token, body)
+            if resp.status_code >= 400:
+                try:
+                    detail = _google_ads_error_detail(resp.json(), "Google Ads Keyword Planner request failed")
+                except Exception:
+                    detail = resp.text or "Google Ads Keyword Planner request failed"
+                if _should_retry_without_login_customer(detail):
+                    retried_without_login_customer = True
+                    resp = await _post_keyword_ideas(
+                        client,
+                        customer_id,
+                        access_token,
+                        body,
+                        include_login_customer=False,
+                    )
+                    if resp.status_code >= 400:
+                        try:
+                            retry_detail = _google_ads_error_detail(resp.json(), "Google Ads Keyword Planner request failed")
+                        except Exception:
+                            retry_detail = resp.text or "Google Ads Keyword Planner request failed"
+                        raise RuntimeError(
+                            "Retried without login-customer-id after manager permission error. "
+                            + retry_detail
+                        )
+                else:
+                    raise RuntimeError(detail)
         if resp.status_code >= 400:
             try:
                 detail = _google_ads_error_detail(resp.json(), "Google Ads Keyword Planner request failed")
@@ -258,6 +306,7 @@ async def fetch_keyword_planner_ideas(
                 "language": body.get("language"),
                 "geo_target_constants": body.get("geoTargetConstants") or [],
                 "keyword_count": len(body.get("keywordSeed", {}).get("keywords") or body.get("keywordAndUrlSeed", {}).get("keywords") or []),
+                "retried_without_login_customer": retried_without_login_customer,
             },
         }
         if not metrics:
@@ -343,14 +392,14 @@ async def refresh_google_ads_access_token(refresh_token: str) -> str:
         return resp.json()["access_token"]
 
 
-def _headers(access_token: str, customer_id: str | None = None) -> dict:
+def _headers(access_token: str, customer_id: str | None = None, *, include_login_customer: bool = True) -> dict:
     headers = {
         "Authorization": f"Bearer {access_token}",
         "developer-token": settings.google_ads_developer_token,
         "Content-Type": "application/json",
     }
     login_customer_id = _clean_customer_id(settings.google_ads_login_customer_id)
-    if login_customer_id and login_customer_id != _clean_customer_id(customer_id or ""):
+    if include_login_customer and login_customer_id and login_customer_id != _clean_customer_id(customer_id or ""):
         headers["login-customer-id"] = login_customer_id
     return headers
 
