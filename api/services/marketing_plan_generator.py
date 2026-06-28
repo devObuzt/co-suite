@@ -406,6 +406,46 @@ def _persona_avatar_seed(name: str, gender: str, age: int | str) -> str:
     return _stable_slug(f"{name}-{gender}-{age}", "persona")
 
 
+def _contains_arabic(text: str) -> bool:
+    return bool(re.search(r"[\u0600-\u06FF]", text or ""))
+
+
+def _contains_hebrew(text: str) -> bool:
+    return bool(re.search(r"[\u0590-\u05FF]", text or ""))
+
+
+def _persona_visible_text_matches_language(persona: dict[str, Any], language: str) -> bool:
+    """Reject AI persona batches where only the name is localized."""
+    lang = str(language or "")[:2]
+    if lang not in {"ar", "he"}:
+        return True
+    fields = ["name", "economic_status", "profession", "challenge", "need", "motivation", "solution"]
+    values = [str(persona.get(field) or "").strip() for field in fields]
+    required_values = values[1:]
+    if not all(required_values):
+        return False
+    contains_script = _contains_arabic if lang == "ar" else _contains_hebrew
+    return all(contains_script(value) for value in values)
+
+
+def _localized_avatar_prompt(name: str, age: int, gender: str, profession: str, language: str) -> str:
+    lang = str(language or "")[:2]
+    if lang == "ar":
+        return (
+            f"صورة بروفايل صغيرة ومحايدة لشخصية {name}، العمر {age}، الجنس {gender}، المهنة {profession}. "
+            "خلفية بسيطة، واقعية وعامة، بدون شعارات."
+        )
+    if lang == "he":
+        return (
+            f"תמונת פרופיל קטנה וניטרלית עבור {name}, גיל {age}, מגדר {gender}, מקצוע {profession}. "
+            "רקע פשוט, ריאליסטי וכללי, ללא לוגואים."
+        )
+    return (
+        f"Small professional profile avatar for {name}, {age}, {gender}, {profession}. "
+        "Neutral background, realistic but generic, no logos."
+    )
+
+
 def _normalize_persona(raw: Any, index: int, language: str) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -438,11 +478,8 @@ def _normalize_persona(raw: Any, index: int, language: str) -> dict[str, Any] | 
     name = name or {"ar": f"شخصية {index}", "he": f"דמות {index}"}.get(str(language)[:2], f"Persona {index}")
     avatar_prompt = str(raw.get("avatar_prompt") or raw.get("image_prompt") or "").strip()
     if not avatar_prompt:
-        avatar_prompt = (
-            f"Small professional profile avatar for {name}, {age}, {gender}, {profession}. "
-            "Neutral background, realistic but generic, no logos."
-        )
-    return {
+        avatar_prompt = _localized_avatar_prompt(name, age, gender, profession, language)
+    persona = {
         "id": str(raw.get("id") or _stable_slug(name, f"persona-{index}")).strip(),
         "name": name,
         "age": age,
@@ -456,6 +493,9 @@ def _normalize_persona(raw: Any, index: int, language: str) -> dict[str, Any] | 
         "avatar_seed": str(raw.get("avatar_seed") or _persona_avatar_seed(name, gender, age)).strip(),
         "avatar_prompt": avatar_prompt,
     }
+    if not _persona_visible_text_matches_language(persona, language):
+        return None
+    return persona
 
 
 def _normalize_personas(raw: Any, language: str, limit: int = 10) -> list[dict[str, Any]]:
@@ -1380,6 +1420,9 @@ def build_marketing_customer_personas_prompt(
 
 Language: {lang_name}.
 ALL visible persona fields must be written in {lang_name}. Do not use English visible text unless the requested audience language is English.
+This includes name, economic_status, profession, challenge, need, motivation, solution, and avatar_prompt.
+For Arabic output, these fields must contain Arabic-script text. Do not return English sentences with Arabic names.
+For Hebrew output, these fields must contain Hebrew-script text. Do not return English sentences with Hebrew names.
 Return STRICT JSON only. No markdown, no comments, no surrounding text.
 Return one top-level key: "marketing_intelligence".
 

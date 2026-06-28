@@ -374,6 +374,28 @@ def test_build_customer_personas_prompt_requests_five_diverse_profiles_in_audien
     assert "Arabic" in prompt
 
 
+def test_normalize_arabic_personas_rejects_english_visible_content():
+    personas = mpg._normalize_personas(
+        [
+            {
+                "id": "persona-1",
+                "name": "أحمد",
+                "age": 34,
+                "gender": "male",
+                "economic_status": "middle income",
+                "profession": "school teacher",
+                "challenge": "He does not trust generic offers.",
+                "need": "Needs a clear explanation before buying.",
+                "motivation": "Wants to reduce risk.",
+                "solution": "Show proof and a simple next step.",
+            }
+        ],
+        "ar",
+    )
+
+    assert personas == []
+
+
 @pytest.mark.asyncio
 async def test_generate_marketing_customer_personas_returns_diverse_fallback_when_ai_fails(monkeypatch):
     suite = make_suite()
@@ -393,6 +415,48 @@ async def test_generate_marketing_customer_personas_returns_diverse_fallback_whe
     assert len({item["profession"] for item in personas}) >= 5
     assert all(item["challenge"] and item["need"] and item["motivation"] and item["solution"] for item in personas)
     assert all(item["avatar_seed"] for item in personas)
+    assert all("Small professional profile avatar" not in item.get("avatar_prompt", "") for item in personas)
+
+
+@pytest.mark.asyncio
+async def test_generate_marketing_customer_personas_replaces_english_ai_content_for_arabic(monkeypatch):
+    suite = make_suite()
+
+    async def english_content_call_text_ai(**_kwargs):
+        return json.dumps(
+            {
+                "marketing_intelligence": {
+                    "phase": "personas",
+                    "personas": [
+                        {
+                            "id": f"persona-{index}",
+                            "name": f"عميل {index}",
+                            "age": 25 + index,
+                            "gender": "male" if index % 2 else "female",
+                            "economic_status": "middle income",
+                            "profession": "online trader",
+                            "challenge": "He wants to learn but does not know where to start.",
+                            "need": "Needs a trusted academy with practical steps.",
+                            "motivation": "Wants financial confidence.",
+                            "solution": "Offer a clear course path with proof.",
+                        }
+                        for index in range(1, 6)
+                    ],
+                }
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(mpg, "call_text_ai", english_content_call_text_ai)
+
+    intelligence = await mpg.generate_marketing_customer_personas_research(suite, "ar")
+
+    personas = intelligence["personas"]
+    assert len(personas) == 5
+    assert all(any("\u0600" <= char <= "\u06ff" for char in item["challenge"]) for item in personas)
+    assert all(any("\u0600" <= char <= "\u06ff" for char in item["need"]) for item in personas)
+    assert all(any("\u0600" <= char <= "\u06ff" for char in item["motivation"]) for item in personas)
+    assert all(any("\u0600" <= char <= "\u06ff" for char in item["solution"]) for item in personas)
 
 
 @pytest.mark.asyncio
