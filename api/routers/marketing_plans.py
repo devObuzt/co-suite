@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +31,7 @@ from ..services.marketing_plan_generator import (
     normalize_marketing_intelligence,
     suite_research_payload,
 )
+from ..services.marketing_plan_pdf import build_marketing_plan_pdf
 
 router = APIRouter(tags=["marketing-plans"])
 
@@ -1211,6 +1212,31 @@ async def get_marketing_plan(
     if not deck:
         return _marketing_plan_response(suite, suite_id, job, "missing")
     return _marketing_plan_response(suite, suite_id, job, "ready")
+
+
+@router.get("/suites/{suite_id}/marketing-plan/pdf")
+async def download_marketing_plan_pdf(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    pdf_bytes, filename = build_marketing_plan_pdf(suite)
+    await record_audit_log(
+        db,
+        action="marketing.pdf.download",
+        resource_type="marketing_plan",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"filename": filename, "bytes": len(pdf_bytes)},
+    )
+    await db.commit()
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/suites/{suite_id}/marketing-plan/generate")

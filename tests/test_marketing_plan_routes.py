@@ -15,6 +15,48 @@ class FakeDb:
         self.committed = True
 
 
+@pytest.mark.asyncio
+async def test_download_marketing_plan_pdf_returns_attachment(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={"name": "Smart Line Academy", "services": ["دورات تداول"]},
+        strategy={
+            "marketing_intelligence": {
+                "language": "ar",
+                "keywords": [{"id": "kw-1", "text": "دورات تداول"}],
+                "competitors": [],
+                "demand_signals": [],
+                "supply_signals": [],
+                "opportunities": [],
+                "personas": [{"id": "p-1", "name": "ليان", "challenge": "تحتاج خطة واضحة."}],
+            }
+        },
+    )
+    user = User(id="user-1", email="owner@example.com", hashed_password="hash", full_name="Owner")
+    db = FakeDb()
+    audit_calls = []
+
+    async def fake_get_owned_suite(*_args, **_kwargs):
+        return suite
+
+    async def fake_record_audit_log(_db, **kwargs):
+        audit_calls.append(kwargs)
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
+
+    response = await marketing_plans.download_marketing_plan_pdf("suite-1", user, db)
+
+    assert response.media_type == "application/pdf"
+    assert response.body.startswith(b"%PDF")
+    assert "smart-line-academy-marketing-plan.pdf" in response.headers["content-disposition"]
+    assert db.committed is True
+    assert audit_calls[0]["action"] == "marketing.pdf.download"
+
+
 def test_clear_marketing_plan_removes_generated_plan_data_only():
     suite = Suite(
         id="suite-1",
