@@ -460,6 +460,48 @@ async def test_generate_marketing_customer_personas_replaces_english_ai_content_
 
 
 @pytest.mark.asyncio
+async def test_generate_marketing_customer_personas_uses_fast_model_budget(monkeypatch):
+    suite = make_suite()
+    call = {}
+
+    async def fake_call_text_ai(**kwargs):
+        call.update(kwargs)
+        return json.dumps(
+            {
+                "marketing_intelligence": {
+                    "phase": "personas",
+                    "personas": [
+                        {
+                            "id": f"persona-{index}",
+                            "name": f"عميل {index}",
+                            "age": 25 + index,
+                            "gender": "male" if index % 2 else "female",
+                            "economic_status": "متوسطة",
+                            "profession": f"مهنة {index}",
+                            "challenge": "يريد التعلم لكنه لا يعرف من أين يبدأ.",
+                            "need": "يحتاج مسار تعليم واضح ومناسب.",
+                            "motivation": "يريد قرارًا أسرع بثقة.",
+                            "solution": "نقدم له خطة تعليم مبسطة مع دليل ثقة واضح.",
+                        }
+                        for index in range(1, 6)
+                    ],
+                }
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+
+    await mpg.generate_marketing_customer_personas_research(suite, "ar")
+
+    assert call["timeout"] <= 25
+    assert call["max_tokens"] <= 2500
+    expected_model = mpg.settings.openai_fast_model if mpg.settings.ai_text_provider == "openai" else mpg.settings.anthropic_fast_model
+    assert call["provider"] == mpg.settings.ai_text_provider
+    assert call["model"] == expected_model
+
+
+@pytest.mark.asyncio
 async def test_generate_marketing_customer_personas_appends_five_more_without_repeating(monkeypatch):
     suite = make_suite()
     suite.strategy = {

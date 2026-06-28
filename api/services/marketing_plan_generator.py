@@ -24,6 +24,8 @@ MARKETING_PLAN_REPAIR_MAX_TOKENS = 7000
 MARKETING_PLAN_REPAIR_TIMEOUT_SECONDS = 220
 MARKET_RESEARCH_MAX_TOKENS = 3000
 MARKET_RESEARCH_TIMEOUT_SECONDS = 160
+CUSTOMER_PERSONAS_MAX_TOKENS = 2200
+CUSTOMER_PERSONAS_TIMEOUT_SECONDS = 20
 
 
 class MarketingPlanGenerationError(RuntimeError):
@@ -1576,13 +1578,15 @@ async def generate_marketing_customer_personas_research(
         existing_personas=existing_personas if append or existing_values else [],
     )
     try:
+        provider = settings.ai_text_provider
+        fast_model = settings.openai_fast_model if provider == "openai" else settings.anthropic_fast_model
         raw = await call_text_ai(
-            provider="anthropic",
-            model=settings.anthropic_text_model,
-            max_tokens=MARKET_RESEARCH_MAX_TOKENS,
+            provider=provider,
+            model=fast_model,
+            max_tokens=CUSTOMER_PERSONAS_MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
             system="You build practical fictional customer personas for client marketing plans. Return JSON only.",
-            timeout=MARKET_RESEARCH_TIMEOUT_SECONDS,
+            timeout=CUSTOMER_PERSONAS_TIMEOUT_SECONDS,
         )
         parsed = parse_marketing_plan_json(raw)
         incoming = _dict(parsed.get("marketing_intelligence")) or parsed
