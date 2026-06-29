@@ -54,6 +54,18 @@ class MarketingStageRequest(GenerateMarketingPlanRequest):
     existing_values: list[str] = Field(default_factory=list, max_length=200)
 
 
+class MarketingKeywordInput(BaseModel):
+    id: str | None = Field(default=None, max_length=120)
+    text: str = Field(min_length=1, max_length=120)
+    intent: str | None = Field(default=None, max_length=80)
+    source: str | None = Field(default=None, max_length=80)
+    confidence: str | None = Field(default=None, max_length=80)
+
+
+class MarketingKeywordsUpdateRequest(BaseModel):
+    keywords: list[MarketingKeywordInput] = Field(default_factory=list, max_length=80)
+
+
 class CompetitorClassificationRequest(BaseModel):
     classification_tags: list[str] = Field(default_factory=list, max_length=8)
 
@@ -1553,6 +1565,75 @@ async def generate_more_marketing_keywords(
         suite_id=suite.id,
         actor=current_user,
         metadata={"keywords": len(current)},
+    )
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "market_ready")
+
+
+@router.patch("/suites/{suite_id}/marketing-plan/keywords")
+async def update_marketing_keywords(
+    suite_id: str,
+    payload: MarketingKeywordsUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    output_language = infer_plan_language(suite)
+    existing_payload = _strategy(suite).get("marketing_intelligence")
+    existing_payload = existing_payload if isinstance(existing_payload, dict) else {}
+    intelligence = normalize_marketing_intelligence(
+        {
+            **existing_payload,
+            "phase": "keywords",
+        },
+        suite_research_payload(suite),
+        output_language,
+    )
+    preserved = normalize_marketing_intelligence(existing_payload, suite_research_payload(suite), output_language) if existing_payload else {}
+    for key in (
+        "competitors",
+        "demand_signals",
+        "supply_signals",
+        "opportunities",
+        "personas",
+        "source_links",
+        "warnings",
+        "source_warnings",
+        "demand_supply",
+        "suppress_starter_warnings",
+    ):
+        if key in existing_payload:
+            intelligence[key] = preserved.get(key, existing_payload.get(key))
+    saved_keywords: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, keyword in enumerate(payload.keywords):
+        text = re.sub(r"\s+", " ", keyword.text).strip()
+        marker = text.casefold()
+        if not text or marker in seen:
+            continue
+        seen.add(marker)
+        saved_keywords.append(
+            {
+                "id": keyword.id or f"kw-manual-{secrets.token_urlsafe(6)}",
+                "text": text,
+                "intent": keyword.intent or "manual",
+                "source": keyword.source or "manual",
+                "confidence": keyword.confidence or "manual",
+                "position": index,
+            }
+        )
+    intelligence["keywords"] = saved_keywords[:80]
+    intelligence["status"] = "keywords_ready" if saved_keywords else intelligence.get("status") or "missing"
+    intelligence["generated_at"] = datetime.now(timezone.utc).isoformat()
+    _save_marketing_intelligence(suite, intelligence)
+    await record_audit_log(
+        db,
+        action="marketing.keywords.update",
+        resource_type="marketing_intelligence",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"keywords": len(saved_keywords)},
     )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")

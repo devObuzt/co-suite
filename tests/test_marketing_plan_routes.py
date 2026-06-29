@@ -885,6 +885,56 @@ async def test_generate_keywords_route_saves_keywords_and_records_usage(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_update_keywords_route_saves_manual_order(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Sea of Herbs",
+        slug="sea-of-herbs",
+        brand={"name": "Sea of Herbs"},
+        strategy={
+            "marketing_intelligence": {
+                "language": "ar",
+                "keywords": [{"id": "kw-old", "text": "قديم"}],
+                "competitors": [{"id": "competitor-1", "name": "Keep competitor", "title": "Keep competitor", "result_type": "google_organic", "url": "https://example.com"}],
+            }
+        },
+    )
+    user = User(id="user-1", email="owner@example.com", full_name="Owner", hashed_password="x")
+    db = FakeDb()
+    audit_calls = []
+
+    async def fake_get_owned_suite(*_args, **_kwargs):
+        return suite
+
+    async def fake_record_audit_log(_db, **kwargs):
+        audit_calls.append(kwargs)
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
+
+    response = await marketing_plans.update_marketing_keywords(
+        "suite-1",
+        marketing_plans.MarketingKeywordsUpdateRequest(
+            keywords=[
+                marketing_plans.MarketingKeywordInput(id="kw-2", text="زيوت علاجية", intent="commercial"),
+                marketing_plans.MarketingKeywordInput(id="kw-1", text="أعشاب طبيعية", intent="core"),
+                marketing_plans.MarketingKeywordInput(text="أعشاب طبيعية", intent="duplicate"),
+            ]
+        ),
+        user,
+        db,  # type: ignore[arg-type]
+    )
+
+    assert db.committed is True
+    assert [item["text"] for item in suite.strategy["marketing_intelligence"]["keywords"]] == ["زيوت علاجية", "أعشاب طبيعية"]
+    assert suite.strategy["marketing_intelligence"]["keywords"][0]["position"] == 0
+    assert suite.strategy["marketing_intelligence"]["competitors"][0]["name"] == "Keep competitor"
+    assert response["intelligence"]["keywords"][0]["text"] == "زيوت علاجية"
+    assert audit_calls[0]["action"] == "marketing.keywords.update"
+
+
+@pytest.mark.asyncio
 async def test_generate_personas_route_saves_personas_and_preserves_market_data(monkeypatch):
     suite = Suite(
         id="suite-1",
