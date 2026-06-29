@@ -1858,34 +1858,70 @@ def _fallback_paid_content_items(payload: dict[str, Any], language: str, provide
     name = str(context.get("name") or "البزنس").strip()
     services = _text_list(context.get("products_services"), 8) or [name]
     templates = {
-        "awareness": ("ليش الناس بدأت تنتبه لـ {service}؟", "video", "اعرض موقفًا بصريًا سريعًا يفتح فضول الجمهور حول المشكلة قبل بيع الحل.", "تابع الصفحة"),
-        "consideration": ("قبل ما تختار {service}، انتبه لهذه النقطة", "carousel", "قارن بين خيار عادي وخيار موثوق، وبيّن لماذا العرض مناسب لحاجة الجمهور.", "اطلب التفاصيل"),
-        "conversion": ("جاهز تبدأ بـ {service}؟", "image_banner", "اعرض سببًا واضحًا لاتخاذ قرار الآن مع عرض أو ضمان أو خطوة سهلة.", "احجز الآن"),
-        "loyalty": ("عملاؤنا يرجعون لأن التجربة ما بتنتهي عند الشراء", "video", "اعرض رعاية ما بعد الشراء أو فائدة الاستمرار مع العلامة.", "ارجع واستفد"),
-        "advocacy": ("شارك تجربتك وخلي غيرك يستفيد", "carousel", "حوّل تجربة العميل لقصة توصية ومكافأة بسيطة للمشاركة.", "رشّحنا لصديق"),
+        "awareness": (
+            "ليش الناس بدأت تنتبه لـ {service}؟",
+            "video",
+            "ابدأ بلقطة قريبة لمشكلة يومية يعيشها الجمهور، ثم اظهر المنتج/الخدمة كشيء يلفت الانتباه بدون بيع مباشر.",
+            "هل لاحظتوا إن اختيار {service} صار أصعب من قبل؟ في الإعلان بنفرجي موقف بسيط يوضح المشكلة ويخلي الناس تنتبه للحل.",
+            "تابع الصفحة",
+        ),
+        "consideration": (
+            "قبل ما تختار {service}، انتبه لهذه النقطة",
+            "carousel",
+            "اعرض 3 شرائح: المشكلة، الفرق بين خيار عادي وخيار موثوق، ولماذا العرض مناسب لحاجة الجمهور.",
+            "قبل ما تشتري أو تحجز، في تفاصيل صغيرة بتفرق. هذا الإعلان يشرح كيف تقارن وتختار {service} بثقة.",
+            "اطلب التفاصيل",
+        ),
+        "conversion": (
+            "جاهز تبدأ بـ {service}؟",
+            "image_banner",
+            "صورة واضحة للعرض مع فائدة واحدة قوية وخطوة سهلة: رسالة، حجز، أو طلب مباشر.",
+            "إذا كنت تنتظر الوقت المناسب، خلّينا نسهلها عليك: عرض واضح، خطوة بسيطة، ونتيجة تعرف شو تتوقع منها.",
+            "احجز الآن",
+        ),
+        "loyalty": (
+            "عملاؤنا يرجعون لأن التجربة ما بتنتهي عند الشراء",
+            "video",
+            "فيديو قصير يبرز المتابعة بعد الشراء، نصيحة استخدام، أو فائدة الاستمرار مع العلامة.",
+            "العلاقة معنا لا تنتهي عند أول طلب. نتابع، نساعد، ونقدم لك قيمة تخليك ترجع بثقة.",
+            "ارجع واستفد",
+        ),
+        "advocacy": (
+            "شارك تجربتك وخلي غيرك يستفيد",
+            "carousel",
+            "كاروسيل يعرض قصة عميل، لقطة من تقييم، ودعوة لمشاركة التجربة أو ترشيح صديق.",
+            "إذا التجربة ساعدتك، ممكن تساعد غيرك. شارك رأيك أو رشّحنا لشخص يحتاج نفس الحل.",
+            "رشّحنا لصديق",
+        ),
     }
+    angles = ["فيديو قصير", "بانر مباشر"]
     items: list[dict[str, Any]] = []
     for index, stage in enumerate(PAID_CONTENT_FUNNEL_STAGES, start=1):
         key = str(stage["key"])
-        service = services[(index - 1) % len(services)]
-        title, ad_format, visual, cta = templates[key]
-        items.append(
-            {
-                "stage": key,
-                "title": title.format(service=service),
-                "ad_format": ad_format,
-                "channel": "Meta",
-                "hook": title.format(service=service),
-                "visual_idea": visual,
-                "copy": visual,
-                "cta": cta,
-                "required_assets": [],
-                "extra_requirements": [],
-                "prompt": f"{title.format(service=service)}. {visual}",
-                "rationale": "Fallback idea built from suite profile because the provider did not return usable JSON.",
-                "provider": provider,
-            }
-        )
+        title, ad_format, visual, copy, cta = templates[key]
+        for variant in range(2):
+            service = services[(index + variant - 1) % len(services)]
+            angle = angles[variant % len(angles)]
+            rendered_title = f"{title.format(service=service)} - {angle}"
+            rendered_visual = visual.format(service=service)
+            rendered_copy = copy.format(service=service)
+            items.append(
+                {
+                    "stage": key,
+                    "title": rendered_title,
+                    "ad_format": ad_format if variant == 0 else "image_banner",
+                    "channel": "Meta",
+                    "hook": title.format(service=service),
+                    "visual_idea": rendered_visual,
+                    "copy": rendered_copy,
+                    "cta": cta,
+                    "required_assets": ["صورة/فيديو للمنتج أو الخدمة"] if variant == 0 else ["تصميم بانر واضح"],
+                    "extra_requirements": [],
+                    "prompt": f"{rendered_title}. {rendered_visual}. نص الإعلان: {rendered_copy}. CTA: {cta}",
+                    "rationale": "Fallback idea built from suite profile because the provider did not return usable JSON.",
+                    "provider": provider,
+                }
+            )
     return items
 
 
@@ -1899,6 +1935,12 @@ def _normalize_paid_content_candidate(raw: Any, index: int, provider: str, stage
     title = str(raw.get("title") or raw.get("headline") or raw.get("hook") or f"{stage_meta['stage']} ad idea {index}").strip()
     prompt = str(raw.get("prompt") or raw.get("generation_prompt") or raw.get("copy") or raw.get("visual_idea") or title).strip()
     if not title or not prompt:
+        return None
+    visible_text = " ".join(
+        str(raw.get(field) or "")
+        for field in ("title", "headline", "hook", "visual_idea", "copy", "caption", "body", "cta", "prompt")
+    ).strip()
+    if _looks_like_placeholder_paid_idea(visible_text):
         return None
     ad_format = str(raw.get("ad_format") or raw.get("format") or raw.get("recommended_output") or "video").strip().lower().replace(" ", "_")
     if ad_format not in {"video", "image_banner", "carousel"}:
@@ -1931,6 +1973,27 @@ def _normalize_paid_content_candidate(raw: Any, index: int, provider: str, stage
     }
 
 
+def _looks_like_placeholder_paid_idea(text: str) -> bool:
+    compact = re.sub(r"\s+", " ", str(text or "")).strip().casefold()
+    if not compact:
+        return True
+    placeholder_patterns = (
+        r"^(awareness|consideration|conversion|loyalty|advocacy) ad idea\s*\d*( \1 ad idea\s*\d*)*$",
+        r"^ad idea\s*\d*( ad idea\s*\d*)*$",
+        r"^paid idea\s*\d*( paid idea\s*\d*)*$",
+    )
+    return any(re.fullmatch(pattern, compact) for pattern in placeholder_patterns)
+
+
+def _paid_candidate_matches_language(item: dict[str, Any], language: str) -> bool:
+    lang = str(language or "")[:2]
+    if lang not in {"ar", "he"}:
+        return True
+    text = " ".join(str(item.get(field) or "") for field in ("title", "hook", "visual_idea", "copy", "cta", "prompt"))
+    contains_script = _contains_arabic if lang == "ar" else _contains_hebrew
+    return contains_script(text)
+
+
 def normalize_paid_content_plan(
     raw_items: list[dict[str, Any]],
     payload: dict[str, Any],
@@ -1943,6 +2006,8 @@ def normalize_paid_content_plan(
         normalized = _normalize_paid_content_candidate(item, index, str(item.get("provider") or "ai"))
         if not normalized:
             continue
+        if not _paid_candidate_matches_language(normalized, language):
+            continue
         marker = f"{normalized['stage']}::{normalized['title'].casefold()}"
         if marker in seen:
             continue
@@ -1950,11 +2015,25 @@ def normalize_paid_content_plan(
         normalized["id"] = f"{normalized['provider']}-{normalized['stage']}-{len(grouped[normalized['stage']]) + 1}"
         grouped[normalized["stage"]].append(normalized)
 
-    if not any(grouped.values()):
-        for fallback in _fallback_paid_content_items(payload, language):
-            normalized = _normalize_paid_content_candidate(fallback, len(grouped[fallback["stage"]]) + 1, "fallback")
-            if normalized:
-                grouped[normalized["stage"]].append(normalized)
+    fallback_items = _fallback_paid_content_items(payload, language)
+    for stage in PAID_CONTENT_FUNNEL_STAGES:
+        key = str(stage["key"])
+        if len(grouped[key]) >= 2:
+            continue
+        for fallback in fallback_items:
+            if fallback.get("stage") != key:
+                continue
+            normalized = _normalize_paid_content_candidate(fallback, len(grouped[key]) + 1, "fallback")
+            if not normalized:
+                continue
+            marker = f"{normalized['stage']}::{normalized['title'].casefold()}"
+            if marker in seen:
+                continue
+            normalized["id"] = f"fallback-{key}-{len(grouped[key]) + 1}"
+            grouped[key].append(normalized)
+            seen.add(marker)
+            if len(grouped[key]) >= 2:
+                break
 
     selected_ids: list[str] = []
     for stage in PAID_CONTENT_FUNNEL_STAGES:

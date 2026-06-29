@@ -1161,3 +1161,28 @@ async def test_generate_paid_content_work_plan_uses_provider_batches(monkeypatch
     assert [stage["key"] for stage in plan["stages"]] == ["awareness", "consideration", "conversion", "loyalty", "advocacy"]
     assert sum(len(items) for items in plan["candidates"].values()) == 10
     assert {item["provider"] for group in plan["candidates"].values() for item in group} == {"anthropic", "openai"}
+
+
+def test_paid_content_plan_replaces_placeholder_english_with_local_fallback():
+    plan = mpg.normalize_paid_content_plan(
+        [
+            {
+                "stage": "awareness",
+                "title": "Awareness ad idea 1",
+                "prompt": "Awareness ad idea 1",
+                "provider": "anthropic",
+            }
+        ],
+        mpg.suite_research_payload(make_suite()),
+        "ar",
+        [],
+    )
+
+    assert len(plan["selected_ids"]) == 5
+    assert all(
+        any("\u0600" <= char <= "\u06ff" for char in item["title"] + item["hook"] + item["visual_idea"] + item["copy"] + item["cta"])
+        for group in plan["candidates"].values()
+        for item in group
+    )
+    assert not any("ad idea 1" in item["title"].lower() for group in plan["candidates"].values() for item in group)
+    assert all(item["visual_idea"] and item["copy"] and item["cta"] for group in plan["candidates"].values() for item in group)
