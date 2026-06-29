@@ -41,6 +41,23 @@ ACCENTS = {
     "violet": ("#f5f3ff", "#a78bfa", "#6d28d9"),
     "slate": ("#f8fafc", "#94a3b8", "#334155"),
 }
+BIDI_CONTROL_CHARS = dict.fromkeys(
+    ord(char)
+    for char in (
+        "\u061c"  # Arabic letter mark
+        "\u200e"  # left-to-right mark
+        "\u200f"  # right-to-left mark
+        "\u202a"  # left-to-right embedding
+        "\u202b"  # right-to-left embedding
+        "\u202c"  # pop directional formatting
+        "\u202d"  # left-to-right override
+        "\u202e"  # right-to-left override
+        "\u2066"  # left-to-right isolate
+        "\u2067"  # right-to-left isolate
+        "\u2068"  # first strong isolate
+        "\u2069"  # pop directional isolate
+    )
+)
 
 
 def _register_fonts() -> dict[str, str]:
@@ -80,7 +97,7 @@ def _font_for_char(char: str, fonts: dict[str, str], default_font: str) -> str:
 
 
 def _visual_text(value: Any, language: str) -> str:
-    text = str(value or "").strip()
+    text = str(value or "").translate(BIDI_CONTROL_CHARS).strip()
     if not text:
         return "-"
     if language == "ar":

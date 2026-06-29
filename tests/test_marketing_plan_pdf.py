@@ -93,3 +93,44 @@ def test_marketing_plan_pdf_uses_marketing_intelligence_language():
 
     assert pdf_bytes.startswith(b"%PDF")
     assert _labels("ar")["title"] == "الخطة التسويقية"
+
+
+def test_marketing_plan_pdf_ignores_bidi_isolate_controls():
+    suite = Suite(
+        id="suite-3",
+        owner_id="user-1",
+        name="Mixed Direction Suite",
+        slug="mixed-direction",
+        brand={
+            "name": "Mixed Direction Suite",
+            "services": ["خدمة \u2068Google Ads\u2069 متقدمة"],
+        },
+        strategy={
+            "marketing_intelligence": {
+                "language": "ar",
+                "keywords": [{"text": "تسويق \u2068AI\u2069"}],
+                "competitors": [
+                    {
+                        "title": "منافس \u2068Meta\u2069",
+                        "result_type": "google_organic",
+                        "url": "https://example.com",
+                        "snippet": "نص عربي مع \u2068English\u2069 داخل الجملة.",
+                    }
+                ],
+                "personas": [
+                    {
+                        "name": "ليان",
+                        "challenge": "تحتاج \u2068CRM\u2069 واضح.",
+                        "motivation": "زيادة الطلب.",
+                        "solution": "نقدم خطة مبيعات.",
+                    }
+                ],
+            }
+        },
+    )
+
+    pdf_bytes, filename = build_marketing_plan_pdf(suite)
+
+    assert filename == "mixed-direction-suite-marketing-plan.pdf"
+    assert pdf_bytes.startswith(b"%PDF")
+    assert len(pdf_bytes) > 2500
