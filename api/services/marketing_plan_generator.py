@@ -1506,34 +1506,64 @@ def _fallback_social_content_items(
     counts = social_content_required_counts(monthly_posts)
     templates = {
         "attraction": (
-            "القصة التي تغيّر نظرة العميل",
-            "احكِ قصة قصيرة مرتبطة بـ {service}: خطأ شائع، موقف غريب، أو نتيجة مميزة، ثم اربطها بنصيحة عملية للجمهور.",
+            [
+                "الخطأ الغريب الذي يجعل الناس لا يثقون بـ {service}",
+                "قصة قصيرة تكشف لماذا {service} ليست مثل ما يتوقعه الناس",
+                "النتيجة التي فاجأت عميلًا جرّب {service} لأول مرة",
+                "شيء واحد لو عرفته قبل اختيار {service} لتغير قرارك",
+            ],
+            "في البداية احكِ موقفًا واقعيًا: شخص كان يظن أن {service} اختيار بسيط، لكنه اكتشف أن التفاصيل الصغيرة تغيّر النتيجة كلها.\nاعرض الخطأ أو المفاجأة بجملة قوية، ثم اربطه بتجربة أو مثال من المجال.\nاشرح العبرة: كيف يعرف العميل أنه أمام خيار موثوق؟ وما الإشارة التي يجب أن ينتبه لها؟\nاختم بنصيحة عملية تساعد الجمهور قبل الشراء، بدون بيع مباشر.",
             "تابعونا لأفكار أكثر تساعدكم تختاروا صح.",
         ),
         "trust": (
-            "المعلومة التي لا ينتبه لها أغلب الناس",
-            "اشرح معلومة مفيدة في {service} بخطوات بسيطة، مع مثال واقعي يوضح كيف يطبّقها العميل.",
+            [
+                "المعلومة التي لا ينتبه لها أغلب الناس في {service}",
+                "كيف تميّز {service} الجيد من الكلام التسويقي؟",
+                "3 علامات تبني ثقتك قبل اختيار {service}",
+                "دليل سريع لفهم {service} بدون تعقيد",
+            ],
+            "ابدأ بمعلومة جديدة ومفيدة عن {service}، ثم فسّرها بلغة بسيطة.\nقسّم الشرح إلى خطوات عملية: ماذا يفحص العميل؟ ماذا يسأل؟ ومتى يعرف أن العرض مناسب له؟\nاستخدم مثالًا قصيرًا من الحياة اليومية حتى يشعر الجمهور أن الكلام واقعي وقابل للتطبيق.\nاختم بربط المعلومة بخدمتك/منتجك بطريقة هادئة.",
             "إذا بدكم تطبيقها على حالتكم، تواصلوا معنا.",
         ),
         "sales": (
-            "كيف تحولت الحاجة إلى نتيجة",
-            "اعرض مشكلة عميل محتمل مع {service}، ثم وضّح كيف يحلها عرضنا بطريقة مباشرة وواضحة بدون بيع قاسٍ.",
+            [
+                "كيف تحولت الحاجة إلى نتيجة مع {service}",
+                "قبل وبعد: ماذا تغيّر عندما اختار العميل {service}؟",
+                "العرض الذي يسهّل قرار شراء {service}",
+                "لماذا الآن هو الوقت المناسب لتجربة {service}؟",
+            ],
+            "ابدأ بقصة عميل محتمل كان مترددًا بسبب الخوف من قرار خاطئ أو ضياع المال.\nاعرض المشكلة بوضوح، ثم اشرح كيف يجاوب العرض على الحاجة خطوة بخطوة.\nاذكر النتيجة أو الراحة التي سيشعر بها العميل بعد الاختيار.\nاجعل الدعوة للشراء أو الحجز عفوية ومباشرة بدون ضغط.",
             "للحجز أو الطلب، ابعثوا لنا رسالة.",
         ),
     }
+    angles = [
+        "من زاوية تجربة أول شراء",
+        "من زاوية مقارنة قبل وبعد",
+        "من زاوية خطأ شائع",
+        "من زاوية سؤال يتكرر من العملاء",
+        "من زاوية قصة قصيرة",
+        "من زاوية نصيحة عملية",
+        "من زاوية اعتراض قبل الشراء",
+        "من زاوية نتيجة متوقعة",
+    ]
+    variation_labels = ["قصة عميل", "نصيحة قبل الشراء", "خطوة عملية", "اعتراض شائع"]
     items: list[dict[str, Any]] = []
     for kind, count in counts.items():
-        title, body, cta = templates[kind]
-        for index in range(count):
+        titles, body, cta = templates[kind]
+        for index in range(count * 2):
             service = services[index % len(services)]
+            angle = angles[index % len(angles)]
+            variation = variation_labels[(index // len(angles)) % len(variation_labels)]
+            title = f"{titles[index % len(titles)].format(service=service)} - {angle} ({variation})"
+            script = f"{angle} ({variation}):\n{body.format(service=service)}"
             items.append(
                 {
                     "type": kind,
-                    "title": f"{title}: {service}",
+                    "title": title,
                     "format": "reel" if index % 2 == 0 else "post",
                     "hook_style": "Story Hook" if kind == "attraction" else "Promise Hook",
-                    "idea": body.format(service=service),
-                    "script": body.format(service=service),
+                    "idea": f"فكرة {('ريل' if index % 2 == 0 else 'بوست')}: {script.splitlines()[0]}",
+                    "script": script,
                     "cta": cta,
                     "rationale": "Fallback idea built from suite profile because the provider did not return usable JSON.",
                     "provider": provider,
@@ -1620,7 +1650,8 @@ def normalize_social_content_plan(
 
     fallback_items = _fallback_social_content_items(payload, language, monthly_posts)
     for item_type, count in required_counts.items():
-        if len(grouped[item_type]) >= count:
+        minimum_candidates = max(count * 2, count)
+        if len(grouped[item_type]) >= minimum_candidates:
             continue
         for fallback in fallback_items:
             if fallback.get("type") != item_type:
@@ -1632,7 +1663,7 @@ def normalize_social_content_plan(
             normalized["id"] = f"fallback-{item_type}-{len(grouped[item_type]) + 1}"
             grouped[item_type].append(normalized)
             seen.add(marker)
-            if len(grouped[item_type]) >= count:
+            if len(grouped[item_type]) >= minimum_candidates:
                 break
 
     selected_ids: list[str] = []

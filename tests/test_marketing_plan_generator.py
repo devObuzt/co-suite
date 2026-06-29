@@ -1121,8 +1121,9 @@ async def test_generate_social_content_work_plan_uses_provider_batches(monkeypat
     assert plan["monthly_posts"] == 3
     assert plan["status"] == "ready"
     assert len(plan["selected_ids"]) == 3
-    assert sum(len(items) for items in plan["candidates"].values()) == 6
-    assert {item["provider"] for group in plan["candidates"].values() for item in group} == {"anthropic", "openai"}
+    assert sum(len(items) for items in plan["candidates"].values()) >= 6
+    assert len(plan["candidates"]["attraction"]) >= 4
+    assert {"anthropic", "openai"}.issubset({item["provider"] for group in plan["candidates"].values() for item in group})
 
 
 @pytest.mark.asyncio
