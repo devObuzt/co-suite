@@ -29,6 +29,8 @@ CUSTOMER_PERSONAS_MAX_TOKENS = 2200
 CUSTOMER_PERSONAS_TIMEOUT_SECONDS = 20
 SOCIAL_CONTENT_PLAN_MAX_TOKENS = 4200
 SOCIAL_CONTENT_PLAN_TIMEOUT_SECONDS = 120
+PAID_CONTENT_PLAN_MAX_TOKENS = 4200
+PAID_CONTENT_PLAN_TIMEOUT_SECONDS = 120
 
 
 class MarketingPlanGenerationError(RuntimeError):
@@ -63,6 +65,48 @@ REQUIRED_SECTIONS = [
 ]
 
 FUNNEL_STAGES = ["Awareness", "Consideration", "Conversion", "Loyalty", "Ambassador"]
+PAID_CONTENT_FUNNEL_STAGES = [
+    {
+        "key": "awareness",
+        "stage": "Awareness",
+        "label_ar": "الوعي",
+        "goal_ar": "جعل الناس يعرفون بوجودك",
+        "idea_ar": "أنت لا تبيع بعد، فقط تلفت الانتباه.",
+        "activities_ar": ["إعلانات ممولة", "SEO", "ريلز وفيديوهات قصيرة", "تعاون مع مؤثرين"],
+    },
+    {
+        "key": "consideration",
+        "stage": "Consideration",
+        "label_ar": "التفكير / الاهتمام",
+        "goal_ar": "إقناع الناس أنهم بحاجة إليك",
+        "idea_ar": "بناء الثقة وتقديم معلومات تقنعهم بأنك خيار محتمل.",
+        "activities_ar": ["مقارنات", "تجارب العملاء", "فيديوهات شرح أو مراجعات", "دليل مجاني أو ورشة"],
+    },
+    {
+        "key": "conversion",
+        "stage": "Conversion",
+        "label_ar": "التحويل",
+        "goal_ar": "تحويل المهتمين إلى زبائن فعليين",
+        "idea_ar": "العميل الآن مستعد للشراء؛ سهّل عليه القرار.",
+        "activities_ar": ["عروض خاصة", "CTA مباشر", "تسجيل أو شراء مباشر", "تحسين صفحة الهبوط"],
+    },
+    {
+        "key": "loyalty",
+        "stage": "Loyalty",
+        "label_ar": "الولاء",
+        "goal_ar": "جعل العميل يعود مرة أخرى",
+        "idea_ar": "الحفاظ على العلاقة لتكرار الشراء.",
+        "activities_ar": ["خدمات ما بعد البيع", "نشرات وخصومات خاصة", "نقاط أو عضويات", "دعم مميز"],
+    },
+    {
+        "key": "advocacy",
+        "stage": "Advocacy",
+        "label_ar": "التوصية / الترويج",
+        "goal_ar": "تحويل الزبائن إلى سفراء لعلامتك",
+        "idea_ar": "الزبائن الراضون هم أفضل وسيلة تسويق مجاني.",
+        "activities_ar": ["مكافأة التوصيات", "قصص العملاء", "تقييمات إيجابية", "مجتمع حول العلامة"],
+    },
+]
 REAL_WORLD_PRODUCTION_MODES = {
     "talking_head": ["human_video"],
     "founder_video": ["human_video"],
@@ -1007,17 +1051,21 @@ def normalize_marketing_action_plan(
         10,
     )
     warnings = _text_list(raw.get("warnings"), 8)
-    if not social_items and not ad_funnel_items:
+    social_content_plan = _dict(raw.get("social_content_plan"))
+    paid_content_plan = _dict(raw.get("paid_content_plan"))
+    has_selected_work_plan = bool(_list(social_content_plan.get("selected_ids")) or _list(paid_content_plan.get("selected_ids")))
+    if not social_items and not ad_funnel_items and not has_selected_work_plan:
         warnings.append("Action plan is not ready yet; generate or refresh the marketing plan first.")
 
     return {
         "version": ACTION_PLAN_VERSION,
         "language": language,
         "generated_at": raw.get("generated_at") or deck.get("generated_at") or datetime.now(timezone.utc).isoformat(),
-        "status": raw.get("status") or ("ready" if social_items or ad_funnel_items else "missing"),
+        "status": raw.get("status") or ("ready" if social_items or ad_funnel_items or has_selected_work_plan else "missing"),
         "social_items": social_items,
         "ad_funnel_items": ad_funnel_items,
-        "social_content_plan": _dict(raw.get("social_content_plan")),
+        "social_content_plan": social_content_plan,
+        "paid_content_plan": paid_content_plan,
         "planning_questions": planning_questions,
         "warnings": warnings,
     }
@@ -1636,6 +1684,293 @@ async def generate_social_content_work_plan(
     if not all_items:
         all_items = _fallback_social_content_items(payload, output_language, monthly_posts)
     return normalize_social_content_plan(all_items, payload, output_language, monthly_posts, warnings)
+
+
+DEFAULT_PAID_CONTENT_PLAN_PROMPTS = {
+    "paid.base": """ابدأ دائمًا بتعريف البزنس:
+- الاسم
+- المنتجات والخدمات
+- تفاصيل الجمهور المستهدف
+- العرض التسويقي كجواب على حاجة الجمهور
+- الرسالة التسويقية
+
+اكتب النتيجة بلغة الجمهور الأولى، وباللهجة المحددة إن وجدت.""",
+    "paid.stage": """لكل مرحلة من مراحل القمع التسويقي، ولّد فكرة إعلان واحدة قابلة للتنفيذ.
+الإعلان يمكن أن يكون: video أو image_banner أو carousel.
+اكتب الفكرة كإعلان ممول واضح: hook، الفكرة البصرية، النص/الكابشن، CTA، والاحتياجات الإضافية إن وجدت مثل ورشة، صفحة هبوط، صور منتج، فيديو عميل، أو كود خصم.
+لا تجعل الإعلان بيعًا مباشرًا في مرحلة الوعي، واجعل نبرة البيع أقوى تدريجيًا في التحويل.""",
+}
+
+
+def paid_content_required_counts() -> dict[str, int]:
+    return {str(stage["key"]): 1 for stage in PAID_CONTENT_FUNNEL_STAGES}
+
+
+def _paid_stage_by_key() -> dict[str, dict[str, Any]]:
+    return {str(stage["key"]): stage for stage in PAID_CONTENT_FUNNEL_STAGES}
+
+
+def _paid_stage_key(value: Any) -> str:
+    text = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "awareness": "awareness",
+        "الوعي": "awareness",
+        "consideration": "consideration",
+        "thinking": "consideration",
+        "interest": "consideration",
+        "التفكير": "consideration",
+        "الاهتمام": "consideration",
+        "conversion": "conversion",
+        "التحويل": "conversion",
+        "loyalty": "loyalty",
+        "الولاء": "loyalty",
+        "advocacy": "advocacy",
+        "ambassador": "advocacy",
+        "referral": "advocacy",
+        "التوصية": "advocacy",
+        "الترويج": "advocacy",
+    }
+    return aliases.get(text, text if text in _paid_stage_by_key() else "awareness")
+
+
+def build_paid_content_plan_prompt(payload: dict[str, Any], language: str, provider: str) -> str:
+    context = _social_content_plan_context(payload, language)
+    context_json = json.dumps(context, ensure_ascii=False, default=str)
+    stages_json = json.dumps(PAID_CONTENT_FUNNEL_STAGES, ensure_ascii=False)
+    prompts = DEFAULT_PAID_CONTENT_PLAN_PROMPTS
+    return f"""Generate paid marketing content-plan ad ideas for OneShare.
+
+Provider batch: {provider}.
+Audience primary language: {context["audience_language"]}.
+Optional dialect/style: {context.get("dialect") or "use the audience's natural business tone"}.
+
+Return STRICT JSON only. No markdown, no comments.
+Return this exact shape:
+{{
+  "items": [
+    {{
+      "stage": "awareness|consideration|conversion|loyalty|advocacy",
+      "title": "short ad idea title",
+      "ad_format": "video|image_banner|carousel",
+      "channel": "Facebook|Instagram|YouTube|Google|Meta|TikTok|Search|Remarketing",
+      "hook": "opening hook",
+      "visual_idea": "what the video/banner/carousel shows",
+      "copy": "ready ad copy/caption in the audience language",
+      "cta": "call to action",
+      "required_assets": ["optional assets or empty array"],
+      "extra_requirements": ["landing page/workshop/coupon/customer testimonial/etc if needed"],
+      "prompt": "ready-to-generate creative prompt",
+      "rationale": "why this fits the funnel stage and audience need"
+    }}
+  ]
+}}
+
+Required count from this provider:
+- exactly 1 idea for each stage.
+
+Base business definition:
+{prompts["paid.base"]}
+
+Paid funnel rules:
+{prompts["paid.stage"]}
+
+Stages:
+{stages_json}
+
+Business/profile data:
+{context_json}
+"""
+
+
+def _fallback_paid_content_items(payload: dict[str, Any], language: str, provider: str = "fallback") -> list[dict[str, Any]]:
+    context = _social_content_plan_context(payload, language)
+    name = str(context.get("name") or "البزنس").strip()
+    services = _text_list(context.get("products_services"), 8) or [name]
+    templates = {
+        "awareness": ("ليش الناس بدأت تنتبه لـ {service}؟", "video", "اعرض موقفًا بصريًا سريعًا يفتح فضول الجمهور حول المشكلة قبل بيع الحل.", "تابع الصفحة"),
+        "consideration": ("قبل ما تختار {service}، انتبه لهذه النقطة", "carousel", "قارن بين خيار عادي وخيار موثوق، وبيّن لماذا العرض مناسب لحاجة الجمهور.", "اطلب التفاصيل"),
+        "conversion": ("جاهز تبدأ بـ {service}؟", "image_banner", "اعرض سببًا واضحًا لاتخاذ قرار الآن مع عرض أو ضمان أو خطوة سهلة.", "احجز الآن"),
+        "loyalty": ("عملاؤنا يرجعون لأن التجربة ما بتنتهي عند الشراء", "video", "اعرض رعاية ما بعد الشراء أو فائدة الاستمرار مع العلامة.", "ارجع واستفد"),
+        "advocacy": ("شارك تجربتك وخلي غيرك يستفيد", "carousel", "حوّل تجربة العميل لقصة توصية ومكافأة بسيطة للمشاركة.", "رشّحنا لصديق"),
+    }
+    items: list[dict[str, Any]] = []
+    for index, stage in enumerate(PAID_CONTENT_FUNNEL_STAGES, start=1):
+        key = str(stage["key"])
+        service = services[(index - 1) % len(services)]
+        title, ad_format, visual, cta = templates[key]
+        items.append(
+            {
+                "stage": key,
+                "title": title.format(service=service),
+                "ad_format": ad_format,
+                "channel": "Meta",
+                "hook": title.format(service=service),
+                "visual_idea": visual,
+                "copy": visual,
+                "cta": cta,
+                "required_assets": [],
+                "extra_requirements": [],
+                "prompt": f"{title.format(service=service)}. {visual}",
+                "rationale": "Fallback idea built from suite profile because the provider did not return usable JSON.",
+                "provider": provider,
+            }
+        )
+    return items
+
+
+def _normalize_paid_content_candidate(raw: Any, index: int, provider: str, stage_hint: str | None = None) -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        raw = {"title": raw, "prompt": raw}
+    if not isinstance(raw, dict):
+        return None
+    stage_key = _paid_stage_key(raw.get("stage") or raw.get("funnel_stage") or stage_hint)
+    stage_meta = _paid_stage_by_key().get(stage_key) or PAID_CONTENT_FUNNEL_STAGES[0]
+    title = str(raw.get("title") or raw.get("headline") or raw.get("hook") or f"{stage_meta['stage']} ad idea {index}").strip()
+    prompt = str(raw.get("prompt") or raw.get("generation_prompt") or raw.get("copy") or raw.get("visual_idea") or title).strip()
+    if not title or not prompt:
+        return None
+    ad_format = str(raw.get("ad_format") or raw.get("format") or raw.get("recommended_output") or "video").strip().lower().replace(" ", "_")
+    if ad_format not in {"video", "image_banner", "carousel"}:
+        if "image" in ad_format or "banner" in ad_format:
+            ad_format = "image_banner"
+        elif "carousel" in ad_format:
+            ad_format = "carousel"
+        else:
+            ad_format = "video"
+    return {
+        "id": f"{provider}-{stage_key}-{index}",
+        "stage": stage_key,
+        "stage_label": stage_meta["label_ar"],
+        "stage_en": stage_meta["stage"],
+        "goal": stage_meta["goal_ar"],
+        "idea": stage_meta["idea_ar"],
+        "activities": list(stage_meta["activities_ar"]),
+        "title": title[:240],
+        "ad_format": ad_format,
+        "channel": str(raw.get("channel") or raw.get("platform") or "Meta").strip()[:120],
+        "hook": str(raw.get("hook") or "").strip(),
+        "visual_idea": str(raw.get("visual_idea") or raw.get("visual") or raw.get("description") or "").strip(),
+        "copy": str(raw.get("copy") or raw.get("caption") or raw.get("body") or "").strip(),
+        "cta": str(raw.get("cta") or "").strip(),
+        "required_assets": _text_list(raw.get("required_assets"), 8),
+        "extra_requirements": _text_list(raw.get("extra_requirements") or raw.get("requirements"), 8),
+        "prompt": prompt,
+        "rationale": str(raw.get("rationale") or raw.get("reason") or "").strip(),
+        "provider": provider,
+    }
+
+
+def normalize_paid_content_plan(
+    raw_items: list[dict[str, Any]],
+    payload: dict[str, Any],
+    language: str,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {str(stage["key"]): [] for stage in PAID_CONTENT_FUNNEL_STAGES}
+    seen: set[str] = set()
+    for index, item in enumerate(raw_items, start=1):
+        normalized = _normalize_paid_content_candidate(item, index, str(item.get("provider") or "ai"))
+        if not normalized:
+            continue
+        marker = f"{normalized['stage']}::{normalized['title'].casefold()}"
+        if marker in seen:
+            continue
+        seen.add(marker)
+        normalized["id"] = f"{normalized['provider']}-{normalized['stage']}-{len(grouped[normalized['stage']]) + 1}"
+        grouped[normalized["stage"]].append(normalized)
+
+    if not any(grouped.values()):
+        for fallback in _fallback_paid_content_items(payload, language):
+            normalized = _normalize_paid_content_candidate(fallback, len(grouped[fallback["stage"]]) + 1, "fallback")
+            if normalized:
+                grouped[normalized["stage"]].append(normalized)
+
+    selected_ids: list[str] = []
+    for stage in PAID_CONTENT_FUNNEL_STAGES:
+        selected_ids.extend(item["id"] for item in grouped[str(stage["key"])][:1])
+
+    stages = []
+    for stage in PAID_CONTENT_FUNNEL_STAGES:
+        key = str(stage["key"])
+        stages.append(
+            {
+                "key": key,
+                "stage": stage["stage"],
+                "label": stage["label_ar"],
+                "goal": stage["goal_ar"],
+                "idea": stage["idea_ar"],
+                "activities": stage["activities_ar"],
+                "required_count": 1,
+                "candidate_count": len(grouped[key]),
+            }
+        )
+
+    return {
+        "version": "paid_content_work_plan_v1",
+        "status": "ready" if selected_ids else "missing",
+        "language": language,
+        "dialect": _dict(payload.get("brand")).get("dialect") or "",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "stages": stages,
+        "candidates": grouped,
+        "selected_ids": selected_ids,
+        "warnings": warnings or [],
+    }
+
+
+async def _generate_paid_content_provider_batch(
+    payload: dict[str, Any],
+    language: str,
+    provider: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    model = settings.openai_text_model if provider == "openai" else settings.anthropic_text_model
+    if provider == "openai" and not settings.openai_api_key:
+        return [], "OPENAI_API_KEY is missing; skipped OpenAI paid candidate batch."
+    if provider == "anthropic" and not settings.anthropic_api_key:
+        return [], "ANTHROPIC_API_KEY is missing; skipped Claude paid candidate batch."
+    try:
+        raw = await call_text_ai(
+            provider=provider,
+            model=model,
+            max_tokens=PAID_CONTENT_PLAN_MAX_TOKENS,
+            messages=[{"role": "user", "content": build_paid_content_plan_prompt(payload, language, provider)}],
+            system="You are a senior paid media strategist. Return valid JSON only.",
+            timeout=PAID_CONTENT_PLAN_TIMEOUT_SECONDS,
+        )
+        parsed = parse_marketing_plan_json(raw)
+        source_items = _list(_dict(parsed).get("items")) or _list(parsed)
+        items = []
+        for index, item in enumerate(source_items, start=1):
+            normalized = _normalize_paid_content_candidate(item, index, provider)
+            if normalized:
+                items.append(normalized)
+        if not items:
+            return [], f"{provider} did not return usable paid content ideas."
+        return items, None
+    except Exception as exc:
+        log.warning("Paid content plan provider batch failed", extra={"provider": provider, "error": str(exc)})
+        return [], f"{provider} failed: {str(exc)}"
+
+
+async def generate_paid_content_work_plan(
+    suite: Suite,
+    language: str | None,
+) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    payload = suite_research_payload(suite, planning_inputs={"paid_funnel": "full"})
+    batches = await asyncio.gather(
+        _generate_paid_content_provider_batch(payload, output_language, "anthropic"),
+        _generate_paid_content_provider_batch(payload, output_language, "openai"),
+    )
+    all_items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for items, warning in batches:
+        all_items.extend(items)
+        if warning:
+            warnings.append(warning)
+    if not all_items:
+        all_items = _fallback_paid_content_items(payload, output_language)
+    return normalize_paid_content_plan(all_items, payload, output_language, warnings)
 
 
 MARKETING_PLAN_STAGE_DEFINITIONS: list[dict[str, Any]] = [

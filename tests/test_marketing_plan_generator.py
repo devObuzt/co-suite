@@ -1022,6 +1022,38 @@ def test_build_social_content_plan_prompt_includes_language_dialect_and_business
     assert "sales: 1" in prompt
 
 
+def test_build_paid_content_plan_prompt_includes_full_funnel_and_formats():
+    suite = Suite(
+        id="suite-paid",
+        owner_id="user-1",
+        name="Sea of Herbs",
+        slug="sea-of-herbs",
+        brand={
+            "name": "Sea of Herbs",
+            "services": ["أعشاب طبيعية", "زيوت علاجية"],
+            "audience_languages": ["ar"],
+            "dialect": "عامية فلسطينية",
+            "audience_need": "منتجات طبيعية موثوقة",
+            "unique_value": "منتجات طبيعية مصنوعة يدويًا.",
+        },
+        strategy={},
+        connections={},
+    )
+    payload = mpg.suite_research_payload(suite)
+
+    prompt = mpg.build_paid_content_plan_prompt(payload, "ar", "anthropic")
+
+    assert "عامية فلسطينية" in prompt
+    assert "Sea of Herbs" in prompt
+    assert "Awareness" in prompt
+    assert "Consideration" in prompt
+    assert "Conversion" in prompt
+    assert "Loyalty" in prompt
+    assert "Advocacy" in prompt
+    assert "video|image_banner|carousel" in prompt
+    assert "exactly 1 idea for each stage" in prompt
+
+
 @pytest.mark.asyncio
 async def test_generate_social_content_work_plan_uses_provider_batches(monkeypatch):
     async def fake_call_text_ai(**kwargs):
@@ -1064,4 +1096,41 @@ async def test_generate_social_content_work_plan_uses_provider_batches(monkeypat
     assert plan["status"] == "ready"
     assert len(plan["selected_ids"]) == 3
     assert sum(len(items) for items in plan["candidates"].values()) == 6
+    assert {item["provider"] for group in plan["candidates"].values() for item in group} == {"anthropic", "openai"}
+
+
+@pytest.mark.asyncio
+async def test_generate_paid_content_work_plan_uses_provider_batches(monkeypatch):
+    async def fake_call_text_ai(**kwargs):
+        provider = kwargs["provider"]
+        return json.dumps(
+            {
+                "items": [
+                    {
+                        "stage": stage["key"],
+                        "title": f"{provider} {stage['stage']}",
+                        "ad_format": "carousel" if stage["key"] == "consideration" else "video",
+                        "channel": "Meta",
+                        "hook": "عنوان جذاب",
+                        "visual_idea": "مشهد واضح",
+                        "copy": "نص إعلان جاهز",
+                        "cta": "تواصلوا معنا",
+                        "prompt": "prompt جاهز",
+                    }
+                    for stage in mpg.PAID_CONTENT_FUNNEL_STAGES
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+    monkeypatch.setattr(mpg.settings, "anthropic_api_key", "test-anthropic")
+    monkeypatch.setattr(mpg.settings, "openai_api_key", "test-openai")
+
+    plan = await mpg.generate_paid_content_work_plan(make_suite(), "ar")
+
+    assert plan["status"] == "ready"
+    assert len(plan["selected_ids"]) == 5
+    assert [stage["key"] for stage in plan["stages"]] == ["awareness", "consideration", "conversion", "loyalty", "advocacy"]
+    assert sum(len(items) for items in plan["candidates"].values()) == 10
     assert {item["provider"] for group in plan["candidates"].values() for item in group} == {"anthropic", "openai"}

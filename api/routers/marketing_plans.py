@@ -25,6 +25,7 @@ from ..services.google_ads import build_keyword_planner_summary, fetch_keyword_p
 from ..services.admin_audit import record_audit_log, record_provider_usage
 from ..services.provider_pricing import estimate_google_ads_keyword_planner_cost_usd, estimate_serpapi_cost_usd
 from ..services.marketing_plan_generator import (
+    generate_paid_content_work_plan,
     generate_social_content_work_plan,
     generate_marketing_customer_personas_research,
     infer_plan_language,
@@ -61,6 +62,14 @@ class GenerateSocialContentPlanRequest(BaseModel):
 
 
 class SocialContentPlanSelectionRequest(BaseModel):
+    selected_ids: list[str] = Field(default_factory=list, max_length=80)
+
+
+class GeneratePaidContentPlanRequest(BaseModel):
+    language: str | None = None
+
+
+class PaidContentPlanSelectionRequest(BaseModel):
     selected_ids: list[str] = Field(default_factory=list, max_length=80)
 
 
@@ -258,6 +267,17 @@ def _save_social_content_plan(suite: Suite, plan: dict[str, Any]) -> dict[str, A
     return plan
 
 
+def _save_paid_content_plan(suite: Suite, plan: dict[str, Any]) -> dict[str, Any]:
+    strategy = dict(_strategy(suite))
+    existing_action = strategy.get("marketing_action_plan")
+    action_plan = dict(existing_action) if isinstance(existing_action, dict) else {}
+    action_plan["paid_content_plan"] = plan
+    action_plan["status"] = "ready"
+    strategy["marketing_action_plan"] = action_plan
+    suite.strategy = strategy
+    return plan
+
+
 def _update_social_content_selection(suite: Suite, selected_ids: list[str]) -> dict[str, Any]:
     strategy = dict(_strategy(suite))
     action_plan = dict(strategy.get("marketing_action_plan") or {})
@@ -280,6 +300,34 @@ def _update_social_content_selection(suite: Suite, selected_ids: list[str]) -> d
             seen.add(value)
     plan["selected_ids"] = clean_ids
     action_plan["social_content_plan"] = plan
+    action_plan["status"] = "ready" if clean_ids else "draft"
+    strategy["marketing_action_plan"] = action_plan
+    suite.strategy = strategy
+    return plan
+
+
+def _update_paid_content_selection(suite: Suite, selected_ids: list[str]) -> dict[str, Any]:
+    strategy = dict(_strategy(suite))
+    action_plan = dict(strategy.get("marketing_action_plan") or {})
+    plan = dict(action_plan.get("paid_content_plan") or {})
+    if not plan:
+        raise HTTPException(status_code=404, detail="Generate the paid content work plan first.")
+    valid_ids = {
+        str(item.get("id"))
+        for group in (plan.get("candidates") or {}).values()
+        if isinstance(group, list)
+        for item in group
+        if isinstance(item, dict) and item.get("id")
+    }
+    clean_ids = []
+    seen = set()
+    for item_id in selected_ids:
+        value = str(item_id or "").strip()
+        if value and value in valid_ids and value not in seen:
+            clean_ids.append(value)
+            seen.add(value)
+    plan["selected_ids"] = clean_ids
+    action_plan["paid_content_plan"] = plan
     action_plan["status"] = "ready" if clean_ids else "draft"
     strategy["marketing_action_plan"] = action_plan
     suite.strategy = strategy
@@ -1982,6 +2030,78 @@ async def generate_marketing_social_plan(
     db: AsyncSession = Depends(get_db),
 ):
     return await _generate_marketing_plan_section(suite_id, "social", payload, current_user, db)
+
+
+@router.post("/suites/{suite_id}/marketing-plan/paid-content-plan/generate")
+async def generate_marketing_paid_content_plan(
+    suite_id: str,
+    payload: GeneratePaidContentPlanRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    request_data = payload or GeneratePaidContentPlanRequest()
+    output_language = infer_plan_language(suite, request_data.language)
+    plan = await generate_paid_content_work_plan(suite, output_language)
+    _save_paid_content_plan(suite, plan)
+    candidate_count = sum(
+        len(group)
+        for group in (plan.get("candidates") or {}).values()
+        if isinstance(group, list)
+    )
+    warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
+    await record_provider_usage(
+        db,
+        provider="anthropic+openai",
+        operation="marketing_paid_content_plan.generate",
+        model=f"{settings.anthropic_text_model}+{settings.openai_text_model}",
+        status="partial" if warnings else "success",
+        suite_id=suite.id,
+        user_id=current_user.id,
+        metadata={
+            "candidate_count": candidate_count,
+            "selected_count": len(plan.get("selected_ids") or []),
+            "language": output_language,
+            "warnings": warnings,
+            "cost_basis": "provider_usage_logged_without_actual_token_meter",
+        },
+    )
+    await record_audit_log(
+        db,
+        action="marketing.paid_content_plan.generate",
+        resource_type="marketing_action_plan",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={
+            "candidate_count": candidate_count,
+            "selected_count": len(plan.get("selected_ids") or []),
+        },
+    )
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "action_plan_ready")
+
+
+@router.post("/suites/{suite_id}/marketing-plan/paid-content-plan/selection")
+async def update_marketing_paid_content_plan_selection(
+    suite_id: str,
+    payload: PaidContentPlanSelectionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    plan = _update_paid_content_selection(suite, payload.selected_ids)
+    await record_audit_log(
+        db,
+        action="marketing.paid_content_plan.selection.update",
+        resource_type="marketing_action_plan",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"selected_count": len(plan.get("selected_ids") or [])},
+    )
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "action_plan_ready")
 
 
 @router.post("/suites/{suite_id}/marketing-plan/paid-funnel/generate")
