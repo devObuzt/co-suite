@@ -1,8 +1,18 @@
 from api.models.suite import Suite
 from api.services.marketing_plan_pdf import build_marketing_plan_pdf, _labels
+import re
+import subprocess
+from pathlib import Path
 
 
-def test_build_marketing_plan_pdf_returns_valid_pdf_bytes():
+def _pdfinfo(pdf_bytes: bytes, tmp_path: Path) -> str:
+    path = tmp_path / "marketing-plan.pdf"
+    path.write_bytes(pdf_bytes)
+    result = subprocess.run(["pdfinfo", str(path)], check=True, capture_output=True, text=True)
+    return result.stdout
+
+
+def test_build_marketing_plan_pdf_returns_valid_pdf_bytes(tmp_path):
     suite = Suite(
         id="suite-1",
         owner_id="user-1",
@@ -77,6 +87,16 @@ def test_build_marketing_plan_pdf_returns_valid_pdf_bytes():
     assert filename == "smart-line-academy-marketing-plan.pdf"
     assert pdf_bytes.startswith(b"%PDF")
     assert len(pdf_bytes) > 2500
+    info = _pdfinfo(pdf_bytes, tmp_path)
+    pages_match = re.search(r"Pages:\s+(\d+)", info)
+    assert pages_match
+    assert int(pages_match.group(1)) >= 10
+    size_match = re.search(r"Page size:\s+([0-9.]+) x ([0-9.]+)", info)
+    assert size_match
+    width = float(size_match.group(1))
+    height = float(size_match.group(2))
+    assert width > height
+    assert round(width / height, 2) == 1.78
 
 
 def test_marketing_plan_pdf_uses_marketing_intelligence_language():
@@ -133,4 +153,4 @@ def test_marketing_plan_pdf_ignores_bidi_isolate_controls():
 
     assert filename == "mixed-direction-suite-marketing-plan.pdf"
     assert pdf_bytes.startswith(b"%PDF")
-    assert len(pdf_bytes) > 2500
+    assert len(pdf_bytes) > 5000

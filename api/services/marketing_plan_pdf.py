@@ -11,7 +11,6 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
@@ -21,6 +20,20 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, 
 from api.models.suite import Suite
 from api.services.marketing_plan_generator import infer_plan_language
 
+
+SLIDE_SIZE = (900, 507)
+SLIDE_MARGIN = 42
+DARK_BG = colors.HexColor("#0b071f")
+PANEL_BG = colors.HexColor("#17112c")
+CARD_BG = colors.HexColor("#241b43")
+CARD_BORDER = colors.HexColor("#5b4aa0")
+TEXT_LIGHT = colors.HexColor("#f8fafc")
+TEXT_MUTED = colors.HexColor("#cbd5e1")
+TEXT_DIM = colors.HexColor("#94a3b8")
+ACCENT = colors.HexColor("#ff79a8")
+ACCENT_2 = colors.HexColor("#8b5cf6")
+ACCENT_3 = colors.HexColor("#22d3ee")
+ACCENT_HEX = "#ff79a8"
 
 FONT_DIR = Path(__file__).resolve().parents[1] / "fonts"
 FONT_FILES = {
@@ -207,6 +220,57 @@ def _labels(language: str) -> dict[str, str]:
             "motivation": "الدافع",
             "solution": "حل العرض",
             "generated_by": "تم إنشاؤه عبر OneShare",
+            "brand": "العلامة التجارية",
+            "market": "السوق",
+            "audience": "الجمهور",
+            "language": "اللغة",
+            "location": "الموقع",
+            "project_nature": "طبيعة المشروع",
+            "marketing_plan": "خطة نمو وتسويق",
+            "snapshot": "صورة المشروع",
+            "snapshot_subtitle": "نقطة الانطلاق الاستراتيجية قبل قرارات القنوات والمحتوى.",
+            "deck_metric_services": "محاور عرض",
+            "deck_metric_keywords": "مصطلحات سوق",
+            "deck_metric_competitors": "إشارات منافسة",
+            "services_pitch": "منظومة العرض التي سنحوّلها إلى طلب ورسائل حملات واضحة.",
+            "service_card_copy": "محور عرض واضح للتموضع والمحتوى وبنية الحملات.",
+            "market_reading": "قراءة السوق",
+            "market_reading_subtitle": "ماذا يخبرنا السوق قبل تحويل الاستراتيجية إلى تنفيذ.",
+            "opportunity": "الفرصة",
+            "problem": "مشكلة السوق",
+            "positioning": "التموضع",
+            "opportunity_copy": "نبني الطلب حول مشكلة واضحة وإثبات ونتيجة مفهومة.",
+            "problem_copy": "الجمهور يحتاج سبباً أوضح ليختار هذا البزنس الآن.",
+            "positioning_copy": "نقود بالثقة والتميّز ودعوات فعل مباشرة.",
+            "direct_intent": "نية طلب مباشر",
+            "learning_intent": "نية تعلم وبحث",
+            "comparison_intent": "نية مقارنة",
+            "local_intent": "نية محلية",
+            "keywords_pitch": "الكلمات تتحول إلى مجموعات نية، وليس قائمة مسطحة.",
+            "competitors_pitch": "المنافسون إشارات سوق: عروض، تموضع، وضغط قنوات.",
+            "missing_source": "هذا المصدر لم ينتج منافسين مباشرين بعد.",
+            "market_signal": "راجع هذا المصدر لاستخراج إشارات تموضع.",
+            "demand_pitch": "الطلب والمنافسة وضغط السوق يحددون درجة هجومية الخطة.",
+            "monthly_searches": "طلب بحث شهري",
+            "pressure_copy": "مزيج الطلب والمنافسة",
+            "personas_pitch": "كل شخصية تربط حاجة حقيقية بوعد تسويقي محدد.",
+            "strategic_direction": "الاتجاه الاستراتيجي",
+            "strategy_pitch": "القصة التسويقية التي تحول إشارات السوق إلى قرارات عملية.",
+            "message": "الرسالة المركزية",
+            "channels": "القنوات",
+            "differentiation": "زاوية التميز",
+            "themes": "محاور المحتوى",
+            "message_copy": "نعرض الحل كمسار واضح من الحاجة إلى نتيجة قابلة للفهم.",
+            "content_engine": "محتوى تعليمي قصير وإعادة استهداف.",
+            "differentiation_copy": "نستخدم الإثبات، الصلة المحلية، ووعد خدمة مركز.",
+            "themes_copy": "مشاكل، مقارنات، قصص نجاح، اعتراضات، وعروض مباشرة.",
+            "execution": "تنفيذ 30 / 60 / 90 يوم",
+            "execution_pitch": "طريق بسيط من الاستراتيجية إلى الفعل.",
+            "days_30": "توضيح العرض، رسالة الهبوط، والكلمات ذات الأولوية.",
+            "days_60": "إطلاق محتوى وحملات بحث حول الطلب الأعلى نية.",
+            "days_90": "توسيع الفائز، إعادة استهداف الجمهور الدافئ، وتعميق الإثبات المحلي.",
+            "closing": "الصورة التسويقية الكاملة جاهزة.",
+            "closing_copy": "هذا العرض يربط العرض، الطلب، المنافسين، شخصيات العملاء، وأولويات التنفيذ في خطة عملية واحدة.",
         }
     if language == "he":
         return {
@@ -235,6 +299,57 @@ def _labels(language: str) -> dict[str, str]:
             "motivation": "מוטיבציה",
             "solution": "פתרון ההצעה",
             "generated_by": "נוצר באמצעות OneShare",
+            "brand": "מותג",
+            "market": "שוק",
+            "audience": "קהל יעד",
+            "language": "שפה",
+            "location": "מיקום",
+            "project_nature": "אופי הפרויקט",
+            "marketing_plan": "תכנית צמיחה ושיווק",
+            "snapshot": "תמונת הפרויקט",
+            "snapshot_subtitle": "נקודת הפתיחה האסטרטגית לפני החלטות ערוצים ותוכן.",
+            "deck_metric_services": "עמודי הצעה",
+            "deck_metric_keywords": "מונחי שוק",
+            "deck_metric_competitors": "סימני תחרות",
+            "services_pitch": "מערכת ההצעה שנהפוך לביקוש ולמסרי קמפיין ברורים.",
+            "service_card_copy": "עמוד הצעה ברור למיצוב, תוכן ומבנה קמפיינים.",
+            "market_reading": "קריאת שוק",
+            "market_reading_subtitle": "מה השוק מספר לנו לפני שהאסטרטגיה הופכת לביצוע.",
+            "opportunity": "הזדמנות",
+            "problem": "בעיית השוק",
+            "positioning": "מיצוב",
+            "opportunity_copy": "בונים ביקוש סביב בעיה ברורה, הוכחה ותוצאה מובנת.",
+            "problem_copy": "הקהל צריך סיבה חדה יותר לבחור בעסק עכשיו.",
+            "positioning_copy": "מובילים עם אמון, בידול וקריאה ברורה לפעולה.",
+            "direct_intent": "כוונת ביקוש ישירה",
+            "learning_intent": "כוונת למידה ומחקר",
+            "comparison_intent": "כוונת השוואה",
+            "local_intent": "כוונה מקומית",
+            "keywords_pitch": "מילות המפתח הופכות לקבוצות כוונה, לא לרשימה שטוחה.",
+            "competitors_pitch": "מתחרים הם סימני שוק: הצעות, מיצוב ולחץ ערוצים.",
+            "missing_source": "מקור זה עדיין לא הפיק מתחרים ישירים.",
+            "market_signal": "יש לבדוק מקור זה כדי לזהות רמזי מיצוב.",
+            "demand_pitch": "ביקוש, תחרות ולחץ שוק קובעים את עוצמת התכנית.",
+            "monthly_searches": "ביקוש חיפוש חודשי",
+            "pressure_copy": "שילוב ביקוש ותחרות",
+            "personas_pitch": "כל פרסונה מחברת צורך אמיתי להבטחה שיווקית ממוקדת.",
+            "strategic_direction": "כיוון אסטרטגי",
+            "strategy_pitch": "הסיפור השיווקי שהופך סימני שוק להחלטות מעשיות.",
+            "message": "מסר מרכזי",
+            "channels": "ערוצים",
+            "differentiation": "זווית בידול",
+            "themes": "נושאי תוכן",
+            "message_copy": "מציגים את ההצעה כמסלול ברור מצורך לתוצאה מובנת.",
+            "content_engine": "תוכן לימודי קצר וריטרגטינג.",
+            "differentiation_copy": "משתמשים בהוכחה, רלוונטיות מקומית והבטחת שירות ממוקדת.",
+            "themes_copy": "בעיות, השוואות, סיפורי הצלחה, התנגדויות והצעות ישירות.",
+            "execution": "ביצוע 30 / 60 / 90 יום",
+            "execution_pitch": "דרך פשוטה מאסטרטגיה לפעולה.",
+            "days_30": "חידוד ההצעה, מסר הנחיתה ומילות המפתח בעדיפות.",
+            "days_60": "השקת תוכן וקמפייני חיפוש סביב ביקוש בכוונה גבוהה.",
+            "days_90": "הרחבת המנצחים, ריטרגטינג לקהל חם והעמקת הוכחה מקומית.",
+            "closing": "התמונה השיווקית המלאה מוכנה.",
+            "closing_copy": "המצגת מחברת הצעה, ביקוש, מתחרים, פרסונות וסדרי עדיפויות לתכנית אחת מעשית.",
         }
     return {
         "title": "Marketing Plan",
@@ -262,6 +377,57 @@ def _labels(language: str) -> dict[str, str]:
         "motivation": "Motivation",
         "solution": "Offer solution",
         "generated_by": "Generated by OneShare",
+        "brand": "Brand",
+        "market": "Market",
+        "audience": "Audience",
+        "language": "Language",
+        "location": "Location",
+        "project_nature": "Project nature",
+        "marketing_plan": "Marketing growth plan",
+        "snapshot": "Business snapshot",
+        "snapshot_subtitle": "The strategic starting point before channel and content decisions.",
+        "deck_metric_services": "offer areas",
+        "deck_metric_keywords": "market terms",
+        "deck_metric_competitors": "market signals",
+        "services_pitch": "The offer system we will turn into demand and clear campaign messages.",
+        "service_card_copy": "A clear offer pillar for positioning, content, and campaign structure.",
+        "market_reading": "Market reading",
+        "market_reading_subtitle": "What the market is telling us before we turn strategy into execution.",
+        "opportunity": "Opportunity",
+        "problem": "Market problem",
+        "positioning": "Positioning",
+        "opportunity_copy": "Build demand around clear problems, proof, and service outcomes.",
+        "problem_copy": "The audience needs a sharper reason to choose this business now.",
+        "positioning_copy": "Lead with credibility, clear differentiation, and direct calls to action.",
+        "direct_intent": "Direct demand",
+        "learning_intent": "Learning intent",
+        "comparison_intent": "Comparison intent",
+        "local_intent": "Local intent",
+        "keywords_pitch": "Search terms become intent groups, not just a flat list.",
+        "competitors_pitch": "Competitors are market signals: offers, positioning, and channel pressure.",
+        "missing_source": "This source has not produced direct competitors yet.",
+        "market_signal": "Review this source for positioning clues.",
+        "demand_pitch": "Demand, competition, and market pressure help decide how aggressive the plan should be.",
+        "monthly_searches": "monthly search demand",
+        "pressure_copy": "combined demand and competition",
+        "personas_pitch": "Each persona connects a real need to a focused marketing promise.",
+        "strategic_direction": "Strategic direction",
+        "strategy_pitch": "The marketing story that turns market signals into client-facing decisions.",
+        "message": "Core message",
+        "channels": "Channels",
+        "differentiation": "Differentiation",
+        "themes": "Content themes",
+        "message_copy": "Present the offer as a clear path from need to measurable outcome.",
+        "content_engine": "Short educational content and retargeting.",
+        "differentiation_copy": "Use proof, local relevance, and a focused service promise.",
+        "themes_copy": "Problems, comparisons, success stories, objections, and direct offers.",
+        "execution": "30 / 60 / 90 day execution",
+        "execution_pitch": "A simple path from strategy to action.",
+        "days_30": "Clarify offer, landing message, and priority keywords.",
+        "days_60": "Launch content and search campaigns around high-intent demand.",
+        "days_90": "Scale winners, retarget warm audiences, and deepen local proof.",
+        "closing": "The full marketing picture is ready.",
+        "closing_copy": "This deck connects the offer, market demand, competitors, customer personas, and execution priorities into one practical plan.",
     }
 
 
@@ -270,118 +436,190 @@ def _styles(language: str, font_name: str) -> dict[str, ParagraphStyle]:
     alignment = TA_RIGHT if _is_rtl(language) else TA_LEFT
     return {
         "cover": ParagraphStyle(
-            "MarketingPdfCover",
+            "MarketingDeckCover",
             parent=base["Title"],
             fontName=font_name,
             fontSize=34,
             leading=42,
             alignment=alignment,
-            textColor=colors.HexColor("#0f172a"),
-            spaceAfter=10,
+            textColor=TEXT_LIGHT,
+            spaceAfter=12,
         ),
         "title": ParagraphStyle(
-            "MarketingPdfTitle",
+            "MarketingDeckTitle",
             parent=base["Heading1"],
             fontName=font_name,
-            fontSize=24,
-            leading=30,
+            fontSize=25,
+            leading=31,
             alignment=alignment,
-            textColor=colors.HexColor("#111827"),
+            textColor=TEXT_LIGHT,
             spaceAfter=8,
         ),
-        "eyebrow": ParagraphStyle(
-            "MarketingPdfEyebrow",
-            parent=base["BodyText"],
+        "section": ParagraphStyle(
+            "MarketingDeckSection",
+            parent=base["Heading2"],
             fontName=font_name,
-            fontSize=9,
-            leading=12,
+            fontSize=13,
+            leading=17,
             alignment=alignment,
-            textColor=colors.HexColor("#64748b"),
+            textColor=ACCENT,
+            spaceAfter=4,
         ),
         "card_title": ParagraphStyle(
-            "MarketingPdfCardTitle",
+            "MarketingDeckCardTitle",
             parent=base["Heading3"],
             fontName=font_name,
             fontSize=13,
-            leading=18,
+            leading=17,
             alignment=alignment,
-            textColor=colors.HexColor("#111827"),
+            textColor=TEXT_LIGHT,
             spaceAfter=5,
         ),
         "body": ParagraphStyle(
-            "MarketingPdfBody",
+            "MarketingDeckBody",
             parent=base["BodyText"],
             fontName=font_name,
-            fontSize=10,
-            leading=15,
+            fontSize=9.5,
+            leading=14,
             alignment=alignment,
-            textColor=colors.HexColor("#374151"),
+            textColor=TEXT_MUTED,
         ),
         "small": ParagraphStyle(
-            "MarketingPdfSmall",
+            "MarketingDeckSmall",
             parent=base["BodyText"],
             fontName=font_name,
-            fontSize=8,
-            leading=11,
+            fontSize=7.5,
+            leading=10,
             alignment=alignment,
-            textColor=colors.HexColor("#6b7280"),
+            textColor=TEXT_DIM,
         ),
         "metric": ParagraphStyle(
-            "MarketingPdfMetric",
+            "MarketingDeckMetric",
             parent=base["Heading2"],
             fontName=font_name,
-            fontSize=20,
-            leading=26,
+            fontSize=24,
+            leading=29,
             alignment=TA_CENTER,
-            textColor=colors.HexColor("#0f172a"),
+            textColor=TEXT_LIGHT,
         ),
     }
+
+
+def _label(labels: dict[str, str], key: str, fallback: str) -> str:
+    return labels.get(key) or fallback
 
 
 def _para(value: Any, language: str, styles: dict[str, ParagraphStyle], style: str, fonts: dict[str, str], default_font: str) -> Paragraph:
     return Paragraph(_p(value, language, fonts, default_font), styles[style])
 
 
-def _slide_title(story: list[Any], title: str, subtitle: str | None, language: str, styles: dict[str, ParagraphStyle], fonts: dict[str, str], default_font: str) -> None:
+def _clamp_text(value: Any, limit: int = 150) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").translate(BIDI_CONTROL_CHARS)).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _compact_url(value: Any, limit: int = 38) -> str:
+    text = str(value or "").strip().replace("https://", "").replace("http://", "")
+    text = text.split("?")[0].strip("/")
+    return _clamp_text(text, limit) if text else "-"
+
+
+def _chunks(items: list[Any], size: int) -> list[list[Any]]:
+    return [items[index : index + size] for index in range(0, len(items), size)] or [[]]
+
+
+def _text_or_empty(items: list[Any], labels: dict[str, str]) -> list[Any]:
+    return items if items else [labels["empty"]]
+
+
+def _slide_title(
+    story: list[Any],
+    title: str,
+    subtitle: str | None,
+    language: str,
+    styles: dict[str, ParagraphStyle],
+    fonts: dict[str, str],
+    default_font: str,
+    section: str | None = None,
+) -> None:
+    if section:
+        story.append(_para(section, language, styles, "section", fonts, default_font))
     story.append(_para(title, language, styles, "title", fonts, default_font))
     if subtitle:
-        story.append(_para(subtitle, language, styles, "body", fonts, default_font))
-    story.append(Spacer(1, 0.18 * inch))
+        story.append(_para(_clamp_text(subtitle, 190), language, styles, "body", fonts, default_font))
+    story.append(Spacer(1, 0.14 * inch))
 
 
-def _card(
+def _pitch_card(
     title: str,
     lines: list[Any],
     language: str,
     styles: dict[str, ParagraphStyle],
     fonts: dict[str, str],
     default_font: str,
-    accent: str = "blue",
+    accent: colors.Color = ACCENT,
+    width: float = 248,
+    max_lines: int = 4,
 ) -> Table:
-    bg, border, _strong = ACCENTS.get(accent, ACCENTS["blue"])
-    content: list[Any] = [_para(title, language, styles, "card_title", fonts, default_font)]
-    for line in lines[:7]:
+    content: list[Any] = [_para(_clamp_text(title, 70), language, styles, "card_title", fonts, default_font)]
+    for line in lines[:max_lines]:
         if line is None or str(line).strip() == "":
             continue
-        content.append(_para(line, language, styles, "body", fonts, default_font))
-    table = Table([[content]], colWidths=[3.0 * inch])
+        content.append(_para(_clamp_text(line, 135), language, styles, "body", fonts, default_font))
+    table = Table([[content]], colWidths=[width], hAlign="CENTER")
     table.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
-                ("BOX", (0, 0), (-1, -1), 1.0, colors.HexColor(border)),
+                ("BACKGROUND", (0, 0), (-1, -1), CARD_BG),
+                ("BOX", (0, 0), (-1, -1), 0.9, CARD_BORDER),
+                ("LINEBEFORE", (0, 0), (0, -1), 4, accent),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 12),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-                ("TOPPADDING", (0, 0), (-1, -1), 10),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+                ("LEFTPADDING", (0, 0), (-1, -1), 14),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+                ("TOPPADDING", (0, 0), (-1, -1), 12),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
             ]
         )
     )
     return table
 
 
-def _card_grid(story: list[Any], cards: list[Table], columns: int = 3) -> None:
+def _metric_card(
+    title: str,
+    value: Any,
+    detail: str,
+    language: str,
+    styles: dict[str, ParagraphStyle],
+    fonts: dict[str, str],
+    default_font: str,
+    accent: colors.Color,
+) -> Table:
+    content = [
+        _para(title, language, styles, "body", fonts, default_font),
+        _para(value, language, styles, "metric", fonts, default_font),
+        _para(detail, language, styles, "small", fonts, default_font),
+    ]
+    table = Table([[content]], colWidths=[246], hAlign="CENTER")
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), CARD_BG),
+                ("BOX", (0, 0), (-1, -1), 0.9, CARD_BORDER),
+                ("LINEABOVE", (0, 0), (-1, 0), 4, accent),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 14),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+                ("TOPPADDING", (0, 0), (-1, -1), 12),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+            ]
+        )
+    )
+    return table
+
+
+def _pitch_grid(story: list[Any], cards: list[Table], columns: int = 3, col_width: float = 260) -> None:
     rows: list[list[Any]] = []
     for index in range(0, len(cards), columns):
         row = cards[index : index + columns]
@@ -390,13 +628,13 @@ def _card_grid(story: list[Any], cards: list[Table], columns: int = 3) -> None:
         rows.append(row)
     if not rows:
         return
-    table = Table(rows, colWidths=[3.15 * inch] * columns, hAlign="CENTER")
+    table = Table(rows, colWidths=[col_width] * columns, hAlign="CENTER")
     table.setStyle(
         TableStyle(
             [
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                 ("TOPPADDING", (0, 0), (-1, -1), 6),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ]
@@ -405,20 +643,149 @@ def _card_grid(story: list[Any], cards: list[Table], columns: int = 3) -> None:
     story.append(table)
 
 
-def _chunks(items: list[Any], size: int) -> list[list[Any]]:
-    return [items[index : index + size] for index in range(0, len(items), size)] or [[]]
+def _section_break(
+    story: list[Any],
+    title: str,
+    subtitle: str,
+    language: str,
+    styles: dict[str, ParagraphStyle],
+    fonts: dict[str, str],
+    default_font: str,
+) -> None:
+    story.append(Spacer(1, 1.25 * inch))
+    story.append(_para(title, language, styles, "cover", fonts, default_font))
+    story.append(_para(subtitle, language, styles, "body", fonts, default_font))
 
 
-def _metric_cards(summary: dict[str, Any], labels: dict[str, str], language: str, styles: dict[str, ParagraphStyle], fonts: dict[str, str], default_font: str) -> list[Table]:
+def _draw_deck_page(canvas: Any, document: SimpleDocTemplate) -> None:
+    canvas.saveState()
+    width, height = SLIDE_SIZE
+    canvas.setFillColor(DARK_BG)
+    canvas.rect(0, 0, width, height, fill=1, stroke=0)
+    canvas.setFillColor(colors.HexColor("#100b26"))
+    canvas.rect(width * 0.64, 0, width * 0.36, height, fill=1, stroke=0)
+    canvas.setFillColor(ACCENT)
+    canvas.rect(0, height - 5, width, 5, fill=1, stroke=0)
+    canvas.setFillColor(colors.HexColor("#211842"))
+    canvas.circle(width - 92, height - 92, 80, fill=1, stroke=0)
+    canvas.setFillColor(colors.HexColor("#37236c"))
+    canvas.circle(width - 66, height - 70, 42, fill=1, stroke=0)
+    canvas.setFillColor(TEXT_DIM)
+    canvas.setFont("Helvetica", 7)
+    canvas.drawString(SLIDE_MARGIN, 18, f"OneShare / Cosuite - {document.page}")
+    canvas.restoreState()
+
+
+def _business_snapshot(suite: Suite, labels: dict[str, str]) -> list[tuple[str, str]]:
+    brand = _brand(suite)
+    strategy = _strategy(suite)
     return [
-        _card(labels["searches"], [summary.get("average_monthly_searches", 0)], language, styles, fonts, default_font, "mint"),
-        _card(labels["competition"], [summary.get("competition_level", "UNKNOWN")], language, styles, fonts, default_font, "amber"),
-        _card(labels["pressure"], [f"{summary.get('market_pressure_score', 0)}/100"], language, styles, fonts, default_font, "violet"),
+        (_label(labels, "brand", "Brand"), brand.get("name") or suite.name or "-"),
+        (_label(labels, "market", "Market"), brand.get("industry") or brand.get("category") or strategy.get("business_category") or "-"),
+        (_label(labels, "audience", "Audience"), brand.get("target_audience") or brand.get("audience") or "-"),
+        (_label(labels, "language", "Language"), brand.get("language") or strategy.get("language") or "-"),
+        (_label(labels, "location", "Location"), brand.get("location") or brand.get("country") or "-"),
+        (_label(labels, "project_nature", "Project nature"), _label(labels, "marketing_plan", "Marketing growth plan")),
     ]
 
 
-def _text_or_empty(items: list[Any], labels: dict[str, str]) -> list[Any]:
-    return items if items else [labels["empty"]]
+def _keyword_groups(intelligence: dict[str, Any], labels: dict[str, str]) -> dict[str, list[str]]:
+    groups = {
+        _label(labels, "direct_intent", "Direct demand"): [],
+        _label(labels, "learning_intent", "Learning intent"): [],
+        _label(labels, "comparison_intent", "Comparison intent"): [],
+        _label(labels, "local_intent", "Local intent"): [],
+    }
+    keywords = [item for item in _safe_list(intelligence.get("keywords")) if isinstance(item, dict)]
+    for item in keywords:
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        marker = f"{item.get('intent') or ''} {text}".lower()
+        if any(word in marker for word in ("near", "local", "map", "قريب", "محلي", "אזור", "קרוב")):
+            key = _label(labels, "local_intent", "Local intent")
+        elif any(word in marker for word in ("compare", "best", "vs", "مقارنة", "أفضل", "השוואה")):
+            key = _label(labels, "comparison_intent", "Comparison intent")
+        elif any(word in marker for word in ("learn", "how", "course", "تعلم", "دورة", "איך", "קורס")):
+            key = _label(labels, "learning_intent", "Learning intent")
+        else:
+            key = _label(labels, "direct_intent", "Direct demand")
+        groups[key].append(text)
+    return {key: values[:8] for key, values in groups.items()}
+
+
+def _competitors_by_source(intelligence: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in _safe_list(intelligence.get("competitors")):
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("result_type") or item.get("platform") or item.get("source") or "other")
+        grouped.setdefault(source, []).append(item)
+    return grouped
+
+
+def _market_insights(suite: Suite, intelligence: dict[str, Any], labels: dict[str, str]) -> list[tuple[str, list[str]]]:
+    services = _services(suite)[:4]
+    keyword_count = len(_safe_list(intelligence.get("keywords")))
+    competitor_count = len(_safe_list(intelligence.get("competitors")))
+    demand_supply = _safe_dict(intelligence.get("demand_supply"))
+    summary = _safe_dict(demand_supply.get("summary"))
+    return [
+        (_label(labels, "opportunity", "Opportunity"), [
+            _label(labels, "opportunity_copy", "Build demand around clear problems, proof, and service outcomes."),
+            ", ".join(services) if services else labels["empty"],
+        ]),
+        (_label(labels, "problem", "Market problem"), [
+            _label(labels, "problem_copy", "The audience needs a sharper reason to choose this business now."),
+            f"{keyword_count} {labels['keywords']} / {competitor_count} {labels['competitors']}",
+        ]),
+        (_label(labels, "positioning", "Positioning"), [
+            _label(labels, "positioning_copy", "Lead with credibility, clear differentiation, and direct calls to action."),
+            f"{labels['pressure']}: {summary.get('market_pressure_score', 0)}/100" if summary else labels["empty"],
+        ]),
+    ]
+
+
+def _strategic_direction(suite: Suite, intelligence: dict[str, Any], labels: dict[str, str]) -> list[tuple[str, list[str]]]:
+    services = _services(suite)[:3]
+    keywords = [item.get("text") for item in _safe_list(intelligence.get("keywords")) if isinstance(item, dict) and item.get("text")][:4]
+    return [
+        (_label(labels, "message", "Core message"), [
+            _label(labels, "message_copy", "Present the offer as a clear path from need to measurable outcome."),
+            ", ".join(services) if services else labels["empty"],
+        ]),
+        (_label(labels, "channels", "Channels"), [
+            "Google Search / Maps",
+            "Instagram / Facebook",
+            _label(labels, "content_engine", "Short educational content and retargeting."),
+        ]),
+        (_label(labels, "differentiation", "Differentiation"), [
+            _label(labels, "differentiation_copy", "Use proof, local relevance, and a focused service promise."),
+            ", ".join(keywords) if keywords else labels["empty"],
+        ]),
+        (_label(labels, "themes", "Content themes"), [
+            _label(labels, "themes_copy", "Problems, comparisons, success stories, objections, and direct offers."),
+        ]),
+    ]
+
+
+def _execution_steps(action_plan: dict[str, Any], labels: dict[str, str]) -> list[tuple[str, list[str]]]:
+    items = [
+        *[item for item in _safe_list(action_plan.get("social_items")) if isinstance(item, dict)],
+        *[item for item in _safe_list(action_plan.get("ad_funnel_items")) if isinstance(item, dict)],
+    ]
+    titles = [str(item.get("title") or item.get("objective") or "").strip() for item in items if item.get("title") or item.get("objective")]
+    return [
+        ("30", [_label(labels, "days_30", "Clarify offer, landing message, and priority keywords."), *titles[:2]]),
+        ("60", [_label(labels, "days_60", "Launch content and search campaigns around high-intent demand."), *titles[2:4]]),
+        ("90", [_label(labels, "days_90", "Scale winners, retarget warm audiences, and deepen local proof."), *titles[4:6]]),
+    ]
+
+
+def _append_page(story: list[Any], content: list[Any]) -> None:
+    if story:
+        story.append(PageBreak())
+    story.extend(content)
 
 
 def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
@@ -431,11 +798,11 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
     buffer = __import__("io").BytesIO()
     document = SimpleDocTemplate(
         buffer,
-        pagesize=landscape(A4),
-        rightMargin=0.42 * inch,
-        leftMargin=0.42 * inch,
-        topMargin=0.38 * inch,
-        bottomMargin=0.38 * inch,
+        pagesize=SLIDE_SIZE,
+        rightMargin=SLIDE_MARGIN,
+        leftMargin=SLIDE_MARGIN,
+        topMargin=36,
+        bottomMargin=32,
         title=str(_brand(suite).get("name") or suite.name or labels["title"]),
     )
 
@@ -446,75 +813,101 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
     suite_name = _brand(suite).get("name") or suite.name or "Suite"
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    # Cover slide
-    story.append(Spacer(1, 0.8 * inch))
-    story.append(_para(f"{labels['title']} - {suite_name}", language, styles, "cover", fonts, default_font))
-    story.append(_para(labels["subtitle"], language, styles, "body", fonts, default_font))
-    story.append(Spacer(1, 0.35 * inch))
-    _card_grid(
-        story,
-        [
-            _card(labels["services"], [len(_services(suite))], language, styles, fonts, default_font, "blue"),
-            _card(labels["keywords"], [len(_safe_list(intelligence.get("keywords")))], language, styles, fonts, default_font, "mint"),
-            _card(labels["competitors"], [len(_safe_list(intelligence.get("competitors")))], language, styles, fonts, default_font, "pink"),
-        ],
-    )
-    story.append(Spacer(1, 0.25 * inch))
+    # 1. Cover
+    cover_cards = [
+        _metric_card(labels["services"], len(_services(suite)), _label(labels, "deck_metric_services", "offer areas"), language, styles, fonts, default_font, ACCENT_3),
+        _metric_card(labels["keywords"], len(_safe_list(intelligence.get("keywords"))), _label(labels, "deck_metric_keywords", "market terms"), language, styles, fonts, default_font, ACCENT),
+        _metric_card(labels["competitors"], len(_safe_list(intelligence.get("competitors"))), _label(labels, "deck_metric_competitors", "market signals"), language, styles, fonts, default_font, ACCENT_2),
+    ]
+    _append_page(story, [
+        Spacer(1, 0.95 * inch),
+        _para(f"{suite_name}", language, styles, "cover", fonts, default_font),
+        _para(labels["title"], language, styles, "title", fonts, default_font),
+        _para(labels["subtitle"], language, styles, "body", fonts, default_font),
+        Spacer(1, 0.22 * inch),
+    ])
+    _pitch_grid(story, cover_cards, columns=3, col_width=260)
+    story.append(Spacer(1, 0.12 * inch))
     story.append(_para(f"{labels['generated']}: {generated_at}", language, styles, "small", fonts, default_font))
-    story.append(_para(labels["generated_by"], language, styles, "small", fonts, default_font))
 
-    # Services/products
-    for page_index, group in enumerate(_chunks(_text_or_empty(_services(suite), labels), 9)):
-        story.append(PageBreak())
-        _slide_title(story, labels["services"], None if page_index else labels["overview"], language, styles, fonts, default_font)
-        cards = [_card(str(item), [], language, styles, fonts, default_font, "blue") for item in group]
-        _card_grid(story, cards)
+    # 2. Business snapshot
+    snapshot_cards = [
+        _pitch_card(title, [value], language, styles, fonts, default_font, ACCENT, width=248, max_lines=2)
+        for title, value in _business_snapshot(suite, labels)
+    ]
+    _append_page(story, [])
+    _slide_title(story, _label(labels, "snapshot", "Business snapshot"), _label(labels, "snapshot_subtitle", "The strategic starting point before channel and content decisions."), language, styles, fonts, default_font, labels["overview"])
+    _pitch_grid(story, snapshot_cards, columns=3, col_width=260)
 
-    # Keywords
-    keywords = [item.get("text") for item in _safe_list(intelligence.get("keywords")) if isinstance(item, dict) and item.get("text")]
-    for page_index, group in enumerate(_chunks(_text_or_empty(keywords, labels), 15)):
-        story.append(PageBreak())
-        _slide_title(story, labels["keywords"], None if page_index else labels["subtitle"], language, styles, fonts, default_font)
-        cards = [_card(str(item), [], language, styles, fonts, default_font, "mint") for item in group]
-        _card_grid(story, cards)
+    # 3. Services/products
+    for page_index, group in enumerate(_chunks(_text_or_empty(_services(suite), labels), 6)):
+        _append_page(story, [])
+        _slide_title(story, labels["services"], _label(labels, "services_pitch", "The offer system we will turn into demand and clear campaign messages."), language, styles, fonts, default_font, str(page_index + 1).zfill(2))
+        cards = [_pitch_card(str(item), [_label(labels, "service_card_copy", "A clear offer pillar for positioning, content, and campaign structure.")], language, styles, fonts, default_font, ACCENT_3, width=248, max_lines=2) for item in group]
+        _pitch_grid(story, cards, columns=3, col_width=260)
 
-    # Competitors
-    competitors = [item for item in _safe_list(intelligence.get("competitors")) if isinstance(item, dict)]
-    competitor_items = competitors or [{"title": labels["empty"], "result_type": "-", "url": "-"}]
-    for page_index, group in enumerate(_chunks(competitor_items[:18], 6)):
-        story.append(PageBreak())
-        _slide_title(story, labels["competitors"], None if page_index else labels["subtitle"], language, styles, fonts, default_font)
+    # 4. Market reading
+    _append_page(story, [])
+    _slide_title(story, _label(labels, "market_reading", "Market reading"), _label(labels, "market_reading_subtitle", "What the market is telling us before we turn strategy into execution."), language, styles, fonts, default_font, labels["overview"])
+    cards = [
+        _pitch_card(title, lines, language, styles, fonts, default_font, ACCENT, width=248)
+        for title, lines in _market_insights(suite, intelligence, labels)
+    ]
+    _pitch_grid(story, cards, columns=3, col_width=260)
+
+    # 5. Keywords by intent
+    keyword_groups = _keyword_groups(intelligence, labels)
+    _append_page(story, [])
+    _slide_title(story, labels["keywords"], _label(labels, "keywords_pitch", "Search terms become intent groups, not just a flat list."), language, styles, fonts, default_font, "03")
+    keyword_cards = [
+        _pitch_card(title, values or [labels["empty"]], language, styles, fonts, default_font, ACCENT_2, width=248, max_lines=6)
+        for title, values in keyword_groups.items()
+    ]
+    _pitch_grid(story, keyword_cards, columns=2, col_width=390)
+
+    # 6. Competitors by source
+    grouped_competitors = _competitors_by_source(intelligence)
+    sources = ["google_organic", "maps", "instagram", "facebook", "tiktok"]
+    for source in sources:
+        items = grouped_competitors.get(source, [])
+        _append_page(story, [])
+        source_title = source.replace("_", " ").title()
+        _slide_title(story, f"{labels['competitors']} - {source_title}", _label(labels, "competitors_pitch", "Competitors are market signals: offers, positioning, and channel pressure."), language, styles, fonts, default_font, "04")
         cards = []
-        for item in group:
+        for item in (items[:4] or [{"title": labels["empty"], "url": "-", "snippet": _label(labels, "missing_source", "This source has not produced direct competitors yet.")}]):
             cards.append(
-                _card(
+                _pitch_card(
                     item.get("title") or item.get("name") or labels["empty"],
                     [
-                        f"{labels['source']}: {item.get('result_type') or item.get('platform') or '-'}",
-                        f"{labels['link']}: {item.get('url') or '-'}",
-                        item.get("snippet") or item.get("description") or "",
+                        f"{labels['source']}: {source_title}",
+                        f"{labels['link']}: {_compact_url(item.get('url'))}",
+                        item.get("snippet") or item.get("description") or _label(labels, "market_signal", "Review this source for positioning clues."),
                     ],
                     language,
                     styles,
                     fonts,
                     default_font,
-                    "pink",
+                    ACCENT,
+                    width=366,
+                    max_lines=3,
                 )
             )
-        _card_grid(story, cards, columns=2)
+        _pitch_grid(story, cards, columns=2, col_width=390)
 
-    # Demand/supply
-    story.append(PageBreak())
-    _slide_title(story, labels["demand"], labels["subtitle"], language, styles, fonts, default_font)
-    if summary:
-        _card_grid(story, _metric_cards(summary, labels, language, styles, fonts, default_font))
-    else:
-        story.append(_card(labels["demand"], [labels["empty"]], language, styles, fonts, default_font, "amber"))
+    # 7. Demand/supply
+    _append_page(story, [])
+    _slide_title(story, labels["demand"], _label(labels, "demand_pitch", "Demand, competition, and market pressure help decide how aggressive the plan should be."), language, styles, fonts, default_font, "05")
+    metrics_cards = [
+        _metric_card(labels["searches"], summary.get("average_monthly_searches", 0) if summary else 0, _label(labels, "monthly_searches", "monthly search demand"), language, styles, fonts, default_font, ACCENT_3),
+        _metric_card(labels["competition"], summary.get("competition_level", "UNKNOWN") if summary else "UNKNOWN", "Google Ads", language, styles, fonts, default_font, ACCENT),
+        _metric_card(labels["pressure"], f"{summary.get('market_pressure_score', 0) if summary else 0}/100", _label(labels, "pressure_copy", "combined demand and competition"), language, styles, fonts, default_font, ACCENT_2),
+    ]
+    _pitch_grid(story, metrics_cards, columns=3, col_width=260)
     metrics = [item for item in _safe_list(demand_supply.get("keyword_metrics")) if isinstance(item, dict)]
     if metrics:
-        story.append(Spacer(1, 0.18 * inch))
+        story.append(Spacer(1, 0.12 * inch))
         cards = [
-            _card(
+            _pitch_card(
                 item.get("keyword") or "-",
                 [
                     f"{labels['searches']}: {item.get('average_monthly_searches', 0)}",
@@ -524,32 +917,34 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
                 styles,
                 fonts,
                 default_font,
-                "amber",
+                ACCENT_3,
+                width=248,
+                max_lines=2,
             )
-            for item in metrics[:6]
+            for item in metrics[:3]
         ]
-        _card_grid(story, cards)
+        _pitch_grid(story, cards, columns=3, col_width=260)
 
-    # Personas
+    # 8. Personas
     personas = [item for item in _safe_list(intelligence.get("personas")) if isinstance(item, dict)]
     persona_items = personas or [{"name": labels["empty"]}]
-    for page_index, group in enumerate(_chunks(persona_items[:10], 4)):
-        story.append(PageBreak())
-        _slide_title(story, labels["personas"], None if page_index else labels["subtitle"], language, styles, fonts, default_font)
+    for page_index, group in enumerate(_chunks(persona_items[:10], 3)):
+        _append_page(story, [])
+        _slide_title(story, labels["personas"], _label(labels, "personas_pitch", "Each persona connects a real need to a focused marketing promise."), language, styles, fonts, default_font, f"06.{page_index + 1}")
         cards = []
         for persona in group:
-            meta = ", ".join(
+            meta = " / ".join(
                 str(value)
                 for value in [
                     f"{labels['age']}: {persona.get('age')}" if persona.get("age") else "",
-                    f"{labels['gender']}: {persona.get('gender')}" if persona.get("gender") else "",
-                    f"{labels['profession']}: {persona.get('profession')}" if persona.get("profession") else "",
-                    f"{labels['economics']}: {persona.get('economic_status')}" if persona.get("economic_status") else "",
+                    persona.get("gender") or "",
+                    persona.get("profession") or "",
+                    persona.get("economic_status") or "",
                 ]
                 if value
             )
             cards.append(
-                _card(
+                _pitch_card(
                     persona.get("name") or labels["empty"],
                     [
                         meta,
@@ -561,25 +956,44 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
                     styles,
                     fonts,
                     default_font,
-                    "violet",
+                    ACCENT_2,
+                    width=248,
+                    max_lines=4,
                 )
             )
-        _card_grid(story, cards, columns=2)
+        _pitch_grid(story, cards, columns=3, col_width=260)
 
-    # Action plans
-    action_items = [
-        *[item for item in _safe_list(action_plan.get("social_items")) if isinstance(item, dict)],
-        *[item for item in _safe_list(action_plan.get("ad_funnel_items")) if isinstance(item, dict)],
+    # 9. Strategic direction
+    _append_page(story, [])
+    _slide_title(story, _label(labels, "strategic_direction", "Strategic direction"), _label(labels, "strategy_pitch", "The marketing story that turns market signals into client-facing decisions."), language, styles, fonts, default_font, "07")
+    strategy_cards = [
+        _pitch_card(title, lines, language, styles, fonts, default_font, ACCENT, width=366, max_lines=3)
+        for title, lines in _strategic_direction(suite, intelligence, labels)
     ]
-    actions = action_items or [{"title": labels["empty"]}]
-    for page_index, group in enumerate(_chunks(actions[:12], 6)):
-        story.append(PageBreak())
-        _slide_title(story, labels["actions"], None if page_index else labels["subtitle"], language, styles, fonts, default_font)
-        cards = []
-        for item in group:
-            body = item.get("objective") or item.get("caption") or item.get("notes") or ""
-            cards.append(_card(item.get("title") or labels["empty"], [body], language, styles, fonts, default_font, "slate"))
-        _card_grid(story, cards, columns=2)
+    _pitch_grid(story, strategy_cards, columns=2, col_width=390)
 
-    document.build(story)
+    # 10. 30/60/90 execution
+    _append_page(story, [])
+    _slide_title(story, _label(labels, "execution", "30 / 60 / 90 day execution"), _label(labels, "execution_pitch", "A simple path from strategy to action."), language, styles, fonts, default_font, "08")
+    execution_cards = [
+        _pitch_card(title, lines, language, styles, fonts, default_font, ACCENT_3, width=248, max_lines=4)
+        for title, lines in _execution_steps(action_plan, labels)
+    ]
+    _pitch_grid(story, execution_cards, columns=3, col_width=260)
+
+    # 11. Closing
+    _append_page(story, [])
+    _section_break(
+        story,
+        _label(labels, "closing", "The full marketing picture is ready."),
+        _label(labels, "closing_copy", "This deck connects the offer, market demand, competitors, customer personas, and execution priorities into one practical plan."),
+        language,
+        styles,
+        fonts,
+        default_font,
+    )
+    story.append(Spacer(1, 0.2 * inch))
+    story.append(_para(labels["generated_by"], language, styles, "small", fonts, default_font))
+
+    document.build(story, onFirstPage=_draw_deck_page, onLaterPages=_draw_deck_page)
     return buffer.getvalue(), _filename(suite)
