@@ -1,6 +1,7 @@
 """Marketing plan deck generator for OneShare suite strategy pages."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import json
 import logging
@@ -26,6 +27,8 @@ MARKET_RESEARCH_MAX_TOKENS = 3000
 MARKET_RESEARCH_TIMEOUT_SECONDS = 160
 CUSTOMER_PERSONAS_MAX_TOKENS = 2200
 CUSTOMER_PERSONAS_TIMEOUT_SECONDS = 20
+SOCIAL_CONTENT_PLAN_MAX_TOKENS = 4200
+SOCIAL_CONTENT_PLAN_TIMEOUT_SECONDS = 120
 
 
 class MarketingPlanGenerationError(RuntimeError):
@@ -1014,6 +1017,7 @@ def normalize_marketing_action_plan(
         "status": raw.get("status") or ("ready" if social_items or ad_funnel_items else "missing"),
         "social_items": social_items,
         "ad_funnel_items": ad_funnel_items,
+        "social_content_plan": _dict(raw.get("social_content_plan")),
         "planning_questions": planning_questions,
         "warnings": warnings,
     }
@@ -1271,6 +1275,367 @@ def suite_research_payload(suite: Suite, planning_inputs: dict[str, Any] | None 
         "social_links": brand.get("social_links") or {},
         "planning_inputs": planning_inputs or {},
     }
+
+
+SOCIAL_CONTENT_TYPES: list[dict[str, Any]] = [
+    {
+        "type": "attraction",
+        "label_ar": "محتوى لجذب المتابعين والمشاهدات",
+        "percentage": 70,
+    },
+    {
+        "type": "trust",
+        "label_ar": "محتوى لبناء الثقة والهوية",
+        "percentage": 20,
+    },
+    {
+        "type": "sales",
+        "label_ar": "محتوى لزيادة المبيعات",
+        "percentage": 10,
+    },
+]
+
+
+DEFAULT_SOCIAL_WORK_PLAN_PROMPTS: dict[str, str] = {
+    "social.base": """ابدأ دائمًا بتعريف البزنس:
+- الاسم
+- المنتجات والخدمات
+- تفاصيل الجمهور المستهدف
+- العرض التسويقي كجواب على حاجة الجمهور
+- الرسالة التسويقية
+
+اكتب النتيجة بلغة الجمهور الأولى، وباللهجة المحددة إن وجدت.""",
+    "social.attraction": """اعطيني {count} فكرة ريل أو بوست عن قصص حقيقية أو ترندات متعلقة أو أفكار جذابة تجاوب اهتمامات وسلوكيات جمهوري في مجالي.
+الفكرة يجب أن تكون ذات طابع غريب أو فاشل أو ناجح أو مميز، ومعها عبرة أو نصيحة للجمهور المستهدف.
+اكتب كل فكرة بصيغة عنوان صادم غير متوقع أو باستخدام أسلوب فضول، ومع نص من حوالي 15 سطر بطريقة سرد قصصي أو جذابة.
+اختم بدعوة عفوية لمتابعة الصفحة أو الحجز أو الشراء أو طلب الخدمة.""",
+    "social.trust": """اعطيني {count} فكرة ريل أو بوست تعليمي يعطي معلومات جديدة ومفيدة في مجالي أو أفكار تساعد على بناء الهوية والثقة مع المتابعين.
+ابدأ بعنوان صادم غير متوقع أو باستخدام أسلوب فضول، ومع نص من حوالي 10 أسطر يشرح الفكرة وخطوات عملية للتطبيق بطريقة سرد قصصي.
+اختم بعرض الخدمة أو متابعة الصفحة بطريقة عفوية.""",
+    "social.sales": """اعطيني {count} فكرة ريل أو بوست عن قصص عملائي لتسويق خدماتي/منتجاتي بطريقة جذابة ومقنعة، أو أي فكرة لزيادة المبيعات مناسبة لنوع المصلحة.
+اكتب كل فكرة بصيغة عنوان صادم غير متوقع أو باستخدام أسلوب فضول، ومع نص من حوالي 15 سطر بطريقة سرد قصصي.
+اختم بدعوة عفوية للحجز أو الشراء أو طلب الخدمة.""",
+    "social.hooks": """أساليب الفضول:
+1. Curiosity Hook
+2. Promise Hook
+3. Pattern Break / Shock
+4. Question Hook
+5. Story Hook
+
+حيل اختيار الأفكار:
+1. Amplify Your Point
+2. Be Competitive
+3. Challenge The Norm
+4. Don’t (Directly) Sell
+5. Be Emotionally Open
+
+فكر دائمًا بالعرض الذي يجاوب حاجة الجمهور.""",
+}
+
+
+def social_content_required_counts(monthly_posts: int) -> dict[str, int]:
+    monthly_posts = _safe_int(monthly_posts, 15, minimum=1, maximum=31)
+    raw_counts = []
+    assigned = 0
+    for item in SOCIAL_CONTENT_TYPES:
+        exact = monthly_posts * int(item["percentage"]) / 100
+        count = int(exact)
+        assigned += count
+        raw_counts.append((str(item["type"]), count, exact - count))
+    remaining = monthly_posts - assigned
+    priority = {"attraction": 0, "trust": 1, "sales": 2}
+    raw_counts.sort(key=lambda row: (-row[2], priority.get(row[0], 99)))
+    counts = {kind: count for kind, count, _rem in raw_counts}
+    for index in range(max(0, remaining)):
+        kind = raw_counts[index % len(raw_counts)][0]
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+def _social_language_name(language: str) -> str:
+    return LANG_NAMES.get(language, language or "English")
+
+
+def _social_content_plan_context(payload: dict[str, Any], language: str) -> dict[str, Any]:
+    brand = _dict(payload.get("brand"))
+    strategy = _dict(payload.get("strategy"))
+    intelligence = _dict(strategy.get("marketing_intelligence"))
+    return {
+        "name": brand.get("name") or _dict(payload.get("suite")).get("name"),
+        "products_services": _text_list(
+            [
+                *(_list(brand.get("services"))),
+                *(_list(brand.get("products"))),
+                *(_list(brand.get("products_services"))),
+            ],
+            30,
+        ),
+        "target_audience": {
+            "summary": brand.get("audience_notes") or brand.get("target_audience"),
+            "location": brand.get("audience_location") or brand.get("location"),
+            "interests": _text_list(brand.get("audience_interests"), 20),
+            "behaviors": _text_list(brand.get("audience_behaviors"), 20),
+            "segments": _text_list(brand.get("audience_social_statuses"), 20),
+            "personas": _list(intelligence.get("personas"))[:8],
+        },
+        "marketing_offer": brand.get("unique_value") or brand.get("how_they_help") or brand.get("esp"),
+        "marketing_message": brand.get("marketing_message") or _dict(strategy.get("marketing_plan")).get("message"),
+        "keywords": _list(intelligence.get("keywords"))[:30],
+        "competitors": _list(intelligence.get("competitors"))[:20],
+        "audience_language": _social_language_name(language),
+        "dialect": brand.get("dialect") or "",
+    }
+
+
+def build_social_content_plan_prompt(
+    payload: dict[str, Any],
+    language: str,
+    monthly_posts: int,
+    provider: str,
+) -> str:
+    required_counts = social_content_required_counts(monthly_posts)
+    context = _social_content_plan_context(payload, language)
+    context_json = json.dumps(context, ensure_ascii=False, default=str)
+    prompts = DEFAULT_SOCIAL_WORK_PLAN_PROMPTS
+    return f"""Generate candidate social media work-plan ideas for OneShare.
+
+Provider batch: {provider}.
+Audience primary language: {context["audience_language"]}.
+Optional dialect/style: {context.get("dialect") or "use the audience's natural business tone"}.
+Monthly cadence chosen by user: {monthly_posts} posts/month.
+
+Return STRICT JSON only. No markdown, no comments.
+Return this exact shape:
+{{
+  "items": [
+    {{
+      "type": "attraction|trust|sales",
+      "title": "short powerful title",
+      "format": "reel|post|carousel",
+      "hook_style": "Curiosity Hook|Promise Hook|Pattern Break / Shock|Question Hook|Story Hook",
+      "idea": "the content idea",
+      "script": "ready draft text/caption in the audience language",
+      "cta": "soft call to action",
+      "rationale": "why this answers an audience need"
+    }}
+  ]
+}}
+
+Required count from this provider:
+- attraction: {required_counts["attraction"]}
+- trust: {required_counts["trust"]}
+- sales: {required_counts["sales"]}
+
+Base business definition:
+{prompts["social.base"]}
+
+Attraction prompt:
+{prompts["social.attraction"].format(count=required_counts["attraction"])}
+
+Trust prompt:
+{prompts["social.trust"].format(count=required_counts["trust"])}
+
+Sales prompt:
+{prompts["social.sales"].format(count=required_counts["sales"])}
+
+Hooks and idea rules:
+{prompts["social.hooks"]}
+
+Business/profile data:
+{context_json}
+"""
+
+
+def _fallback_social_content_items(
+    payload: dict[str, Any],
+    language: str,
+    monthly_posts: int,
+    provider: str = "fallback",
+) -> list[dict[str, Any]]:
+    context = _social_content_plan_context(payload, language)
+    name = str(context.get("name") or "البزنس").strip()
+    services = _text_list(context.get("products_services"), 8) or [name]
+    counts = social_content_required_counts(monthly_posts)
+    templates = {
+        "attraction": (
+            "القصة التي تغيّر نظرة العميل",
+            "احكِ قصة قصيرة مرتبطة بـ {service}: خطأ شائع، موقف غريب، أو نتيجة مميزة، ثم اربطها بنصيحة عملية للجمهور.",
+            "تابعونا لأفكار أكثر تساعدكم تختاروا صح.",
+        ),
+        "trust": (
+            "المعلومة التي لا ينتبه لها أغلب الناس",
+            "اشرح معلومة مفيدة في {service} بخطوات بسيطة، مع مثال واقعي يوضح كيف يطبّقها العميل.",
+            "إذا بدكم تطبيقها على حالتكم، تواصلوا معنا.",
+        ),
+        "sales": (
+            "كيف تحولت الحاجة إلى نتيجة",
+            "اعرض مشكلة عميل محتمل مع {service}، ثم وضّح كيف يحلها عرضنا بطريقة مباشرة وواضحة بدون بيع قاسٍ.",
+            "للحجز أو الطلب، ابعثوا لنا رسالة.",
+        ),
+    }
+    items: list[dict[str, Any]] = []
+    for kind, count in counts.items():
+        title, body, cta = templates[kind]
+        for index in range(count):
+            service = services[index % len(services)]
+            items.append(
+                {
+                    "type": kind,
+                    "title": f"{title}: {service}",
+                    "format": "reel" if index % 2 == 0 else "post",
+                    "hook_style": "Story Hook" if kind == "attraction" else "Promise Hook",
+                    "idea": body.format(service=service),
+                    "script": body.format(service=service),
+                    "cta": cta,
+                    "rationale": "Fallback idea built from suite profile because the provider did not return usable JSON.",
+                    "provider": provider,
+                }
+            )
+    return items
+
+
+def _normalize_social_content_candidate(raw: Any, index: int, provider: str, kind_hint: str | None = None) -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        raw = {"title": raw, "idea": raw}
+    if not isinstance(raw, dict):
+        return None
+    kind = str(raw.get("type") or raw.get("objective") or kind_hint or "attraction").strip().lower()
+    if kind not in {"attraction", "trust", "sales"}:
+        kind = "attraction"
+    title = str(raw.get("title") or raw.get("headline") or raw.get("hook") or raw.get("idea") or f"Content idea {index}").strip()
+    idea = str(raw.get("idea") or raw.get("description") or raw.get("summary") or title).strip()
+    script = str(raw.get("script") or raw.get("copy") or raw.get("caption") or raw.get("body") or idea).strip()
+    if not title or not idea:
+        return None
+    return {
+        "id": f"{provider}-{kind}-{index}",
+        "type": kind,
+        "title": title[:240],
+        "format": str(raw.get("format") or raw.get("placement") or "reel").strip()[:80],
+        "hook_style": str(raw.get("hook_style") or raw.get("hook") or "").strip()[:120],
+        "idea": idea,
+        "script": script,
+        "cta": str(raw.get("cta") or "").strip(),
+        "rationale": str(raw.get("rationale") or raw.get("reason") or "").strip(),
+        "provider": provider,
+    }
+
+
+def normalize_social_content_plan(
+    raw_items: list[dict[str, Any]],
+    payload: dict[str, Any],
+    language: str,
+    monthly_posts: int,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    monthly_posts = _safe_int(monthly_posts, 15, minimum=1, maximum=31)
+    required_counts = social_content_required_counts(monthly_posts)
+    grouped: dict[str, list[dict[str, Any]]] = {"attraction": [], "trust": [], "sales": []}
+    seen: set[str] = set()
+    for index, item in enumerate(raw_items, start=1):
+        normalized = _normalize_social_content_candidate(item, index, str(item.get("provider") or "ai"))
+        if not normalized:
+            continue
+        marker = f"{normalized['type']}::{normalized['title'].casefold()}"
+        if marker in seen:
+            continue
+        seen.add(marker)
+        normalized["id"] = f"{normalized['provider']}-{normalized['type']}-{len(grouped[normalized['type']]) + 1}"
+        grouped[normalized["type"]].append(normalized)
+
+    if not any(grouped.values()):
+        for fallback in _fallback_social_content_items(payload, language, monthly_posts):
+            grouped[fallback["type"]].append(_normalize_social_content_candidate(fallback, len(grouped[fallback["type"]]) + 1, "fallback") or fallback)
+
+    selected_ids: list[str] = []
+    for item_type, count in required_counts.items():
+        selected_ids.extend(item["id"] for item in grouped[item_type][:count])
+
+    mix = [
+        {
+            "type": str(item["type"]),
+            "label": str(item["label_ar"]),
+            "percentage": int(item["percentage"]),
+            "required_count": required_counts[str(item["type"])],
+            "candidate_count": len(grouped[str(item["type"])]),
+        }
+        for item in SOCIAL_CONTENT_TYPES
+    ]
+
+    return {
+        "version": "social_content_work_plan_v1",
+        "status": "ready" if selected_ids else "missing",
+        "language": language,
+        "dialect": _dict(payload.get("brand")).get("dialect") or "",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "monthly_posts": monthly_posts,
+        "cadence": {
+            "recommended_monthly_posts": 15,
+            "recommended_note": "نوصي كبداية بنشر بوست كل يومين تقريبًا: 15 بوست بالشهر.",
+        },
+        "content_mix": mix,
+        "candidates": grouped,
+        "selected_ids": selected_ids,
+        "warnings": warnings or [],
+    }
+
+
+async def _generate_social_content_provider_batch(
+    payload: dict[str, Any],
+    language: str,
+    monthly_posts: int,
+    provider: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    model = settings.openai_text_model if provider == "openai" else settings.anthropic_text_model
+    if provider == "openai" and not settings.openai_api_key:
+        return [], "OPENAI_API_KEY is missing; skipped OpenAI candidate batch."
+    if provider == "anthropic" and not settings.anthropic_api_key:
+        return [], "ANTHROPIC_API_KEY is missing; skipped Claude candidate batch."
+    try:
+        raw = await call_text_ai(
+            provider=provider,
+            model=model,
+            max_tokens=SOCIAL_CONTENT_PLAN_MAX_TOKENS,
+            messages=[{"role": "user", "content": build_social_content_plan_prompt(payload, language, monthly_posts, provider)}],
+            system="You are a senior social media strategist. Return valid JSON only.",
+            timeout=SOCIAL_CONTENT_PLAN_TIMEOUT_SECONDS,
+        )
+        parsed = parse_marketing_plan_json(raw)
+        source_items = _list(_dict(parsed).get("items")) or _list(parsed)
+        items = []
+        for index, item in enumerate(source_items, start=1):
+            normalized = _normalize_social_content_candidate(item, index, provider)
+            if normalized:
+                items.append(normalized)
+        if not items:
+            return [], f"{provider} did not return usable social content ideas."
+        return items, None
+    except Exception as exc:
+        log.warning("Social content plan provider batch failed", extra={"provider": provider, "error": str(exc)})
+        return [], f"{provider} failed: {str(exc)}"
+
+
+async def generate_social_content_work_plan(
+    suite: Suite,
+    language: str | None,
+    monthly_posts: int = 15,
+) -> dict[str, Any]:
+    output_language = infer_plan_language(suite, language)
+    monthly_posts = _safe_int(monthly_posts, 15, minimum=1, maximum=31)
+    payload = suite_research_payload(suite, planning_inputs={"monthly_posts": monthly_posts})
+    batches = await asyncio.gather(
+        _generate_social_content_provider_batch(payload, output_language, monthly_posts, "anthropic"),
+        _generate_social_content_provider_batch(payload, output_language, monthly_posts, "openai"),
+    )
+    all_items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for items, warning in batches:
+        all_items.extend(items)
+        if warning:
+            warnings.append(warning)
+    if not all_items:
+        all_items = _fallback_social_content_items(payload, output_language, monthly_posts)
+    return normalize_social_content_plan(all_items, payload, output_language, monthly_posts, warnings)
 
 
 MARKETING_PLAN_STAGE_DEFINITIONS: list[dict[str, Any]] = [

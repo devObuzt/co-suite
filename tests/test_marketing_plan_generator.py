@@ -984,3 +984,84 @@ def test_normalize_marketing_action_plan_converts_deck_items_to_executable_items
     assert len(action_plan["ad_funnel_items"]) == 10
     assert action_plan["social_items"][0]["generation_request"]["mode"] == "quick"
     assert action_plan["ad_funnel_items"][0]["funnel_stage"] == "Awareness"
+
+
+def test_social_content_required_counts_keep_requested_monthly_total():
+    counts = mpg.social_content_required_counts(15)
+
+    assert counts == {"attraction": 11, "trust": 3, "sales": 1}
+    assert sum(counts.values()) == 15
+
+
+def test_build_social_content_plan_prompt_includes_language_dialect_and_business_context():
+    suite = Suite(
+        id="suite-social",
+        owner_id="user-1",
+        name="Sea of Herbs",
+        slug="sea-of-herbs",
+        brand={
+            "name": "Sea of Herbs",
+            "services": ["أعشاب طبيعية", "زيوت علاجية"],
+            "audience_languages": ["ar"],
+            "dialect": "عامية فلسطينية",
+            "target_audience": "محبو المنتجات الطبيعية",
+            "unique_value": "منتجات طبيعية مصنوعة يدويًا.",
+        },
+        strategy={},
+        connections={},
+    )
+    payload = mpg.suite_research_payload(suite)
+
+    prompt = mpg.build_social_content_plan_prompt(payload, "ar", 15, "openai")
+
+    assert "عامية فلسطينية" in prompt
+    assert "Sea of Herbs" in prompt
+    assert "أعشاب طبيعية" in prompt
+    assert "attraction: 11" in prompt
+    assert "trust: 3" in prompt
+    assert "sales: 1" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_social_content_work_plan_uses_provider_batches(monkeypatch):
+    async def fake_call_text_ai(**kwargs):
+        provider = kwargs["provider"]
+        return json.dumps(
+            {
+                "items": [
+                    {
+                        "type": "attraction",
+                        "title": f"{provider} جذب",
+                        "format": "reel",
+                        "idea": "قصة جذابة",
+                        "script": "نص جاهز",
+                    },
+                    {
+                        "type": "trust",
+                        "title": f"{provider} ثقة",
+                        "format": "post",
+                        "idea": "معلومة مفيدة",
+                        "script": "شرح جاهز",
+                    },
+                    {
+                        "type": "sales",
+                        "title": f"{provider} بيع",
+                        "format": "reel",
+                        "idea": "قصة عميل",
+                        "script": "دعوة عفوية",
+                    },
+                ]
+            }
+        )
+
+    monkeypatch.setattr(mpg, "call_text_ai", fake_call_text_ai)
+    monkeypatch.setattr(mpg.settings, "anthropic_api_key", "test-anthropic")
+    monkeypatch.setattr(mpg.settings, "openai_api_key", "test-openai")
+
+    plan = await mpg.generate_social_content_work_plan(make_suite(), "ar", monthly_posts=3)
+
+    assert plan["monthly_posts"] == 3
+    assert plan["status"] == "ready"
+    assert len(plan["selected_ids"]) == 3
+    assert sum(len(items) for items in plan["candidates"].values()) == 6
+    assert {item["provider"] for group in plan["candidates"].values() for item in group} == {"anthropic", "openai"}
