@@ -1555,6 +1555,9 @@ def _normalize_social_content_candidate(raw: Any, index: int, provider: str, kin
     script = str(raw.get("script") or raw.get("copy") or raw.get("caption") or raw.get("body") or idea).strip()
     if not title or not idea:
         return None
+    visible_text = " ".join([title, idea, script]).strip()
+    if _looks_like_placeholder_social_idea(visible_text):
+        return None
     return {
         "id": f"{provider}-{kind}-{index}",
         "type": kind,
@@ -1567,6 +1570,28 @@ def _normalize_social_content_candidate(raw: Any, index: int, provider: str, kin
         "rationale": str(raw.get("rationale") or raw.get("reason") or "").strip(),
         "provider": provider,
     }
+
+
+def _looks_like_placeholder_social_idea(text: str) -> bool:
+    compact = re.sub(r"\s+", " ", str(text or "")).strip().casefold()
+    if not compact:
+        return True
+    placeholder_patterns = (
+        r"^content idea\s*\d*( content idea\s*\d*)*$",
+        r"^idea\s*\d*( idea\s*\d*)*$",
+        r"^post idea\s*\d*( post idea\s*\d*)*$",
+        r"^reel idea\s*\d*( reel idea\s*\d*)*$",
+    )
+    return any(re.fullmatch(pattern, compact) for pattern in placeholder_patterns)
+
+
+def _social_candidate_matches_language(item: dict[str, Any], language: str) -> bool:
+    lang = str(language or "")[:2]
+    if lang not in {"ar", "he"}:
+        return True
+    text = " ".join(str(item.get(field) or "") for field in ("title", "idea", "script", "cta"))
+    contains_script = _contains_arabic if lang == "ar" else _contains_hebrew
+    return contains_script(text)
 
 
 def normalize_social_content_plan(
@@ -1584,6 +1609,8 @@ def normalize_social_content_plan(
         normalized = _normalize_social_content_candidate(item, index, str(item.get("provider") or "ai"))
         if not normalized:
             continue
+        if not _social_candidate_matches_language(normalized, language):
+            continue
         marker = f"{normalized['type']}::{normalized['title'].casefold()}"
         if marker in seen:
             continue
@@ -1591,9 +1618,22 @@ def normalize_social_content_plan(
         normalized["id"] = f"{normalized['provider']}-{normalized['type']}-{len(grouped[normalized['type']]) + 1}"
         grouped[normalized["type"]].append(normalized)
 
-    if not any(grouped.values()):
-        for fallback in _fallback_social_content_items(payload, language, monthly_posts):
-            grouped[fallback["type"]].append(_normalize_social_content_candidate(fallback, len(grouped[fallback["type"]]) + 1, "fallback") or fallback)
+    fallback_items = _fallback_social_content_items(payload, language, monthly_posts)
+    for item_type, count in required_counts.items():
+        if len(grouped[item_type]) >= count:
+            continue
+        for fallback in fallback_items:
+            if fallback.get("type") != item_type:
+                continue
+            normalized = _normalize_social_content_candidate(fallback, len(grouped[item_type]) + 1, "fallback") or fallback
+            marker = f"{normalized['type']}::{normalized['title'].casefold()}"
+            if marker in seen:
+                continue
+            normalized["id"] = f"fallback-{item_type}-{len(grouped[item_type]) + 1}"
+            grouped[item_type].append(normalized)
+            seen.add(marker)
+            if len(grouped[item_type]) >= count:
+                break
 
     selected_ids: list[str] = []
     for item_type, count in required_counts.items():

@@ -1054,6 +1054,32 @@ def test_build_paid_content_plan_prompt_includes_full_funnel_and_formats():
     assert "exactly 1 idea for each stage" in prompt
 
 
+def test_social_content_plan_replaces_placeholder_english_with_local_fallback():
+    plan = mpg.normalize_social_content_plan(
+        [
+            {
+                "type": "attraction",
+                "title": "Content idea 1",
+                "idea": "Content idea 1",
+                "script": "Content idea 1",
+                "provider": "anthropic",
+            }
+        ],
+        mpg.suite_research_payload(make_suite()),
+        "ar",
+        3,
+        [],
+    )
+
+    assert len(plan["selected_ids"]) == 3
+    assert all(
+        any("\u0600" <= char <= "\u06ff" for char in item["title"] + item["idea"] + item["script"])
+        for group in plan["candidates"].values()
+        for item in group
+    )
+    assert not any(item["title"] == "Content idea 1" for group in plan["candidates"].values() for item in group)
+
+
 @pytest.mark.asyncio
 async def test_generate_social_content_work_plan_uses_provider_batches(monkeypatch):
     async def fake_call_text_ai(**kwargs):
