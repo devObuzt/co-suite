@@ -261,9 +261,14 @@ def _looks_like_structured_dump(text: str) -> bool:
 def _audience_language_summary(brand: dict[str, Any], strategy: dict[str, Any], labels: dict[str, str]) -> str:
     language_names = _clean_list(brand.get("audience_language_names"), 3)
     language_codes = _clean_list(brand.get("audience_languages") or brand.get("languages") or brand.get("audience_language"), 3)
-    codes = {"ar": "العربية", "he": "עברית", "en": "English"}
-    languages = language_names or [codes.get(item, item) for item in language_codes]
-    tone = str(brand.get("tone") or strategy.get("tone") or "").strip()
+    if labels.get("worldwide") == "عالمي":
+        code_labels = {"ar": "العربية", "he": "العبرية", "en": "الإنجليزية"}
+    elif labels.get("worldwide") == "עולמי":
+        code_labels = {"ar": "ערבית", "he": "עברית", "en": "אנגלית"}
+    else:
+        code_labels = {"ar": "Arabic", "he": "Hebrew", "en": "English"}
+    languages = [code_labels.get(item.casefold(), item) for item in language_codes] or language_names
+    tone = str(brand.get("dialect") or brand.get("tone") or strategy.get("tone") or "").strip()
     if languages and tone:
         return f"{_localized_join(labels, languages)}؛ {tone}"
     if languages:
@@ -282,6 +287,24 @@ def _audience_demographic_summary(brand: dict[str, Any], labels: dict[str, str])
     if age or gender:
         return _localized_join(labels, [item for item in [age, gender] if item])
     return labels["audience_demographic_default"]
+
+
+def _audience_need_summary(brand: dict[str, Any], strategy: dict[str, Any], labels: dict[str, str]) -> str:
+    marketing_plan_audience = _safe_dict(_safe_dict(strategy.get("marketing_plan")).get("audience"))
+    raw_values = [
+        brand.get("audience_need"),
+        brand.get("audience_problem"),
+        marketing_plan_audience.get("problem"),
+        marketing_plan_audience.get("need"),
+        strategy.get("target_audience"),
+        brand.get("target_audience"),
+        brand.get("audience_notes"),
+    ]
+    for value in raw_values:
+        text = re.sub(r"\s+", " ", str(value or "").translate(BIDI_CONTROL_CHARS)).strip(" .،,")
+        if text and not _looks_like_structured_dump(text):
+            return _clamp_text(text, 170)
+    return labels["audience_need_default"]
 
 
 def _audience_summary(suite: Suite, labels: dict[str, str]) -> str:
@@ -306,6 +329,70 @@ def _audience_summary(suite: Suite, labels: dict[str, str]) -> str:
     if raw_summary:
         parts.insert(0, f"{labels['audience_summary_prefix']}: {raw_summary}")
     return ". ".join(parts)
+
+
+def _audience_snapshot_summary(suite: Suite, labels: dict[str, str]) -> str:
+    brand = _brand(suite)
+    strategy = _strategy(suite)
+    need = _audience_need_summary(brand, strategy, labels)
+    location = _audience_location_summary(brand, strategy, labels) or labels["audience_geography_default"]
+    language = _audience_language_summary(brand, strategy, labels)
+    return f"{labels['audience_geography']}: {location}. {labels['audience_language_style']}: {language}. {labels['audience_need']}: {need}"
+
+
+def _audience_profile_cards(
+    suite: Suite,
+    labels: dict[str, str],
+    language: str,
+    styles: dict[str, ParagraphStyle],
+    fonts: dict[str, str],
+    default_font: str,
+) -> list[Table]:
+    brand = _brand(suite)
+    strategy = _strategy(suite)
+    marketing_plan_audience = _safe_dict(_safe_dict(strategy.get("marketing_plan")).get("audience"))
+    interests = (
+        _clean_list(brand.get("audience_interests"), 6)
+        or _clean_list(marketing_plan_audience.get("interests"), 6)
+    )
+    behaviors = (
+        _clean_list(brand.get("audience_behaviors"), 6)
+        or _clean_list(marketing_plan_audience.get("behaviors") or marketing_plan_audience.get("digital_behavior"), 6)
+    )
+    fields = [
+        (
+            labels["audience_geography"],
+            [_audience_location_summary(brand, strategy, labels) or labels["audience_geography_default"]],
+            ACCENT,
+        ),
+        (
+            labels["audience_demographics_language"],
+            [
+                _audience_demographic_summary(brand, labels),
+                _audience_language_summary(brand, strategy, labels),
+            ],
+            ACCENT_2,
+        ),
+        (
+            labels["audience_interests"],
+            [_localized_audience_term(labels, item) for item in interests] or [labels["audience_interests_default"]],
+            ACCENT_3,
+        ),
+        (
+            labels["audience_behaviors"],
+            [_localized_audience_term(labels, item) for item in behaviors] or [labels["audience_behavior_default"]],
+            ACCENT,
+        ),
+        (
+            labels["audience_need"],
+            [_audience_need_summary(brand, strategy, labels)],
+            ACCENT_2,
+        ),
+    ]
+    return [
+        _pitch_card(title, lines, language, styles, fonts, default_font, accent, width=248, max_lines=5)
+        for title, lines, accent in fields
+    ]
 
 
 def _display_location(suite: Suite, labels: dict[str, str]) -> str:
@@ -397,14 +484,21 @@ def _labels(language: str) -> dict[str, str]:
             "audience_interest_prefix": "اهتمامات",
             "audience_location_prefix": "النطاق",
             "audience_summary_prefix": "تعريف الجمهور",
+            "audience_pitch": "نفصل الجمهور بوضوح حتى يعرف العميل أننا نفهم لمن نخاطب ولماذا.",
             "audience_geography": "الجغرافيا",
             "audience_geography_default": "النطاق الجغرافي غير محدد بعد",
             "audience_demographics": "الديموغرافيا",
+            "audience_demographics_language": "الديموغرافيا واللغة",
             "audience_demographic_default": "شرائح مناسبة لطبيعة المنتج وسعره",
             "audience_language_style": "اللغة والأسلوب",
             "audience_language_default": "لغة الجمهور اليومية والبسيطة",
             "audience_behavior_interests": "السلوكيات والاهتمامات",
+            "audience_interests": "الاهتمامات",
+            "audience_interests_default": "اهتمامات الجمهور غير محددة بعد",
+            "audience_behaviors": "السلوكيات",
             "audience_behavior_default": "يهتمون بالحل العملي، الثقة، وتجربة الشراء الواضحة",
+            "audience_need": "الحاجة",
+            "audience_need_default": "الحاجة الرئيسية للجمهور غير معبأة بعد. أضفها من بروفايل العلامة التجارية.",
             "keywords_pitch": "الكلمات تتحول إلى مجموعات نية، وليس قائمة مسطحة.",
             "competitors_pitch": "المنافسون إشارات سوق: عروض، تموضع، وضغط قنوات.",
             "missing_source": "هذا المصدر لم ينتج منافسين مباشرين بعد.",
@@ -496,14 +590,21 @@ def _labels(language: str) -> dict[str, str]:
             "audience_interest_prefix": "מתעניינים ב",
             "audience_location_prefix": "טווח",
             "audience_summary_prefix": "תיאור הקהל",
+            "audience_pitch": "מפרידים את הקהל בבירור כדי להראות למי פונים ולמה.",
             "audience_geography": "גאוגרפיה",
             "audience_geography_default": "הטווח הגאוגרפי עדיין לא הוגדר",
             "audience_demographics": "דמוגרפיה",
+            "audience_demographics_language": "דמוגרפיה ושפה",
             "audience_demographic_default": "סגמנטים שמתאימים לאופי המוצר ולמחיר",
             "audience_language_style": "שפה וסגנון",
             "audience_language_default": "שפה יומיומית וברורה של הקהל",
             "audience_behavior_interests": "התנהגויות ותחומי עניין",
+            "audience_interests": "תחומי עניין",
+            "audience_interests_default": "תחומי העניין של הקהל עדיין לא הוגדרו",
+            "audience_behaviors": "התנהגויות",
             "audience_behavior_default": "מחפשים פתרון ברור, אמון וחוויית קנייה פשוטה",
+            "audience_need": "צורך",
+            "audience_need_default": "הצורך המרכזי של הקהל עדיין לא מולא. יש להוסיף אותו בפרופיל המותג.",
             "keywords_pitch": "מילות המפתח הופכות לקבוצות כוונה, לא לרשימה שטוחה.",
             "competitors_pitch": "מתחרים הם סימני שוק: הצעות, מיצוב ולחץ ערוצים.",
             "missing_source": "מקור זה עדיין לא הפיק מתחרים ישירים.",
@@ -594,14 +695,21 @@ def _labels(language: str) -> dict[str, str]:
         "audience_interest_prefix": "Interested in",
         "audience_location_prefix": "Scope",
         "audience_summary_prefix": "Audience definition",
+        "audience_pitch": "Separate audience fields show exactly who we are speaking to and why.",
         "audience_geography": "Geography",
         "audience_geography_default": "Geographic scope is not defined yet",
         "audience_demographics": "Demographics",
+        "audience_demographics_language": "Demographics and language",
         "audience_demographic_default": "Segments that fit the product nature and price point",
         "audience_language_style": "Language and style",
         "audience_language_default": "The audience's plain everyday language",
         "audience_behavior_interests": "Behaviors and interests",
+        "audience_interests": "Interests",
+        "audience_interests_default": "Audience interests are not defined yet",
+        "audience_behaviors": "Behaviors",
         "audience_behavior_default": "They care about practical solutions, trust, and a clear buying path",
+        "audience_need": "Need",
+        "audience_need_default": "The core audience need is not filled yet. Add it in the brand profile.",
         "keywords_pitch": "Search terms become intent groups, not just a flat list.",
         "competitors_pitch": "Competitors are market signals: offers, positioning, and channel pressure.",
         "missing_source": "This source has not produced direct competitors yet.",
@@ -885,7 +993,7 @@ def _business_snapshot(suite: Suite, labels: dict[str, str]) -> list[tuple[str, 
     return [
         (_label(labels, "brand", "Brand"), brand.get("name") or suite.name or "-"),
         (_label(labels, "market", "Market"), brand.get("industry") or brand.get("category") or strategy.get("business_category") or "-"),
-        (_label(labels, "audience", "Audience"), _audience_summary(suite, labels)),
+        (_label(labels, "audience", "Audience"), _audience_snapshot_summary(suite, labels)),
         (_label(labels, "language", "Language"), _display_language(suite)),
         (_label(labels, "location", "Location"), _display_location(suite, labels)),
         (_label(labels, "project_nature", "Project nature"), _label(labels, "marketing_plan", "Marketing growth plan")),
@@ -1042,14 +1150,22 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
     _slide_title(story, _label(labels, "snapshot", "Business snapshot"), _label(labels, "snapshot_subtitle", "The strategic starting point before channel and content decisions."), language, styles, fonts, default_font, labels["overview"])
     _pitch_grid(story, snapshot_cards, columns=3, col_width=260, language=language)
 
-    # 3. Services/products
+    # 3. Audience profile
+    _append_page(story, [])
+    _slide_title(story, labels["audience"], _label(labels, "audience_pitch", "A clear audience profile keeps the marketing promise accurate."), language, styles, fonts, default_font, "02")
+    audience_cards = _audience_profile_cards(suite, labels, language, styles, fonts, default_font)
+    _pitch_grid(story, audience_cards[:3], columns=3, col_width=260, language=language)
+    story.append(Spacer(1, 0.12 * inch))
+    _pitch_grid(story, audience_cards[3:], columns=2, col_width=390, language=language)
+
+    # 4. Services/products
     for page_index, group in enumerate(_chunks(_text_or_empty(_services(suite), labels), 6)):
         _append_page(story, [])
         _slide_title(story, labels["services"], _label(labels, "services_pitch", "The offer system we will turn into demand and clear campaign messages."), language, styles, fonts, default_font, str(page_index + 1).zfill(2))
         cards = [_pitch_card(str(item), [_label(labels, "service_card_copy", "A clear offer pillar for positioning, content, and campaign structure.")], language, styles, fonts, default_font, ACCENT_3, width=248, max_lines=2) for item in group]
         _pitch_grid(story, cards, columns=3, col_width=260, language=language)
 
-    # 4. Market reading
+    # 5. Market reading
     _append_page(story, [])
     _slide_title(story, _label(labels, "market_reading", "Market reading"), _label(labels, "market_reading_subtitle", "What the market is telling us before we turn strategy into execution."), language, styles, fonts, default_font, labels["overview"])
     cards = [
@@ -1058,7 +1174,7 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
     ]
     _pitch_grid(story, cards, columns=3, col_width=260, language=language)
 
-    # 5. Keywords by intent
+    # 6. Keywords by intent
     keyword_groups = _keyword_groups(intelligence, labels)
     _append_page(story, [])
     _slide_title(story, labels["keywords"], _label(labels, "keywords_pitch", "Search terms become intent groups, not just a flat list."), language, styles, fonts, default_font, "03")
@@ -1072,7 +1188,7 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
         ]
     _pitch_grid(story, keyword_cards, columns=2, col_width=390, language=language)
 
-    # 6. Competitors by source
+    # 7. Competitors by source
     grouped_competitors = _competitors_by_source(intelligence)
     sources = ["google_organic", "maps", "instagram", "facebook", "tiktok"]
     for source in sources:
@@ -1101,7 +1217,7 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
             )
         _pitch_grid(story, cards, columns=2, col_width=390, language=language)
 
-    # 7. Demand/supply
+    # 8. Demand/supply
     _append_page(story, [])
     _slide_title(story, labels["demand"], _label(labels, "demand_pitch", "Demand, competition, and market pressure help decide how aggressive the plan should be."), language, styles, fonts, default_font, "05")
     metrics_cards = [
@@ -1132,7 +1248,7 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
         ]
         _pitch_grid(story, cards, columns=3, col_width=260, language=language)
 
-    # 8. Personas
+    # 9. Personas
     personas = [item for item in _safe_list(intelligence.get("personas")) if isinstance(item, dict)]
     persona_items = personas or [{"name": labels["empty"]}]
     for page_index, group in enumerate(_chunks(persona_items[:10], 3)):
@@ -1170,7 +1286,7 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
             )
         _pitch_grid(story, cards, columns=3, col_width=260, language=language)
 
-    # 9. Strategic direction
+    # 10. Strategic direction
     _append_page(story, [])
     _slide_title(story, _label(labels, "strategic_direction", "Strategic direction"), _label(labels, "strategy_pitch", "The marketing story that turns market signals into client-facing decisions."), language, styles, fonts, default_font, "07")
     strategy_cards = [
@@ -1179,7 +1295,7 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
     ]
     _pitch_grid(story, strategy_cards, columns=2, col_width=390, language=language)
 
-    # 10. 30/60/90 execution
+    # 11. 30/60/90 execution
     _append_page(story, [])
     _slide_title(story, _label(labels, "execution", "30 / 60 / 90 day execution"), _label(labels, "execution_pitch", "A simple path from strategy to action."), language, styles, fonts, default_font, "08")
     execution_cards = [
@@ -1188,7 +1304,7 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
     ]
     _pitch_grid(story, execution_cards, columns=3, col_width=260, language=language)
 
-    # 11. Closing
+    # 12. Closing
     _append_page(story, [])
     _section_break(
         story,
