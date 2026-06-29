@@ -1,5 +1,5 @@
 from api.models.suite import Suite
-from api.services.marketing_plan_pdf import build_marketing_plan_pdf, _labels
+from api.services.marketing_plan_pdf import build_marketing_plan_pdf, _keyword_groups, _labels, _market_insights
 import re
 import subprocess
 from pathlib import Path
@@ -154,3 +154,41 @@ def test_marketing_plan_pdf_ignores_bidi_isolate_controls():
     assert filename == "mixed-direction-suite-marketing-plan.pdf"
     assert pdf_bytes.startswith(b"%PDF")
     assert len(pdf_bytes) > 5000
+
+
+def test_keyword_groups_hide_empty_intent_groups():
+    labels = _labels("ar")
+    groups = _keyword_groups(
+        {"keywords": [{"text": "أكاديمية تداول", "intent": "commercial"}]},
+        labels,
+    )
+
+    assert groups == [
+        (
+            labels["direct_intent"],
+            labels["direct_intent_help"],
+            ["أكاديمية تداول"],
+        )
+    ]
+
+
+def test_market_insights_use_specific_missing_copy():
+    labels = _labels("ar")
+    suite = Suite(
+        id="suite-4",
+        owner_id="user-1",
+        name="No Demand Yet",
+        slug="no-demand-yet",
+        brand={"name": "No Demand Yet"},
+        strategy={"marketing_intelligence": {"language": "ar", "keywords": []}},
+    )
+
+    flattened = [
+        line
+        for _title, lines in _market_insights(suite, {"keywords": [], "competitors": []}, labels)
+        for line in lines
+    ]
+
+    assert labels["empty"] not in flattened
+    assert labels["market_services_missing"] in flattened
+    assert labels["market_pressure_missing"] in flattened
