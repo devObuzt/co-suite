@@ -1,5 +1,5 @@
 from api.models.suite import Suite
-from api.services.marketing_plan_pdf import build_marketing_plan_pdf
+from api.services.marketing_plan_pdf import build_marketing_plan_pdf, _labels
 
 
 def test_build_marketing_plan_pdf_returns_valid_pdf_bytes():
@@ -77,3 +77,19 @@ def test_build_marketing_plan_pdf_returns_valid_pdf_bytes():
     assert filename == "smart-line-academy-marketing-plan.pdf"
     assert pdf_bytes.startswith(b"%PDF")
     assert len(pdf_bytes) > 2500
+
+
+def test_marketing_plan_pdf_uses_marketing_intelligence_language():
+    suite = Suite(
+        id="suite-2",
+        owner_id="user-1",
+        name="Arabic Suite",
+        slug="arabic-suite",
+        brand={"name": "Arabic Suite"},
+        strategy={"marketing_intelligence": {"language": "ar", "keywords": []}},
+    )
+
+    pdf_bytes, _filename = build_marketing_plan_pdf(suite)
+
+    assert pdf_bytes.startswith(b"%PDF")
+    assert _labels("ar")["title"] == "الخطة التسويقية"
