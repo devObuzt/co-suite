@@ -53,6 +53,7 @@ async def test_download_marketing_plan_pdf_returns_attachment(monkeypatch):
     assert response.media_type == "application/pdf"
     assert response.body.startswith(b"%PDF")
     assert "smart-line-academy-marketing-plan.pdf" in response.headers["content-disposition"]
+    assert response.headers["access-control-expose-headers"] == "Content-Disposition"
     assert db.committed is True
     assert audit_calls[0]["action"] == "marketing.pdf.download"
 
