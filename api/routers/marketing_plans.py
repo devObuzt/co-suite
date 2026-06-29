@@ -237,6 +237,15 @@ def _save_marketing_intelligence(suite: Suite, intelligence: dict[str, Any]) -> 
     return intelligence
 
 
+def _normalize_competitor_tags(values: Any) -> list[str]:
+    allowed = {"not_competitor", "good_competitor", "local_competitor", "global_competitor"}
+    tags = [tag for tag in _unique_strings(values, 8) if tag in allowed]
+    if "not_competitor" in tags:
+        return ["not_competitor"]
+    priority = ["good_competitor", "local_competitor", "global_competitor"]
+    return [tag for tag in priority if tag in tags]
+
+
 def _unique_strings(values: Any, limit: int = 80) -> list[str]:
     items: list[str] = []
     seen: set[str] = set()
@@ -1475,8 +1484,7 @@ async def update_marketing_competitor(
         suite_research_payload(suite),
         language,
     )
-    allowed = {"not_competitor", "good_competitor", "local_competitor", "global_competitor"}
-    tags = [tag for tag in _unique_strings(payload.classification_tags, 8) if tag in allowed]
+    tags = _normalize_competitor_tags(payload.classification_tags)
     competitors = []
     found = False
     for competitor in intelligence.get("competitors") or []:
@@ -1536,7 +1544,6 @@ async def update_marketing_competitors(
         if key in existing_payload:
             intelligence[key] = preserved.get(key, existing_payload.get(key))
 
-    allowed_tags = {"not_competitor", "good_competitor", "local_competitor", "global_competitor"}
     saved_competitors: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, competitor in enumerate(payload.competitors):
@@ -1563,7 +1570,7 @@ async def update_marketing_competitors(
             "opportunity": str(competitor.opportunity or "").strip(),
             "confidence": competitor.confidence or "manual",
             "research_lead": bool(competitor.research_lead),
-            "classification_tags": [tag for tag in _unique_strings(competitor.classification_tags, 8) if tag in allowed_tags],
+            "classification_tags": _normalize_competitor_tags(competitor.classification_tags),
             "position": index,
         }
         saved_competitors.append(item)

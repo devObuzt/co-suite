@@ -846,7 +846,7 @@ async def test_update_competitors_saves_manual_items_and_order(monkeypatch):
             competitors=[
                 {"id": "old-2", "name": "Old second", "result_type": "google_organic", "url": "https://two.example"},
                 {"id": "old-1", "name": "Old first", "result_type": "google_organic", "url": "https://one.example"},
-                {"name": "Manual maps", "result_type": "maps", "platform": "maps", "url": "https://maps.example", "classification_tags": ["good_competitor", "bad_tag"]},
+                {"name": "Manual maps", "result_type": "maps", "platform": "maps", "url": "https://maps.example", "classification_tags": ["global_competitor", "good_competitor", "bad_tag"]},
             ]
         ),
         user,
@@ -857,7 +857,7 @@ async def test_update_competitors_saves_manual_items_and_order(monkeypatch):
     assert [item["id"] for item in competitors[:2]] == ["old-2", "old-1"]
     assert competitors[2]["name"] == "Manual maps"
     assert competitors[2]["result_type"] == "maps"
-    assert competitors[2]["classification_tags"] == ["good_competitor"]
+    assert competitors[2]["classification_tags"] == ["good_competitor", "global_competitor"]
     assert [item["text"] for item in response["intelligence"]["keywords"]] == ["دورات تداول"]
     assert db.committed is True
 
@@ -1192,10 +1192,10 @@ async def test_update_competitor_route_does_not_record_provider_usage(monkeypatc
     response = await marketing_plans.update_marketing_competitor(
         "suite-1",
         "competitor-1",
-        marketing_plans.CompetitorClassificationRequest(classification_tags=["good_competitor"]),
+        marketing_plans.CompetitorClassificationRequest(classification_tags=["good_competitor", "not_competitor", "local_competitor"]),
         user,
         db,  # type: ignore[arg-type]
     )
 
     assert db.committed is True
-    assert response["intelligence"]["competitors"][0]["classification_tags"] == ["good_competitor"]
+    assert response["intelligence"]["competitors"][0]["classification_tags"] == ["not_competitor"]
