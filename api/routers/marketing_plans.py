@@ -66,6 +66,27 @@ class MarketingKeywordsUpdateRequest(BaseModel):
     keywords: list[MarketingKeywordInput] = Field(default_factory=list, max_length=80)
 
 
+class MarketingCompetitorInput(BaseModel):
+    id: str | None = Field(default=None, max_length=160)
+    name: str = Field(min_length=1, max_length=240)
+    title: str | None = Field(default=None, max_length=240)
+    platform: str | None = Field(default=None, max_length=80)
+    result_type: str | None = Field(default=None, max_length=80)
+    url: str | None = Field(default=None, max_length=1000)
+    snippet: str | None = Field(default=None, max_length=1200)
+    reason: str | None = Field(default=None, max_length=1200)
+    evidence: str | None = Field(default=None, max_length=1200)
+    offer: str | None = Field(default=None, max_length=1200)
+    opportunity: str | None = Field(default=None, max_length=1200)
+    confidence: str | None = Field(default=None, max_length=80)
+    research_lead: bool | None = None
+    classification_tags: list[str] = Field(default_factory=list, max_length=8)
+
+
+class MarketingCompetitorsUpdateRequest(BaseModel):
+    competitors: list[MarketingCompetitorInput] = Field(default_factory=list, max_length=80)
+
+
 class CompetitorClassificationRequest(BaseModel):
     classification_tags: list[str] = Field(default_factory=list, max_length=8)
 
@@ -1475,6 +1496,90 @@ async def update_marketing_competitor(
         suite_id=suite.id,
         actor=current_user,
         metadata={"classification_tags": tags},
+    )
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "market_ready")
+
+
+@router.patch("/suites/{suite_id}/marketing-plan/competitors")
+async def update_marketing_competitors(
+    suite_id: str,
+    payload: MarketingCompetitorsUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    output_language = infer_plan_language(suite)
+    existing_payload = _strategy(suite).get("marketing_intelligence")
+    existing_payload = existing_payload if isinstance(existing_payload, dict) else {}
+    intelligence = normalize_marketing_intelligence(
+        {
+            **existing_payload,
+            "phase": "competitors",
+        },
+        suite_research_payload(suite),
+        output_language,
+    )
+    preserved = normalize_marketing_intelligence(existing_payload, suite_research_payload(suite), output_language) if existing_payload else {}
+    for key in (
+        "keywords",
+        "demand_signals",
+        "supply_signals",
+        "opportunities",
+        "personas",
+        "source_links",
+        "warnings",
+        "source_warnings",
+        "demand_supply",
+        "suppress_starter_warnings",
+    ):
+        if key in existing_payload:
+            intelligence[key] = preserved.get(key, existing_payload.get(key))
+
+    allowed_tags = {"not_competitor", "good_competitor", "local_competitor", "global_competitor"}
+    saved_competitors: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, competitor in enumerate(payload.competitors):
+        name = re.sub(r"\s+", " ", competitor.name).strip()
+        title = re.sub(r"\s+", " ", competitor.title or name).strip()
+        result_type = re.sub(r"\s+", "_", competitor.result_type or competitor.platform or "other").strip().lower() or "other"
+        platform = re.sub(r"\s+", "_", competitor.platform or result_type).strip().lower() or result_type
+        url = str(competitor.url or "").strip()
+        marker = (url or f"{result_type}:{name}").casefold()
+        if not name or marker in seen:
+            continue
+        seen.add(marker)
+        item: dict[str, Any] = {
+            "id": competitor.id or f"competitor-manual-{secrets.token_urlsafe(6)}",
+            "name": name,
+            "title": title,
+            "platform": platform,
+            "result_type": result_type,
+            "url": url,
+            "snippet": str(competitor.snippet or competitor.reason or competitor.evidence or "").strip(),
+            "reason": str(competitor.reason or "").strip(),
+            "evidence": str(competitor.evidence or "").strip(),
+            "offer": str(competitor.offer or "").strip(),
+            "opportunity": str(competitor.opportunity or "").strip(),
+            "confidence": competitor.confidence or "manual",
+            "research_lead": bool(competitor.research_lead),
+            "classification_tags": [tag for tag in _unique_strings(competitor.classification_tags, 8) if tag in allowed_tags],
+            "position": index,
+        }
+        saved_competitors.append(item)
+
+    intelligence["competitors"] = saved_competitors[:80]
+    intelligence["status"] = "competitors_ready" if saved_competitors else intelligence.get("status") or "missing"
+    intelligence["generated_at"] = datetime.now(timezone.utc).isoformat()
+    _save_marketing_intelligence(suite, intelligence)
+    await record_audit_log(
+        db,
+        action="marketing.competitors.update",
+        resource_type="marketing_intelligence",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"competitors": len(saved_competitors)},
     )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")

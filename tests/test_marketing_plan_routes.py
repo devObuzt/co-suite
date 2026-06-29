@@ -809,6 +809,59 @@ def test_normalized_competitor_preserves_classification_tags():
     assert intelligence["competitors"][0]["classification_tags"] == ["good_competitor", "local_competitor"]
 
 
+@pytest.mark.asyncio
+async def test_update_competitors_saves_manual_items_and_order(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec",
+        brand={"name": "Connec", "services": ["Websites"]},
+        strategy={
+            "marketing_intelligence": {
+                "language": "ar",
+                "keywords": [{"id": "kw-1", "text": "دورات تداول"}],
+                "competitors": [
+                    {"id": "old-1", "name": "Old first", "result_type": "google_organic", "url": "https://one.example"},
+                    {"id": "old-2", "name": "Old second", "result_type": "google_organic", "url": "https://two.example"},
+                ],
+            }
+        },
+    )
+    user = User(id="user-1", email="owner@example.com", hashed_password="hash", full_name="Owner")
+    db = FakeDb()
+
+    async def fake_get_owned_suite(*_args, **_kwargs):
+        return suite
+
+    async def fake_record_audit_log(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
+
+    response = await marketing_plans.update_marketing_competitors(
+        "suite-1",
+        marketing_plans.MarketingCompetitorsUpdateRequest(
+            competitors=[
+                {"id": "old-2", "name": "Old second", "result_type": "google_organic", "url": "https://two.example"},
+                {"id": "old-1", "name": "Old first", "result_type": "google_organic", "url": "https://one.example"},
+                {"name": "Manual maps", "result_type": "maps", "platform": "maps", "url": "https://maps.example", "classification_tags": ["good_competitor", "bad_tag"]},
+            ]
+        ),
+        user,
+        db,
+    )
+
+    competitors = response["intelligence"]["competitors"]
+    assert [item["id"] for item in competitors[:2]] == ["old-2", "old-1"]
+    assert competitors[2]["name"] == "Manual maps"
+    assert competitors[2]["result_type"] == "maps"
+    assert competitors[2]["classification_tags"] == ["good_competitor"]
+    assert [item["text"] for item in response["intelligence"]["keywords"]] == ["دورات تداول"]
+    assert db.committed is True
+
+
 def test_suite_services_reads_strategy_marketing_plan_when_brand_services_missing():
     suite = Suite(
         id="suite-1",
