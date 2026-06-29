@@ -20,7 +20,7 @@ from .billing import (
     Subscription,
     UsageEvent,
 )
-from .admin import AuditLog, ProviderUsageEvent
+from .admin import AppTextOverride, AuditLog, ProviderUsageEvent
 
 __all__ = [
     "User",
@@ -32,5 +32,5 @@ __all__ = [
     "ProductBulkAsset", "ProductBulkAssetStatus",
     "ProductTemplateDirection", "ProductTemplateDirectionStatus",
     "Subscription", "UsageEvent", "PlanTier", "BillingStatus", "LedgerAccountType", "BillingEventType",
-    "AuditLog", "ProviderUsageEvent",
+    "AuditLog", "ProviderUsageEvent", "AppTextOverride",
 ]

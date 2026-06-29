@@ -16,6 +16,7 @@ from .routers import analytics
 from .routers import product_bulk
 from .routers import marketing_plans
 from .routers import admin
+from .routers import app_text
 from .services.durable_generation_queue import run_forever
 
 app = FastAPI(title=settings.app_name, docs_url="/docs" if settings.debug else None)
@@ -85,6 +86,10 @@ async def startup():
                     "CREATE INDEX IF NOT EXISTS ix_provider_usage_events_operation ON provider_usage_events (operation)",
                     "CREATE INDEX IF NOT EXISTS ix_provider_usage_events_status ON provider_usage_events (status)",
                     "CREATE INDEX IF NOT EXISTS ix_provider_usage_events_suite_id ON provider_usage_events (suite_id)",
+                    "CREATE TABLE IF NOT EXISTS app_text_overrides (id VARCHAR PRIMARY KEY, language VARCHAR(12) NOT NULL, text_key VARCHAR(240) NOT NULL, value TEXT NOT NULL, updated_by_user_id VARCHAR REFERENCES users(id), updated_by_email VARCHAR, created_at TIMESTAMP WITH TIME ZONE DEFAULT now(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(), CONSTRAINT uq_app_text_overrides_language_key UNIQUE (language, text_key))",
+                    "CREATE INDEX IF NOT EXISTS ix_app_text_overrides_language ON app_text_overrides (language)",
+                    "CREATE INDEX IF NOT EXISTS ix_app_text_overrides_text_key ON app_text_overrides (text_key)",
+                    "CREATE INDEX IF NOT EXISTS ix_app_text_overrides_updated_at ON app_text_overrides (updated_at)",
                 ):
                     await conn.execute(text(statement))
         except Exception as e:
@@ -145,6 +150,7 @@ app.include_router(analytics.router, prefix="/api/v1")
 app.include_router(product_bulk.router, prefix="/api/v1")
 app.include_router(marketing_plans.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+app.include_router(app_text.router, prefix="/api/v1")
 
 
 @app.get("/health")

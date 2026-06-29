@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..core.database import Base
@@ -45,3 +45,17 @@ class ProviderUsageEvent(Base):
     request_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class AppTextOverride(Base):
+    __tablename__ = "app_text_overrides"
+    __table_args__ = (UniqueConstraint("language", "text_key", name="uq_app_text_overrides_language_key"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    language: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
+    text_key: Mapped[str] = mapped_column(String(240), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by_user_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("users.id"), nullable=True, index=True)
+    updated_by_email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)

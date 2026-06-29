@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.database import get_db
 from ..core.config import settings
 from ..core.security import get_current_user, hash_password
-from ..models.admin import AuditLog, ProviderUsageEvent
+from ..models.admin import AppTextOverride, AuditLog, ProviderUsageEvent
 from ..models.billing import UsageEvent
 from ..models.generation_job import GenerationJob
 from ..models.suite import Suite
@@ -39,6 +40,12 @@ class AdminPasswordUpdate(BaseModel):
     password: str = Field(min_length=8, max_length=200)
 
 
+class AppTextOverrideUpdate(BaseModel):
+    language: str = Field(min_length=2, max_length=12)
+    key: str = Field(min_length=1, max_length=240)
+    value: str | None = Field(default=None, max_length=5000)
+
+
 async def _admin_user(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> User:
     return await require_super_admin(current_user, db)
 
@@ -50,6 +57,22 @@ def _apply_period(query, model, period: str, start: datetime | None, end: dateti
     if period_end:
         query = query.where(model.created_at < period_end)
     return query
+
+
+def _normalize_language_code(value: str) -> str:
+    return re.split(r"[-_]", value.strip().lower(), maxsplit=1)[0][:12]
+
+
+def _app_text_override_out(row: AppTextOverride) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "language": row.language,
+        "key": row.text_key,
+        "value": row.value,
+        "updated_by_email": row.updated_by_email,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
 
 
 @router.get("/summary")
@@ -120,6 +143,90 @@ async def providers(admin: User = Depends(_admin_user)):
             "operations": ["subscriptions", "payments"],
         },
     ]
+
+
+@router.get("/app-text")
+async def app_text_overrides(
+    language: str = Query(default="ar", min_length=2, max_length=12),
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    lang = _normalize_language_code(language)
+    rows = (
+        await db.execute(
+            select(AppTextOverride)
+            .where(AppTextOverride.language == lang)
+            .order_by(AppTextOverride.text_key.asc())
+        )
+    ).scalars().all()
+    return {
+        "language": lang,
+        "overrides": [_app_text_override_out(row) for row in rows],
+    }
+
+
+@router.patch("/app-text")
+async def update_app_text_override(
+    payload: AppTextOverrideUpdate,
+    request: Request,
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    lang = _normalize_language_code(payload.language)
+    key = payload.key.strip()
+    value = payload.value.strip() if isinstance(payload.value, str) else None
+    existing = (
+        await db.execute(
+            select(AppTextOverride)
+            .where(AppTextOverride.language == lang)
+            .where(AppTextOverride.text_key == key)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if value is None:
+        if existing:
+            await db.delete(existing)
+        await record_audit_log(
+            db,
+            action="admin.app_text.reset",
+            resource_type="app_text",
+            resource_id=f"{lang}:{key}",
+            actor=admin,
+            request=request,
+            metadata={"language": lang, "key": key},
+        )
+        await db.commit()
+        return {"ok": True, "language": lang, "key": key, "override": None}
+
+    if existing:
+        before = existing.value
+        existing.value = value
+        existing.updated_by_user_id = admin.id
+        existing.updated_by_email = admin.email
+        row = existing
+    else:
+        before = None
+        row = AppTextOverride(
+            language=lang,
+            text_key=key,
+            value=value,
+            updated_by_user_id=admin.id,
+            updated_by_email=admin.email,
+        )
+        db.add(row)
+    await record_audit_log(
+        db,
+        action="admin.app_text.update",
+        resource_type="app_text",
+        resource_id=f"{lang}:{key}",
+        actor=admin,
+        request=request,
+        metadata={"language": lang, "key": key, "before": before, "after": value},
+    )
+    await db.commit()
+    await db.refresh(row)
+    return {"ok": True, "language": lang, "key": key, "override": _app_text_override_out(row)}
 
 
 @router.get("/billing-usage")

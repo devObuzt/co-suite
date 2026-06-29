@@ -5,7 +5,9 @@ from fastapi import HTTPException
 
 from api.models.user import User
 from api.models.billing import BillingEventType, LedgerAccountType, UsageEvent
+from api.models.admin import AppTextOverride
 from api.routers import admin
+from api.routers import app_text
 from api.services import admin_audit
 
 
@@ -92,3 +94,25 @@ def test_billing_usage_out_explains_billed_rows():
     assert payload["actual_cost_usd"] == 0.48
     assert payload["billed_amount"] == 1.44
     assert payload["event_data"]["post_id"] == "post-1"
+
+
+def test_app_text_language_codes_normalize_region_variants():
+    assert admin._normalize_language_code("ar-IL") == "ar"
+    assert app_text.normalize_language_code("he_IL") == "he"
+
+
+def test_app_text_override_out_uses_admin_shape():
+    row = AppTextOverride(
+        id="text-1",
+        language="ar",
+        text_key="nav.dashboard",
+        value="الرئيسية",
+        updated_by_email="admin@example.com",
+    )
+
+    payload = admin._app_text_override_out(row)
+
+    assert payload["language"] == "ar"
+    assert payload["key"] == "nav.dashboard"
+    assert payload["value"] == "الرئيسية"
+    assert payload["updated_by_email"] == "admin@example.com"
