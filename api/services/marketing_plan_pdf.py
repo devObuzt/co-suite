@@ -258,6 +258,32 @@ def _looks_like_structured_dump(text: str) -> bool:
     return any(marker in lowered for marker in markers) or text.count(",") >= 4 or text.count("،") >= 4
 
 
+def _audience_language_summary(brand: dict[str, Any], strategy: dict[str, Any], labels: dict[str, str]) -> str:
+    language_names = _clean_list(brand.get("audience_language_names"), 3)
+    language_codes = _clean_list(brand.get("audience_languages") or brand.get("languages") or brand.get("audience_language"), 3)
+    codes = {"ar": "العربية", "he": "עברית", "en": "English"}
+    languages = language_names or [codes.get(item, item) for item in language_codes]
+    tone = str(brand.get("tone") or strategy.get("tone") or "").strip()
+    if languages and tone:
+        return f"{_localized_join(labels, languages)}؛ {tone}"
+    if languages:
+        return _localized_join(labels, languages)
+    return labels["audience_language_default"]
+
+
+def _audience_demographic_summary(brand: dict[str, Any], labels: dict[str, str]) -> str:
+    segments = [_localized_audience_term(labels, item) for item in _clean_list(brand.get("audience_social_statuses") or brand.get("audience_segments"), 4)]
+    age = str(brand.get("audience_age") or brand.get("audience_age_range") or "").strip()
+    gender = str(brand.get("audience_gender") or "").strip()
+    if segments:
+        base = _localized_join(labels, segments)
+        details = _localized_join(labels, [item for item in [age, gender] if item])
+        return f"{base}؛ {details}" if details else base
+    if age or gender:
+        return _localized_join(labels, [item for item in [age, gender] if item])
+    return labels["audience_demographic_default"]
+
+
 def _audience_summary(suite: Suite, labels: dict[str, str]) -> str:
     brand = _brand(suite)
     strategy = _strategy(suite)
@@ -268,19 +294,17 @@ def _audience_summary(suite: Suite, labels: dict[str, str]) -> str:
         or _clean_list(_safe_dict(_safe_dict(strategy.get("marketing_plan")).get("audience")).get("interests"), 4)
     )
     interests = [_localized_audience_term(labels, item) for item in interests]
-    segments = [_localized_audience_term(labels, item) for item in _clean_list(brand.get("audience_social_statuses") or brand.get("audience_segments"), 3)]
+    behaviors = [_localized_audience_term(labels, item) for item in _clean_list(brand.get("audience_behaviors"), 4)]
+    raw_summary = "" if _looks_like_structured_dump(raw) else _clamp_text(raw, 120)
 
-    parts: list[str] = []
-    if raw and not _looks_like_structured_dump(raw):
-        parts.append(_clamp_text(raw, 95))
-    elif segments:
-        parts.append(_localized_join(labels, segments))
-    else:
-        parts.append(labels["audience_general"])
-    if location:
-        parts.append(f"{labels['audience_location_prefix']}: {location}")
-    if interests:
-        parts.append(f"{labels['audience_interest_prefix']}: {_localized_join(labels, interests)}")
+    parts = [
+        f"{labels['audience_geography']}: {location or labels['audience_geography_default']}",
+        f"{labels['audience_demographics']}: {_audience_demographic_summary(brand, labels)}",
+        f"{labels['audience_language_style']}: {_audience_language_summary(brand, strategy, labels)}",
+        f"{labels['audience_behavior_interests']}: {_localized_join(labels, [*(behaviors[:2]), *(interests[:3])]) if behaviors or interests else labels['audience_behavior_default']}",
+    ]
+    if raw_summary:
+        parts.insert(0, f"{labels['audience_summary_prefix']}: {raw_summary}")
     return ". ".join(parts)
 
 
@@ -372,6 +396,15 @@ def _labels(language: str) -> dict[str, str]:
             "audience_general": "الجمهور الأنسب لهذا العرض",
             "audience_interest_prefix": "اهتمامات",
             "audience_location_prefix": "النطاق",
+            "audience_summary_prefix": "تعريف الجمهور",
+            "audience_geography": "الجغرافيا",
+            "audience_geography_default": "النطاق الجغرافي غير محدد بعد",
+            "audience_demographics": "الديموغرافيا",
+            "audience_demographic_default": "شرائح مناسبة لطبيعة المنتج وسعره",
+            "audience_language_style": "اللغة والأسلوب",
+            "audience_language_default": "لغة الجمهور اليومية والبسيطة",
+            "audience_behavior_interests": "السلوكيات والاهتمامات",
+            "audience_behavior_default": "يهتمون بالحل العملي، الثقة، وتجربة الشراء الواضحة",
             "keywords_pitch": "الكلمات تتحول إلى مجموعات نية، وليس قائمة مسطحة.",
             "competitors_pitch": "المنافسون إشارات سوق: عروض، تموضع، وضغط قنوات.",
             "missing_source": "هذا المصدر لم ينتج منافسين مباشرين بعد.",
@@ -462,6 +495,15 @@ def _labels(language: str) -> dict[str, str]:
             "audience_general": "הקהל המתאים ביותר להצעה זו",
             "audience_interest_prefix": "מתעניינים ב",
             "audience_location_prefix": "טווח",
+            "audience_summary_prefix": "תיאור הקהל",
+            "audience_geography": "גאוגרפיה",
+            "audience_geography_default": "הטווח הגאוגרפי עדיין לא הוגדר",
+            "audience_demographics": "דמוגרפיה",
+            "audience_demographic_default": "סגמנטים שמתאימים לאופי המוצר ולמחיר",
+            "audience_language_style": "שפה וסגנון",
+            "audience_language_default": "שפה יומיומית וברורה של הקהל",
+            "audience_behavior_interests": "התנהגויות ותחומי עניין",
+            "audience_behavior_default": "מחפשים פתרון ברור, אמון וחוויית קנייה פשוטה",
             "keywords_pitch": "מילות המפתח הופכות לקבוצות כוונה, לא לרשימה שטוחה.",
             "competitors_pitch": "מתחרים הם סימני שוק: הצעות, מיצוב ולחץ ערוצים.",
             "missing_source": "מקור זה עדיין לא הפיק מתחרים ישירים.",
@@ -551,6 +593,15 @@ def _labels(language: str) -> dict[str, str]:
         "audience_general": "The most relevant audience for this offer",
         "audience_interest_prefix": "Interested in",
         "audience_location_prefix": "Scope",
+        "audience_summary_prefix": "Audience definition",
+        "audience_geography": "Geography",
+        "audience_geography_default": "Geographic scope is not defined yet",
+        "audience_demographics": "Demographics",
+        "audience_demographic_default": "Segments that fit the product nature and price point",
+        "audience_language_style": "Language and style",
+        "audience_language_default": "The audience's plain everyday language",
+        "audience_behavior_interests": "Behaviors and interests",
+        "audience_behavior_default": "They care about practical solutions, trust, and a clear buying path",
         "keywords_pitch": "Search terms become intent groups, not just a flat list.",
         "competitors_pitch": "Competitors are market signals: offers, positioning, and channel pressure.",
         "missing_source": "This source has not produced direct competitors yet.",

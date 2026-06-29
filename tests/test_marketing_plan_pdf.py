@@ -206,7 +206,10 @@ def test_audience_summary_formats_structured_audience_fields():
             "target_audience": "طبيعية, زيوت علاجية, صوابين طبيعية, Worldwide الجمهور: يهتمون بـ hand made",
             "audience_location": {"scope": "world", "countries": [], "cities": []},
             "audience_interests": ["بهارات", "أعشاب hand made", "زيوت علاجية"],
+            "audience_behaviors": ["يبحثون عن منتجات طبيعية", "يفضلون الشراء اليدوي"],
             "audience_social_statuses": ["محبو المنتجات الطبيعية"],
+            "audience_languages": ["ar"],
+            "audience_language_names": ["العربية"],
         },
         strategy={},
     )
@@ -214,6 +217,11 @@ def test_audience_summary_formats_structured_audience_fields():
     summary = _audience_summary(suite, labels)
 
     assert "Worldwide" not in summary
+    assert "الجغرافيا: عالمي" in summary
+    assert "الديموغرافيا: محبو المنتجات الطبيعية" in summary
+    assert "اللغة والأسلوب: العربية" in summary
+    assert "السلوكيات والاهتمامات:" in summary
     assert "عالمي" in summary
-    assert "اهتمامات: بهارات، أعشاب يدوية، زيوت علاجية" in summary
-    assert summary.startswith("محبو المنتجات الطبيعية")
+    assert "بهارات، أعشاب يدوية، زيوت علاجية" in summary
+    assert "يفضلون الشراء اليدوي" in summary
+    assert "الجمهور:" not in summary
