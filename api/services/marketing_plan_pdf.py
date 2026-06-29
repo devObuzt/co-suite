@@ -186,6 +186,121 @@ def _services(suite: Suite) -> list[str]:
     return items[:30]
 
 
+def _clean_list(values: Any, limit: int = 5) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    source = values if isinstance(values, list) else [values]
+    for value in source:
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("label") or value.get("value") or ""
+        text = re.sub(r"\s+", " ", str(value or "").translate(BIDI_CONTROL_CHARS)).strip(" ,،")
+        marker = text.casefold()
+        if text and marker not in seen:
+            seen.add(marker)
+            items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _localized_join(labels: dict[str, str], items: list[str]) -> str:
+    separator = "، " if labels.get("worldwide") == "عالمي" else ", "
+    return separator.join(items)
+
+
+def _localized_audience_term(labels: dict[str, str], text: str) -> str:
+    if labels.get("worldwide") == "عالمي":
+        replacements = {
+            "hand made": "يدوية",
+            "handmade": "يدوية",
+            "worldwide": "عالمي",
+            "organic": "عضوية",
+        }
+    elif labels.get("worldwide") == "עולמי":
+        replacements = {
+            "hand made": "עבודת יד",
+            "handmade": "עבודת יד",
+            "worldwide": "עולמי",
+            "organic": "אורגני",
+        }
+    else:
+        replacements = {}
+    value = text
+    for source, replacement in replacements.items():
+        value = re.sub(re.escape(source), replacement, value, flags=re.IGNORECASE)
+    return value
+
+
+def _audience_location_summary(brand: dict[str, Any], strategy: dict[str, Any], labels: dict[str, str]) -> str:
+    location = brand.get("audience_location") or strategy.get("audience_location") or {}
+    if isinstance(location, dict):
+        if location.get("scope") == "world":
+            return labels["worldwide"]
+        places = [
+            *_clean_list(location.get("countries"), 3),
+            *_clean_list(location.get("cities"), 3),
+            *_clean_list(location.get("regions"), 3),
+        ]
+        if places:
+            return _localized_join(labels, places)
+    places = (
+        _clean_list(brand.get("audience_locations"), 3)
+        or _clean_list(brand.get("countries"), 3)
+        or _clean_list(brand.get("location"), 1)
+        or _clean_list(strategy.get("location"), 1)
+    )
+    return _localized_join(labels, places)
+
+
+def _looks_like_structured_dump(text: str) -> bool:
+    lowered = text.casefold()
+    markers = ("worldwide", "الجمهور:", "يهتمون ب", "audience:", "interests:", "{", "}", "[", "]")
+    return any(marker in lowered for marker in markers) or text.count(",") >= 4 or text.count("،") >= 4
+
+
+def _audience_summary(suite: Suite, labels: dict[str, str]) -> str:
+    brand = _brand(suite)
+    strategy = _strategy(suite)
+    raw = str(strategy.get("target_audience") or brand.get("target_audience") or brand.get("audience") or "").strip()
+    location = _audience_location_summary(brand, strategy, labels)
+    interests = (
+        _clean_list(brand.get("audience_interests"), 4)
+        or _clean_list(_safe_dict(_safe_dict(strategy.get("marketing_plan")).get("audience")).get("interests"), 4)
+    )
+    interests = [_localized_audience_term(labels, item) for item in interests]
+    segments = [_localized_audience_term(labels, item) for item in _clean_list(brand.get("audience_social_statuses") or brand.get("audience_segments"), 3)]
+
+    parts: list[str] = []
+    if raw and not _looks_like_structured_dump(raw):
+        parts.append(_clamp_text(raw, 95))
+    elif segments:
+        parts.append(_localized_join(labels, segments))
+    else:
+        parts.append(labels["audience_general"])
+    if location:
+        parts.append(f"{labels['audience_location_prefix']}: {location}")
+    if interests:
+        parts.append(f"{labels['audience_interest_prefix']}: {_localized_join(labels, interests)}")
+    return ". ".join(parts)
+
+
+def _display_location(suite: Suite, labels: dict[str, str]) -> str:
+    brand = _brand(suite)
+    strategy = _strategy(suite)
+    raw = str(brand.get("location") or brand.get("country") or strategy.get("location") or "").strip()
+    if raw.casefold() in {"world", "worldwide", "global"}:
+        return labels["worldwide"]
+    return raw or _audience_location_summary(brand, strategy, labels) or "-"
+
+
+def _display_language(suite: Suite) -> str:
+    brand = _brand(suite)
+    strategy = _strategy(suite)
+    language = str(brand.get("language") or strategy.get("language") or "").strip()
+    codes = {"ar": "العربية", "he": "עברית", "en": "English"}
+    return codes.get(language, language or "-")
+
+
 def _filename(suite: Suite) -> str:
     base = str(_brand(suite).get("name") or suite.name or "suite").strip().lower()
     slug = re.sub(r"[^a-z0-9]+", "-", base).strip("-")
@@ -253,6 +368,10 @@ def _labels(language: str) -> dict[str, str]:
             "keywords_missing": "ولّد الكلمات المفتاحية حتى تظهر مجموعات نية البحث هنا.",
             "market_services_missing": "أضف الخدمات/المنتجات حتى تظهر محاور العرض هنا.",
             "market_pressure_missing": "أرقام العرض والطلب غير متوفرة بعد؛ نبدأ من إشارات الكلمات والمنافسين.",
+            "worldwide": "عالمي",
+            "audience_general": "الجمهور الأنسب لهذا العرض",
+            "audience_interest_prefix": "اهتمامات",
+            "audience_location_prefix": "النطاق",
             "keywords_pitch": "الكلمات تتحول إلى مجموعات نية، وليس قائمة مسطحة.",
             "competitors_pitch": "المنافسون إشارات سوق: عروض، تموضع، وضغط قنوات.",
             "missing_source": "هذا المصدر لم ينتج منافسين مباشرين بعد.",
@@ -339,6 +458,10 @@ def _labels(language: str) -> dict[str, str]:
             "keywords_missing": "יש ליצור מילות מפתח כדי להציג כאן קבוצות כוונת חיפוש.",
             "market_services_missing": "יש להוסיף שירותים/מוצרים כדי להציג כאן את צירי ההצעה.",
             "market_pressure_missing": "נתוני ביקוש והיצע עדיין לא זמינים; מתחילים מסימני מילות מפתח ומתחרים.",
+            "worldwide": "עולמי",
+            "audience_general": "הקהל המתאים ביותר להצעה זו",
+            "audience_interest_prefix": "מתעניינים ב",
+            "audience_location_prefix": "טווח",
             "keywords_pitch": "מילות המפתח הופכות לקבוצות כוונה, לא לרשימה שטוחה.",
             "competitors_pitch": "מתחרים הם סימני שוק: הצעות, מיצוב ולחץ ערוצים.",
             "missing_source": "מקור זה עדיין לא הפיק מתחרים ישירים.",
@@ -424,6 +547,10 @@ def _labels(language: str) -> dict[str, str]:
         "keywords_missing": "Generate keywords to show search-intent groups here.",
         "market_services_missing": "Add services/products so the offer pillars can appear here.",
         "market_pressure_missing": "Demand and supply numbers are not available yet; start from keyword and competitor signals.",
+        "worldwide": "Worldwide",
+        "audience_general": "The most relevant audience for this offer",
+        "audience_interest_prefix": "Interested in",
+        "audience_location_prefix": "Scope",
         "keywords_pitch": "Search terms become intent groups, not just a flat list.",
         "competitors_pitch": "Competitors are market signals: offers, positioning, and channel pressure.",
         "missing_source": "This source has not produced direct competitors yet.",
@@ -707,9 +834,9 @@ def _business_snapshot(suite: Suite, labels: dict[str, str]) -> list[tuple[str, 
     return [
         (_label(labels, "brand", "Brand"), brand.get("name") or suite.name or "-"),
         (_label(labels, "market", "Market"), brand.get("industry") or brand.get("category") or strategy.get("business_category") or "-"),
-        (_label(labels, "audience", "Audience"), brand.get("target_audience") or brand.get("audience") or "-"),
-        (_label(labels, "language", "Language"), brand.get("language") or strategy.get("language") or "-"),
-        (_label(labels, "location", "Location"), brand.get("location") or brand.get("country") or "-"),
+        (_label(labels, "audience", "Audience"), _audience_summary(suite, labels)),
+        (_label(labels, "language", "Language"), _display_language(suite)),
+        (_label(labels, "location", "Location"), _display_location(suite, labels)),
         (_label(labels, "project_nature", "Project nature"), _label(labels, "marketing_plan", "Marketing growth plan")),
     ]
 

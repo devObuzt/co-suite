@@ -1,5 +1,5 @@
 from api.models.suite import Suite
-from api.services.marketing_plan_pdf import build_marketing_plan_pdf, _keyword_groups, _labels, _market_insights
+from api.services.marketing_plan_pdf import build_marketing_plan_pdf, _audience_summary, _keyword_groups, _labels, _market_insights
 import re
 import subprocess
 from pathlib import Path
@@ -192,3 +192,28 @@ def test_market_insights_use_specific_missing_copy():
     assert labels["empty"] not in flattened
     assert labels["market_services_missing"] in flattened
     assert labels["market_pressure_missing"] in flattened
+
+
+def test_audience_summary_formats_structured_audience_fields():
+    labels = _labels("ar")
+    suite = Suite(
+        id="suite-5",
+        owner_id="user-1",
+        name="Sea of Herbs",
+        slug="sea-of-herbs",
+        brand={
+            "name": "Sea of Herbs",
+            "target_audience": "طبيعية, زيوت علاجية, صوابين طبيعية, Worldwide الجمهور: يهتمون بـ hand made",
+            "audience_location": {"scope": "world", "countries": [], "cities": []},
+            "audience_interests": ["بهارات", "أعشاب hand made", "زيوت علاجية"],
+            "audience_social_statuses": ["محبو المنتجات الطبيعية"],
+        },
+        strategy={},
+    )
+
+    summary = _audience_summary(suite, labels)
+
+    assert "Worldwide" not in summary
+    assert "عالمي" in summary
+    assert "اهتمامات: بهارات، أعشاب يدوية، زيوت علاجية" in summary
+    assert summary.startswith("محبو المنتجات الطبيعية")
