@@ -29,6 +29,7 @@ class GenerationJobType(str, enum.Enum):
     product_bulk_generate_first = "product_bulk_generate_first"
     product_bulk_generate_all = "product_bulk_generate_all"
     product_bulk_regenerate_asset = "product_bulk_regenerate_asset"
+    video_montage = "video_montage"
 
 
 class GenerationJob(Base):

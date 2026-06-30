@@ -35,6 +35,7 @@ from .product_bulk_generator import (
     generate_first_product_templates,
     regenerate_product_asset,
 )
+from .video_montage import generate_video_montage_for_suite
 from ..models.suite import Suite
 
 log = logging.getLogger(__name__)
@@ -451,6 +452,19 @@ async def execute_claimed_job(
                     job.id,
                     {"batch_id": batch_id, "asset_id": new_asset_id, "regenerated_from_asset_id": asset_id},
                 )
+
+            if job.type == GenerationJobType.video_montage:
+                result = await db.execute(select(Suite).where(Suite.id == job.suite_id))
+                suite = result.scalar_one_or_none()
+                if not suite:
+                    return await mark_failed(db, job.id, "Suite not found")
+                montage_result = await generate_video_montage_for_suite(
+                    suite=suite,
+                    job_id=job.id,
+                    input_data=input_data,
+                    progress=progress,
+                )
+                return await mark_completed(db, job.id, montage_result)
 
             return await mark_failed(db, job.id, f"Unsupported generation job type: {job.type}")
         except Exception as exc:

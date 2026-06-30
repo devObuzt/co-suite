@@ -17,6 +17,7 @@ from .routers import product_bulk
 from .routers import marketing_plans
 from .routers import admin
 from .routers import app_text
+from .routers import video_montage
 from .services.durable_generation_queue import run_forever
 
 app = FastAPI(title=settings.app_name, docs_url="/docs" if settings.debug else None)
@@ -112,6 +113,7 @@ async def startup():
                 "product_bulk_generate_first",
                 "product_bulk_generate_all",
                 "product_bulk_regenerate_asset",
+                "video_montage",
             ):
                 await conn.execute(text(
                     f"ALTER TYPE generationjobtype ADD VALUE IF NOT EXISTS '{value}'"
@@ -151,6 +153,7 @@ app.include_router(product_bulk.router, prefix="/api/v1")
 app.include_router(marketing_plans.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(app_text.router, prefix="/api/v1")
+app.include_router(video_montage.router, prefix="/api/v1")
 
 
 @app.get("/health")
