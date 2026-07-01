@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -8,6 +9,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
+from arabic_reshaper import reshape
+from bidi.algorithm import get_display
+from PIL import Image, ImageDraw, ImageFont
 
 from ..models.suite import Suite
 
@@ -27,7 +31,10 @@ def job_dir(job_id: str) -> Path:
 
 
 def public_static_url(path: Path) -> str:
-    relative = path.relative_to(STATIC_ROOT)
+    try:
+        relative = path.relative_to(STATIC_ROOT)
+    except ValueError:
+        return path.as_uri()
     return f"/static/{relative.as_posix()}"
 
 
@@ -64,6 +71,27 @@ def ffmpeg_filter_available(name: str) -> bool:
     except Exception:
         return False
     return any(f" {name} " in line or line.rstrip().endswith(f" {name}") for line in result.stdout.splitlines())
+
+
+def ffprobe_has_audio(path: Path) -> bool:
+    try:
+        result = run_command(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ]
+        )
+    except Exception:
+        return False
+    return bool(result.stdout.strip())
 
 
 def probe_duration_seconds(path: Path) -> float:
@@ -128,6 +156,320 @@ def write_text_file(path: Path, text: str) -> Path:
     return path
 
 
+def requested_options(input_data: dict[str, Any]) -> set[str]:
+    options = input_data.get("options")
+    if not isinstance(options, list):
+        return set()
+    return {str(option) for option in options}
+
+
+def brand_primary_color(suite: Suite) -> tuple[int, int, int]:
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    colors = brand.get("colors") if isinstance(brand.get("colors"), dict) else {}
+    value = str(colors.get("primary") or "#2f80ff").strip()
+    match = re.fullmatch(r"#?([0-9a-fA-F]{6})", value)
+    if not match:
+        return (47, 128, 255)
+    raw = match.group(1)
+    return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16))
+
+
+def font_path() -> Path | None:
+    candidates = [
+        Path(__file__).resolve().parent.parent / "fonts" / "NotoSansArabic-Regular.ttf",
+        Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+    ]
+    return next((path for path in candidates if path.exists()), None)
+
+
+def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    path = font_path()
+    if path:
+        return ImageFont.truetype(str(path), size=size)
+    return ImageFont.load_default()
+
+
+def rtl_display(text: str) -> str:
+    clean = re.sub(r"[\u2066-\u2069\u200e\u200f]", "", str(text or "")).strip()
+    if not clean:
+        return ""
+    return get_display(reshape(clean))
+
+
+def text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+    left, _top, right, _bottom = draw.textbbox((0, 0), text, font=font)
+    return max(0, right - left)
+
+
+def wrap_rtl_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
+    words = re.split(r"\s+", text.strip())
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and text_width(draw, rtl_display(candidate), font) > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines[:4]
+
+
+def render_rtl_overlay_image(
+    *,
+    text: str,
+    path: Path,
+    width: int,
+    height: int,
+    font_size: int,
+    fill: tuple[int, int, int, int] = (255, 255, 255, 245),
+    box_fill: tuple[int, int, int, int] = (7, 12, 24, 170),
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    font = load_font(font_size)
+    margin = 34
+    lines = wrap_rtl_text(draw, text, font, width - (margin * 2))
+    if not lines:
+        lines = ["OneShare"]
+    line_height = int(font_size * 1.35)
+    total_height = (len(lines) * line_height) + margin
+    y = max(16, (height - total_height) // 2)
+    draw.rounded_rectangle((14, 10, width - 14, height - 10), radius=28, fill=box_fill)
+    for line in lines:
+        display = rtl_display(line)
+        line_w = text_width(draw, display, font)
+        draw.text(((width - line_w) / 2, y), display, font=font, fill=fill)
+        y += line_height
+    image.save(path)
+    return path
+
+
+def create_montage_background(path: Path, suite: Suite) -> Path:
+    primary = brand_primary_color(suite)
+    width, height = 1080, 1920
+    image = Image.new("RGB", (width, height), (8, 15, 31))
+    pixels = image.load()
+    for y in range(height):
+        ratio = y / max(1, height - 1)
+        for x in range(width):
+            radial = 1 - min(1, math.hypot((x - width * 0.5) / width, (y - height * 0.38) / height) * 1.45)
+            glow = max(0, radial) * 0.42
+            r = int(8 + primary[0] * glow + 8 * ratio)
+            g = int(15 + primary[1] * glow + 12 * (1 - ratio))
+            b = int(31 + primary[2] * glow + 22 * (1 - ratio))
+            pixels[x, y] = (min(255, r), min(255, g), min(255, b))
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.rounded_rectangle((72, 112, 1008, 1808), radius=54, outline=(*primary, 130), width=5)
+    draw.ellipse((760, 90, 1200, 530), fill=(*primary, 28))
+    image.save(path)
+    return path
+
+
+def detect_silences(path: Path) -> list[tuple[float, float]]:
+    if not ffprobe_has_audio(path):
+        return []
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostats",
+                "-i",
+                str(path),
+                "-af",
+                "silencedetect=noise=-35dB:d=0.45",
+                "-f",
+                "null",
+                "-",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return []
+    output = f"{result.stderr}\n{result.stdout}"
+    starts = [float(item) for item in re.findall(r"silence_start:\s*([0-9.]+)", output)]
+    ends = [float(item) for item in re.findall(r"silence_end:\s*([0-9.]+)", output)]
+    return list(zip(starts, ends))
+
+
+def non_silent_segments(path: Path, duration: float) -> list[tuple[float, float]]:
+    silences = detect_silences(path)
+    if not silences:
+        return [(0.0, duration)]
+    segments: list[tuple[float, float]] = []
+    cursor = 0.0
+    for start, end in silences:
+        if start - cursor > 0.35:
+            segments.append((max(0.0, cursor - 0.08), min(duration, start + 0.08)))
+        cursor = max(cursor, end)
+    if duration - cursor > 0.35:
+        segments.append((max(0.0, cursor - 0.08), duration))
+    return segments[:28] or [(0.0, duration)]
+
+
+def cut_dead_spaces(source_path: Path, output_path: Path, duration: float) -> tuple[Path, bool, str | None]:
+    if not ffprobe_has_audio(source_path):
+        return source_path, False, "No audio stream was found, so silence cutting was skipped."
+    segments = non_silent_segments(source_path, duration)
+    if len(segments) <= 1:
+        return source_path, False, None
+    parts: list[str] = []
+    concat_inputs: list[str] = []
+    for index, (start, end) in enumerate(segments):
+        parts.append(f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{index}]")
+        parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{index}]")
+        concat_inputs.append(f"[v{index}][a{index}]")
+    filter_complex = ";".join(parts + [f"{''.join(concat_inputs)}concat=n={len(segments)}:v=1:a=1[v][a]"])
+    try:
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source_path),
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                "[v]",
+                "-map",
+                "[a]",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "23",
+                "-c:a",
+                "aac",
+                str(output_path),
+            ]
+        )
+    except subprocess.CalledProcessError as exc:
+        return source_path, False, (exc.stderr or exc.stdout or str(exc))[-500:]
+    return output_path, True, None
+
+
+def finalise_audio(
+    *,
+    video_path: Path,
+    output_path: Path,
+    duration: float,
+    add_music: bool,
+    cleanup_voice: bool,
+) -> tuple[Path, list[str], list[str]]:
+    capabilities: list[str] = []
+    warnings: list[str] = []
+    if not ffprobe_has_audio(video_path):
+        shutil.move(str(video_path), str(output_path))
+        return output_path, capabilities, ["No audio stream was found, so audio cleanup and music mix were skipped."]
+    if not add_music and not cleanup_voice:
+        shutil.move(str(video_path), str(output_path))
+        return output_path, capabilities, warnings
+
+    audio_chain = "anull"
+    if cleanup_voice:
+        audio_chain = "highpass=f=80,lowpass=f=12000,afftdn,loudnorm=I=-16:LRA=11:TP=-1.5"
+        capabilities.append("audio_cleanup")
+
+    if add_music:
+        music_path = output_path.with_suffix(".music.wav")
+        sfx_path = output_path.with_suffix(".sfx.wav")
+        fade_out_start = max(0.2, duration - 0.8)
+        try:
+            run_command(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"sine=frequency=98:duration={duration:.3f}:sample_rate=44100",
+                    "-af",
+                    f"volume=0.045,afade=t=in:st=0:d=0.6,afade=t=out:st={fade_out_start:.3f}:d=0.7",
+                    str(music_path),
+                ]
+            )
+            run_command(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "anoisesrc=color=pink:duration=0.32:sample_rate=44100",
+                    "-af",
+                    "highpass=f=900,lowpass=f=4200,volume=0.03,afade=t=in:st=0:d=0.03,afade=t=out:st=0.18:d=0.14",
+                    str(sfx_path),
+                ]
+            )
+            run_command(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(video_path),
+                    "-i",
+                    str(music_path),
+                    "-i",
+                    str(sfx_path),
+                    "-filter_complex",
+                    f"[0:a]{audio_chain}[speech];[1:a]volume=0.9[music];[2:a]adelay=260|260[sfx];"
+                    "[speech][music][sfx]amix=inputs=3:duration=first:dropout_transition=0[a]",
+                    "-map",
+                    "0:v",
+                    "-map",
+                    "[a]",
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "160k",
+                    "-movflags",
+                    "+faststart",
+                    str(output_path),
+                ]
+            )
+            capabilities.append("music_bed")
+            capabilities.append("sound_effect_intro")
+            return output_path, capabilities, warnings
+        except subprocess.CalledProcessError as exc:
+            warnings.append(f"Music mix failed: {(exc.stderr or exc.stdout or str(exc))[-300:]}")
+
+    try:
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(video_path),
+                "-af",
+                audio_chain,
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "160k",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+        )
+    except subprocess.CalledProcessError as exc:
+        warnings.append(f"Audio cleanup failed: {(exc.stderr or exc.stdout or str(exc))[-300:]}")
+        shutil.move(str(video_path), str(output_path))
+    return output_path, capabilities, warnings
+
+
 def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input_data: dict[str, Any]) -> dict[str, Any]:
     if not ffmpeg_available():
         return {
@@ -142,54 +484,113 @@ def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     duration = min(probe_duration_seconds(source_path), 45.0)
-    drawtext_enabled = ffmpeg_filter_available("drawtext")
-    vf = (
-        "scale=1080:1920:force_original_aspect_ratio=decrease,"
-        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#101828,"
-        "setsar=1"
+    options = requested_options(input_data)
+    capabilities = ["video_fit_vertical", "mp4_delivery"]
+    warnings: list[str] = []
+
+    working_source = source_path
+    if "dead_spaces" in options:
+        working_source, cut_applied, cut_warning = cut_dead_spaces(
+            source_path,
+            output_path.with_name("cut-source.mp4"),
+            duration,
+        )
+        if cut_applied:
+            capabilities.append("silence_cutting")
+            duration = min(probe_duration_seconds(working_source), 45.0)
+        if cut_warning:
+            warnings.append(cut_warning)
+
+    overlay_inputs: list[Path] = []
+    title_text = title_from_suite(suite)
+    notes = str(input_data.get("notes") or "").strip()
+    caption_text = notes[:180] if notes else "مونتاج أولي جاهز للمراجعة"
+    if "titles" in options:
+        overlay_inputs.append(
+            render_rtl_overlay_image(
+                text=title_text,
+                path=output_path.with_suffix(".title.png"),
+                width=940,
+                height=150,
+                font_size=48,
+                box_fill=(7, 12, 24, 135),
+            )
+        )
+        capabilities.append("animated_title_overlay")
+    if "captions" in options:
+        overlay_inputs.append(
+            render_rtl_overlay_image(
+                text=caption_text,
+                path=output_path.with_suffix(".caption.png"),
+                width=980,
+                height=220,
+                font_size=38,
+                box_fill=(7, 12, 24, 172),
+            )
+        )
+        capabilities.append("rtl_text_overlay")
+
+    visual_output = output_path.with_name("visual-pass.mp4")
+    command = ["ffmpeg", "-y", "-t", str(duration)]
+    filter_parts: list[str] = []
+    overlay_start_index = 1
+    if "background" in options and ffmpeg_filter_available("chromakey"):
+        bg_path = create_montage_background(output_path.with_suffix(".background.png"), suite)
+        command.extend(["-loop", "1", "-i", str(bg_path), "-i", str(working_source)])
+        overlay_start_index = 2
+        filter_parts.append("[0:v]scale=1080:1920,setsar=1[bg]")
+        filter_parts.append(
+            "[1:v]chromakey=0x00b050:0.22:0.10,"
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "setsar=1[fg]"
+        )
+        filter_parts.append("[bg][fg]overlay=(W-w)/2:(H-h)/2:format=auto[vbase]")
+        capabilities.append("green_screen_background_removal")
+    else:
+        if "background" in options:
+            warnings.append("FFmpeg chromakey filter is unavailable; background removal was skipped.")
+        command.extend(["-i", str(working_source)])
+        filter_parts.append(
+            "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#101828,setsar=1[vbase]"
+        )
+
+    for overlay in overlay_inputs:
+        command.extend(["-i", str(overlay)])
+
+    last_label = "vbase"
+    for index, _overlay in enumerate(overlay_inputs):
+        input_index = overlay_start_index + index
+        next_label = f"vov{index}"
+        y_expr = "96" if index == 0 and "titles" in options else "H-h-128"
+        filter_parts.append(f"[{last_label}][{input_index}:v]overlay=(W-w)/2:{y_expr}[{next_label}]")
+        last_label = next_label
+
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            f"[{last_label}]",
+            "-map",
+            f"{1 if 'background' in options and ffmpeg_filter_available('chromakey') else 0}:a?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-movflags",
+            "+faststart",
+            str(visual_output),
+        ]
     )
-    if drawtext_enabled:
-        title_path = write_text_file(output_path.with_suffix(".title.txt"), title_from_suite(suite))
-        notes = str(input_data.get("notes") or "").strip()
-        caption_path = write_text_file(
-            output_path.with_suffix(".caption.txt"),
-            notes[:140] if notes else "مونتاج أولي جاهز للمراجعة",
-        )
-        font_path = Path(__file__).resolve().parent.parent / "fonts" / "NotoSansArabic-Regular.ttf"
-        font_arg = str(font_path) if font_path.exists() else "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
-        vf += (
-            f",drawtext=fontfile='{font_arg}':textfile='{title_path}':"
-            "x=(w-text_w)/2:y=120:fontsize=64:fontcolor=white:"
-            "box=1:boxcolor=black@0.38:boxborderw=22,"
-            f"drawtext=fontfile='{font_arg}':textfile='{caption_path}':"
-            "x=(w-text_w)/2:y=h-260:fontsize=42:fontcolor=white:"
-            "box=1:boxcolor=black@0.42:boxborderw=18"
-        )
-    command = [
-        "ffmpeg",
-        "-y",
-        "-t",
-        str(duration),
-        "-i",
-        str(source_path),
-        "-vf",
-        vf,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "23",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "160k",
-        "-movflags",
-        "+faststart",
-        str(output_path),
-    ]
     try:
         run_command(command)
     except subprocess.CalledProcessError as exc:
@@ -198,16 +599,22 @@ def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input
             "reason": (exc.stderr or exc.stdout or str(exc))[-1200:],
         }
 
+    _final_path, audio_caps, audio_warnings = finalise_audio(
+        video_path=visual_output,
+        output_path=output_path,
+        duration=duration,
+        add_music="music" in options,
+        cleanup_voice="voice_cleanup" in options,
+    )
+    capabilities.extend(audio_caps)
+    warnings.extend(audio_warnings)
+
     return {
         "rendered": output_path.exists(),
         "duration_seconds": duration,
         "output_url": public_static_url(output_path),
-        "capabilities_applied": [
-            "video_fit_vertical",
-            *(["title_overlay", "caption_overlay"] if drawtext_enabled else []),
-            "mp4_delivery",
-        ],
-        "warnings": [] if drawtext_enabled else ["FFmpeg drawtext filter is unavailable; exported without text overlays."],
+        "capabilities_applied": capabilities,
+        "warnings": warnings,
     }
 
 
