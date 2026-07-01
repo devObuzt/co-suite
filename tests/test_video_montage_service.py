@@ -8,7 +8,11 @@ from api.services.video_montage import render_v1_video
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="ffmpeg is required")
-def test_render_v1_video_applies_rtl_overlays_and_green_screen_removal(tmp_path):
+def test_render_v1_video_applies_rtl_overlays_and_green_screen_removal(tmp_path, monkeypatch):
+    from api.core.config import settings
+
+    monkeypatch.setattr(settings, "openai_api_key", "")
+
     source = tmp_path / "green-source.mp4"
     output = tmp_path / "render.mp4"
     subprocess.run(
@@ -50,7 +54,7 @@ def test_render_v1_video_applies_rtl_overlays_and_green_screen_removal(tmp_path)
         suite=suite,
         input_data={
             "options": ["captions", "background", "titles", "music", "voice_cleanup"],
-            "notes": "فيديو سريع مع كابتشن عربي واضح وخلفية جديدة.",
+            "notes": "فيديو سريع مع كابتشن عربي واضح وخلفية جديدة. انتقال ثاني واضح.",
         },
     )
 
@@ -59,3 +63,8 @@ def test_render_v1_video_applies_rtl_overlays_and_green_screen_removal(tmp_path)
     assert "rtl_text_overlay" in result["capabilities_applied"]
     assert "green_screen_background_removal" in result["capabilities_applied"]
     assert "audio_cleanup" in result["capabilities_applied"]
+    assert "behind_person_title" in result["capabilities_applied"]
+    assert "animated_background" in result["capabilities_applied"]
+    assert "person_camera_motion" in result["capabilities_applied"]
+    assert "sound_effect_transitions" in result["capabilities_applied"]
+    assert "visual_transitions" in result["capabilities_applied"]

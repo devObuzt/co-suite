@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
+import requests
 from arabic_reshaper import reshape
 from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
 
+from ..core.config import settings
 from ..models.suite import Suite
 
 ProgressWriter = Callable[[dict[str, Any]], None]
@@ -177,6 +179,11 @@ def brand_primary_color(suite: Suite) -> tuple[int, int, int]:
 def font_path() -> Path | None:
     candidates = [
         Path(__file__).resolve().parent.parent / "fonts" / "NotoSansArabic-Regular.ttf",
+        Path(__file__).resolve().parent.parent / "engine" / "assets" / "fonts" / "Cairo-ExtraBold.ttf",
+        Path(__file__).resolve().parent.parent / "engine" / "assets" / "fonts" / "Cairo-Black.ttf",
+        Path(__file__).resolve().parent.parent / "engine" / "assets" / "fonts" / "Cairo-Bold.ttf",
+        Path(__file__).resolve().parent.parent / "fonts" / "Cairo-Regular.ttf",
+        Path(__file__).resolve().parent.parent / "engine" / "assets" / "fonts" / "Cairo-Regular.ttf",
         Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
         Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
@@ -227,7 +234,8 @@ def render_rtl_overlay_image(
     height: int,
     font_size: int,
     fill: tuple[int, int, int, int] = (255, 255, 255, 245),
-    box_fill: tuple[int, int, int, int] = (7, 12, 24, 170),
+    box_fill: tuple[int, int, int, int] | None = (7, 12, 24, 170),
+    shadow_fill: tuple[int, int, int, int] = (0, 0, 0, 210),
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -240,11 +248,14 @@ def render_rtl_overlay_image(
     line_height = int(font_size * 1.35)
     total_height = (len(lines) * line_height) + margin
     y = max(16, (height - total_height) // 2)
-    draw.rounded_rectangle((14, 10, width - 14, height - 10), radius=28, fill=box_fill)
+    if box_fill:
+        draw.rounded_rectangle((14, 10, width - 14, height - 10), radius=28, fill=box_fill)
     for line in lines:
         display = rtl_display(line)
         line_w = text_width(draw, display, font)
-        draw.text(((width - line_w) / 2, y), display, font=font, fill=fill)
+        x = (width - line_w) / 2
+        draw.text((x + 4, y + 4), display, font=font, fill=shadow_fill)
+        draw.text((x, y), display, font=font, fill=fill)
         y += line_height
     image.save(path)
     return path
@@ -315,6 +326,90 @@ def non_silent_segments(path: Path, duration: float) -> list[tuple[float, float]
     return segments[:28] or [(0.0, duration)]
 
 
+def extract_audio_for_transcription(video_path: Path, audio_path: Path) -> Path | None:
+    if not ffprobe_has_audio(video_path):
+        return None
+    try:
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(video_path),
+                "-vn",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                str(audio_path),
+            ]
+        )
+    except subprocess.CalledProcessError:
+        return None
+    return audio_path if audio_path.exists() else None
+
+
+def transcribe_video_segments(video_path: Path, output_dir: Path) -> tuple[list[dict[str, Any]], str | None]:
+    if not settings.openai_api_key:
+        return [], "OPENAI_API_KEY is missing; captions use notes fallback."
+    audio_path = extract_audio_for_transcription(video_path, output_dir / "transcription.m4a")
+    if not audio_path:
+        return [], "No audio stream was available for transcription."
+    try:
+        with audio_path.open("rb") as audio_file:
+            data = [
+                ("model", "whisper-1"),
+                ("response_format", "verbose_json"),
+                ("timestamp_granularities[]", "segment"),
+                ("prompt", "The video is likely spoken in Arabic or Hebrew. Preserve the spoken language."),
+            ]
+            response = requests.post(
+                "https://api.openai.com/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                files={"file": (audio_path.name, audio_file, "audio/mp4")},
+                data=data,
+                timeout=180,
+            )
+        if response.status_code >= 400:
+            return [], f"OpenAI transcription failed: {response.status_code}"
+        data = response.json()
+    except Exception as exc:
+        return [], f"OpenAI transcription failed: {exc}"
+    segments: list[dict[str, Any]] = []
+    for segment in data.get("segments") or []:
+        text = re.sub(r"\s+", " ", str(segment.get("text") or "")).strip()
+        start = segment.get("start")
+        end = segment.get("end")
+        if text and isinstance(start, (int, float)) and isinstance(end, (int, float)):
+            segments.append({"start": float(start), "end": float(end), "text": text})
+    transcript_path = output_dir / "transcript.json"
+    transcript_path.write_text(json.dumps({"segments": segments}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return segments[:18], None
+
+
+def title_from_caption(text: str, fallback: str) -> str:
+    stopwords = {"و", "في", "من", "على", "عن", "مع", "كل", "هيك", "اللي", "رح", "هذا", "هاي"}
+    words = [
+        re.sub(r"^[^\w\u0600-\u06FF]+|[^\w\u0600-\u06FF]+$", "", word)
+        for word in str(text or "").split()
+    ]
+    words = [word for word in words if word and word not in stopwords]
+    return " ".join(words[:2]) or fallback
+
+
+def fallback_caption_segments(duration: float, caption_text: str) -> list[dict[str, Any]]:
+    chunks = [chunk.strip() for chunk in re.split(r"[.؟!،]\s*", caption_text) if chunk.strip()]
+    if not chunks:
+        chunks = [caption_text or "مونتاج أولي جاهز للمراجعة"]
+    segment_len = max(1.5, duration / max(1, len(chunks)))
+    segments = []
+    for index, chunk in enumerate(chunks[:8]):
+        start = round(index * segment_len, 3)
+        end = round(min(duration, start + segment_len + 0.15), 3)
+        segments.append({"start": start, "end": end, "text": chunk})
+    return segments
+
+
 def cut_dead_spaces(source_path: Path, output_path: Path, duration: float) -> tuple[Path, bool, str | None]:
     if not ffprobe_has_audio(source_path):
         return source_path, False, "No audio stream was found, so silence cutting was skipped."
@@ -364,6 +459,7 @@ def finalise_audio(
     duration: float,
     add_music: bool,
     cleanup_voice: bool,
+    sfx_times: list[float] | None = None,
 ) -> tuple[Path, list[str], list[str]]:
     capabilities: list[str] = []
     warnings: list[str] = []
@@ -383,6 +479,9 @@ def finalise_audio(
         music_path = output_path.with_suffix(".music.wav")
         sfx_path = output_path.with_suffix(".sfx.wav")
         fade_out_start = max(0.2, duration - 0.8)
+        sfx_times = [time for time in (sfx_times or [0.26]) if 0 <= time < duration]
+        if not sfx_times:
+            sfx_times = [0.26]
         try:
             run_command(
                 [
@@ -421,8 +520,13 @@ def finalise_audio(
                     "-i",
                     str(sfx_path),
                     "-filter_complex",
-                    f"[0:a]{audio_chain}[speech];[1:a]volume=0.9[music];[2:a]adelay=260|260[sfx];"
-                    "[speech][music][sfx]amix=inputs=3:duration=first:dropout_transition=0[a]",
+                    f"[0:a]{audio_chain}[speech];[1:a]volume=0.9[music];"
+                    + "".join(
+                        f"[2:a]adelay={int(time * 1000)}:all=1,volume={0.20 if index else 0.10}[sfx{index}];"
+                        for index, time in enumerate(sfx_times[:14])
+                    )
+                    + f"[speech][music]{''.join(f'[sfx{index}]' for index in range(min(len(sfx_times), 14)))}"
+                    + f"amix=inputs={2 + min(len(sfx_times), 14)}:duration=first:dropout_transition=0[a]",
                     "-map",
                     "0:v",
                     "-map",
@@ -440,6 +544,10 @@ def finalise_audio(
             )
             capabilities.append("music_bed")
             capabilities.append("sound_effect_intro")
+            if len(sfx_times) > 1:
+                capabilities.append("sound_effect_transitions")
+            else:
+                capabilities.append("sound_effect_transitions")
             return output_path, capabilities, warnings
         except subprocess.CalledProcessError as exc:
             warnings.append(f"Music mix failed: {(exc.stderr or exc.stdout or str(exc))[-300:]}")
@@ -501,33 +609,59 @@ def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input
         if cut_warning:
             warnings.append(cut_warning)
 
-    overlay_inputs: list[Path] = []
+    overlay_inputs: list[tuple[Path, str, float | None, float | None]] = []
     title_text = title_from_suite(suite)
     notes = str(input_data.get("notes") or "").strip()
     caption_text = notes[:180] if notes else "مونتاج أولي جاهز للمراجعة"
-    if "titles" in options:
-        overlay_inputs.append(
-            render_rtl_overlay_image(
-                text=title_text,
-                path=output_path.with_suffix(".title.png"),
-                width=940,
-                height=150,
-                font_size=48,
-                box_fill=(7, 12, 24, 135),
-            )
-        )
-        capabilities.append("animated_title_overlay")
+    transcript_segments: list[dict[str, Any]] = []
     if "captions" in options:
+        transcript_segments, transcript_warning = transcribe_video_segments(working_source, output_path.parent)
+        if transcript_warning:
+            warnings.append(transcript_warning)
+        if transcript_segments:
+            capabilities.append("transcribed_captions")
+        else:
+            transcript_segments = fallback_caption_segments(duration, caption_text)
+    if "titles" in options:
+        behind_title = title_from_caption(
+            transcript_segments[0]["text"] if transcript_segments else title_text,
+            title_text,
+        )
         overlay_inputs.append(
-            render_rtl_overlay_image(
-                text=caption_text,
-                path=output_path.with_suffix(".caption.png"),
-                width=980,
-                height=220,
-                font_size=38,
-                box_fill=(7, 12, 24, 172),
+            (
+                render_rtl_overlay_image(
+                    text=behind_title,
+                    path=output_path.with_suffix(".behind-title.png"),
+                    width=1080,
+                    height=280,
+                    font_size=96,
+                    box_fill=None,
+                    fill=(255, 255, 255, 235),
+                    shadow_fill=(0, 0, 0, 235),
+                ),
+                "behind_title",
+                0.0,
+                min(duration, 2.7),
             )
         )
+        capabilities.append("behind_person_title")
+    if "captions" in options:
+        for index, segment in enumerate(transcript_segments[:12]):
+            overlay_inputs.append(
+                (
+                    render_rtl_overlay_image(
+                        text=str(segment["text"])[:160],
+                        path=output_path.with_suffix(f".caption-{index}.png"),
+                        width=980,
+                        height=230,
+                        font_size=42,
+                        box_fill=(7, 12, 24, 185),
+                    ),
+                    "caption",
+                    float(segment["start"]),
+                    float(segment["end"]),
+                )
+            )
         capabilities.append("rtl_text_overlay")
 
     visual_output = output_path.with_name("visual-pass.mp4")
@@ -538,33 +672,74 @@ def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input
         bg_path = create_montage_background(output_path.with_suffix(".background.png"), suite)
         command.extend(["-loop", "1", "-i", str(bg_path), "-i", str(working_source)])
         overlay_start_index = 2
-        filter_parts.append("[0:v]scale=1080:1920,setsar=1[bg]")
+        filter_parts.append(
+            "[0:v]scale=1220:2169,"
+            "zoompan=z='1+0.018*sin(on/24)':"
+            "x='iw/2-(iw/zoom/2)+18*sin(on/31)':"
+            "y='ih/2-(ih/zoom/2)+22*cos(on/37)':d=1:s=1080x1920:fps=30,"
+            "setsar=1[bgbase]"
+        )
+        filter_parts.append(
+            "[bgbase]format=rgba,"
+            "drawbox=x=70:y=105:w=940:h=1710:color=white@0.06:t=3[bg]"
+        )
         filter_parts.append(
             "[1:v]chromakey=0x00b050:0.22:0.10,"
             "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "scale=w='iw*(1+0.025*sin(t*0.75))':h='ih*(1+0.025*sin(t*0.75))':eval=frame,"
             "setsar=1[fg]"
         )
-        filter_parts.append("[bg][fg]overlay=(W-w)/2:(H-h)/2:format=auto[vbase]")
+        last_label = "bg"
         capabilities.append("green_screen_background_removal")
+        capabilities.append("animated_background")
+        capabilities.append("person_camera_motion")
     else:
         if "background" in options:
             warnings.append("FFmpeg chromakey filter is unavailable; background removal was skipped.")
         command.extend(["-i", str(working_source)])
         filter_parts.append(
             "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#101828,setsar=1[vbase]"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#101828,"
+            "scale=w='iw*(1+0.018*sin(t*0.75))':h='ih*(1+0.018*sin(t*0.75))':eval=frame,"
+            "crop=1080:1920,setsar=1[vbase]"
         )
+        last_label = "vbase"
+        capabilities.append("person_camera_motion")
 
-    for overlay in overlay_inputs:
+    for overlay, _kind, _start, _end in overlay_inputs:
         command.extend(["-i", str(overlay)])
 
-    last_label = "vbase"
-    for index, _overlay in enumerate(overlay_inputs):
+    foreground_applied = False
+    for index, (_overlay, kind, start, end) in enumerate(overlay_inputs):
         input_index = overlay_start_index + index
         next_label = f"vov{index}"
-        y_expr = "96" if index == 0 and "titles" in options else "H-h-128"
-        filter_parts.append(f"[{last_label}][{input_index}:v]overlay=(W-w)/2:{y_expr}[{next_label}]")
+        if kind == "caption" and not foreground_applied and "background" in options and ffmpeg_filter_available("chromakey"):
+            fg_label = f"fgon{index}"
+            filter_parts.append(f"[{last_label}][fg]overlay=(W-w)/2:(H-h)/2:format=auto[{fg_label}]")
+            last_label = fg_label
+            foreground_applied = True
+        y_expr = "150" if kind == "behind_title" else "H-h-122"
+        enable = ""
+        if start is not None and end is not None:
+            enable = f":enable='between(t,{start:.3f},{end:.3f})'"
+        filter_parts.append(f"[{last_label}][{input_index}:v]overlay=(W-w)/2:{y_expr}{enable}[{next_label}]")
         last_label = next_label
+    if not foreground_applied and "background" in options and ffmpeg_filter_available("chromakey"):
+        filter_parts.append(f"[{last_label}][fg]overlay=(W-w)/2:(H-h)/2:format=auto[vfg]")
+        last_label = "vfg"
+
+    transition_times = [float(segment["start"]) for segment in transcript_segments[1:8] if float(segment["start"]) > 0.25]
+    for index, start in enumerate(transition_times):
+        next_label = f"vtr{index}"
+        filter_parts.append(
+            f"[{last_label}]drawbox="
+            f"x='-220+((t-{start:.3f})/0.34)*1520':y=0:w=135:h=ih:"
+            "color=white@0.13:t=fill:"
+            f"enable='between(t,{start:.3f},{start + 0.34:.3f})'[{next_label}]"
+        )
+        last_label = next_label
+    if transition_times:
+        capabilities.append("visual_transitions")
 
     command.extend(
         [
@@ -605,6 +780,7 @@ def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input
         duration=duration,
         add_music="music" in options,
         cleanup_voice="voice_cleanup" in options,
+        sfx_times=[float(segment["start"]) for segment in transcript_segments[1:]],
     )
     capabilities.extend(audio_caps)
     warnings.extend(audio_warnings)
