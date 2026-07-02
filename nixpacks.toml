@@ -3,12 +3,13 @@ PYTHON_VERSION = "3.12"
 NODE_VERSION = "22"
 
 [phases.setup]
-nixPkgs = ["python312", "python312Packages.pip", "python312Packages.virtualenv", "ffmpeg", "nodejs_22"]
+nixPkgs = ["python312", "python312Packages.pip", "python312Packages.virtualenv", "ffmpeg", "nodejs_22", "git"]
 
 [phases.install]
 cmds = [
   "virtualenv /opt/venv",
   "/opt/venv/bin/pip install -r requirements.txt",
+  "rm -rf web && git clone --depth 1 https://github.com/devObuzt/co-suite-web.git web",
   "cd web && npm ci"
 ]
 
