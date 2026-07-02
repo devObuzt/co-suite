@@ -5,6 +5,7 @@ import math
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,9 +22,12 @@ ProgressWriter = Callable[[dict[str, Any]], None]
 
 STATIC_ROOT = Path(__file__).resolve().parent.parent / "static"
 MONTAGE_ROOT = STATIC_ROOT / "video_montage"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+WEB_ROOT = REPO_ROOT / "web"
 MAX_REMOTE_BYTES = 500 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 45
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
+FAL_VEED_MODEL = "veed/video-background-removal"
 
 
 def job_dir(job_id: str) -> Path:
@@ -59,6 +63,110 @@ def google_drive_direct_url(url: str) -> str:
 
 def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, check=True, capture_output=True, text=True)
+
+
+def remove_background_with_veed_fal(
+    *,
+    source_url: str,
+    output_path: Path,
+    fal_key: str,
+    poll_seconds: int = 10,
+    max_wait_seconds: int = 900,
+) -> dict[str, Any]:
+    """Remove a person's video background using the VEED/fal provider.
+
+    The old successful montage POC started from this transparent WebM output.
+    Keeping this as a focused function makes it testable and lets the local
+    chromakey path remain a fallback instead of the main production path.
+    """
+    if not fal_key:
+        return {"ok": False, "provider": "veed-fal", "error": "FAL_KEY is missing."}
+    if not source_url:
+        return {"ok": False, "provider": "veed-fal", "error": "A public source URL is required for fal/VEED."}
+
+    normalized_url = google_drive_direct_url(source_url)
+    headers = {"Authorization": f"Key {fal_key}"}
+    submit_url = f"https://queue.fal.run/{FAL_VEED_MODEL}"
+    payload = {
+        "video_url": normalized_url,
+        "output_codec": "vp9",
+        "refine_foreground_edges": True,
+        "subject_is_person": True,
+    }
+    try:
+        submit = requests.post(submit_url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT_SECONDS)
+        submit.raise_for_status()
+        request_id = str(submit.json().get("request_id") or "")
+        if not request_id:
+            return {"ok": False, "provider": "veed-fal", "error": "fal did not return a request_id."}
+
+        status_url = f"{submit_url}/requests/{request_id}/status"
+        response_url = f"{submit_url}/requests/{request_id}"
+        started = time.monotonic()
+        last_status: dict[str, Any] = {}
+        while time.monotonic() - started <= max_wait_seconds:
+            status_response = requests.get(status_url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
+            status_response.raise_for_status()
+            last_status = status_response.json()
+            status = str(last_status.get("status") or "").upper()
+            if status in {"COMPLETED", "DONE"}:
+                break
+            if status in {"FAILED", "ERROR", "CANCELED", "CANCELLED"}:
+                return {
+                    "ok": False,
+                    "provider": "veed-fal",
+                    "request_id": request_id,
+                    "error": f"fal/VEED failed with status {status}.",
+                    "raw_status": last_status,
+                }
+            time.sleep(max(0, poll_seconds))
+        else:
+            return {
+                "ok": False,
+                "provider": "veed-fal",
+                "request_id": request_id,
+                "error": "fal/VEED background removal timed out.",
+                "raw_status": last_status,
+            }
+
+        result_response = requests.get(response_url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
+        result_response.raise_for_status()
+        result = result_response.json()
+        videos = result.get("video") or []
+        output_url = ""
+        if isinstance(videos, list) and videos:
+            output_url = str((videos[0] or {}).get("url") or "")
+        if not output_url:
+            output_urls = result.get("output_urls")
+            if isinstance(output_urls, list) and output_urls:
+                output_url = str(output_urls[0])
+        if not output_url:
+            return {
+                "ok": False,
+                "provider": "veed-fal",
+                "request_id": request_id,
+                "error": "fal/VEED completed but did not return a video URL.",
+                "raw_result": result,
+            }
+
+        media_response = requests.get(output_url, timeout=max(REQUEST_TIMEOUT_SECONDS, 180))
+        media_response.raise_for_status()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(media_response.content)
+        if output_path.stat().st_size == 0:
+            output_path.unlink(missing_ok=True)
+            return {"ok": False, "provider": "veed-fal", "request_id": request_id, "error": "Downloaded transparent video was empty."}
+        return {
+            "ok": True,
+            "provider": "veed-fal",
+            "request_id": request_id,
+            "elapsed_seconds": round(time.monotonic() - started, 2),
+            "output_url": output_url,
+            "output_path": str(output_path),
+        }
+    except Exception as exc:
+        output_path.unlink(missing_ok=True)
+        return {"ok": False, "provider": "veed-fal", "error": str(exc)}
 
 
 def ffmpeg_available() -> bool:
@@ -424,6 +532,286 @@ def fallback_caption_segments(duration: float, caption_text: str) -> list[dict[s
         end = round(min(duration, start + segment_len + 0.15), 3)
         segments.append({"start": start, "end": end, "text": chunk})
     return segments
+
+
+def remotion_work_dir(output_path: Path) -> Path:
+    path = output_path.parent / "remotion-work"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def remotion_public_asset(path: Path) -> str:
+    public_root = path.parents[2] / "public"
+    try:
+        return f"/{path.relative_to(public_root).as_posix()}"
+    except ValueError:
+        return f"/remotion/inputs/{path.name}"
+
+
+def copy_remotion_runtime(work_dir: Path) -> tuple[Path, Path]:
+    src_dir = work_dir / "src" / "remotion"
+    public_dir = work_dir / "public" / "remotion"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    public_dir.mkdir(parents=True, exist_ok=True)
+
+    for filename in ("AiMontage.tsx", "Root.tsx", "index.ts"):
+        shutil.copy2(WEB_ROOT / "src" / "remotion" / filename, src_dir / filename)
+
+    source_fonts = WEB_ROOT / "public" / "remotion" / "fonts"
+    target_fonts = public_dir / "fonts"
+    if source_fonts.exists() and not target_fonts.exists():
+        shutil.copytree(source_fonts, target_fonts)
+    return src_dir, public_dir
+
+
+def build_remotion_scene_manifest(
+    *,
+    transparent_source_path: Path,
+    work_dir: Path,
+    suite: Suite,
+    input_data: dict[str, Any],
+    duration: float,
+    transcript_segments: list[dict[str, Any]],
+    fps: int = 30,
+) -> tuple[Path, list[dict[str, Any]]]:
+    src_dir, public_dir = copy_remotion_runtime(work_dir)
+    inputs_dir = public_dir / "inputs"
+    backgrounds_dir = public_dir / "backgrounds"
+    sound_dir = public_dir / "sound"
+    inputs_dir.mkdir(parents=True, exist_ok=True)
+    backgrounds_dir.mkdir(parents=True, exist_ok=True)
+    sound_dir.mkdir(parents=True, exist_ok=True)
+
+    source_copy = inputs_dir / transparent_source_path.name
+    if transparent_source_path.resolve() != source_copy.resolve():
+        shutil.copy2(transparent_source_path, source_copy)
+
+    frames_dir = inputs_dir / f"{transparent_source_path.stem}-frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    if not any(frames_dir.glob("frame_*.png")):
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-c:v",
+                "libvpx-vp9",
+                "-i",
+                str(transparent_source_path),
+                "-vf",
+                "scale=1080:1920",
+                "-start_number",
+                "0",
+                str(frames_dir / "frame_%05d.png"),
+            ]
+        )
+
+    audio_path = inputs_dir / f"{transparent_source_path.stem}-audio.m4a"
+    if not audio_path.exists() and ffprobe_has_audio(transparent_source_path):
+        run_command(["ffmpeg", "-y", "-i", str(transparent_source_path), "-vn", "-c:a", "aac", "-b:a", "192k", str(audio_path)])
+    if not audio_path.exists():
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"anullsrc=channel_layout=stereo:sample_rate=48000:d={duration:.3f}",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                str(audio_path),
+            ]
+        )
+
+    notes = str(input_data.get("notes") or "").strip()
+    if not transcript_segments:
+        transcript_segments = fallback_caption_segments(duration, notes or "مونتاج تسويقي جاهز")
+
+    scenes: list[dict[str, Any]] = []
+    for index, segment in enumerate(transcript_segments[:18]):
+        start = max(0.0, float(segment.get("start") or 0) - 0.12)
+        end = min(duration, float(segment.get("end") or duration) + 0.12)
+        if end <= start:
+            end = min(duration, start + 1.5)
+        caption = re.sub(r"\s+", " ", str(segment.get("text") or notes or title_from_suite(suite))).strip()
+        palette = [
+            ["#07111f", "#2f80ed", "#e8f3ff"],
+            ["#15120f", "#e6aa3b", "#fff2cf"],
+            ["#102018", "#28c76f", "#e6fff1"],
+            ["#201225", "#d85cff", "#ffe9ff"],
+            ["#1c1d21", "#ff5f45", "#fff0ec"],
+        ][index % 5]
+        background_path = backgrounds_dir / f"scene-{index + 1:02d}.png"
+        if not background_path.exists():
+            create_montage_background(background_path, suite)
+        scenes.append(
+            {
+                "id": f"scene-{index + 1:02d}",
+                "sourceStart": round(start, 3),
+                "sourceEnd": round(end, 3),
+                "caption": caption,
+                "behindText": title_from_caption(caption, title_from_suite(suite)),
+                "backgroundPrompt": f"Vertical editorial background inspired by this spoken line: {caption}",
+                "palette": palette,
+                "backgroundImagePublicPath": f"/remotion/backgrounds/{background_path.name}",
+            }
+        )
+
+    for index in range(len(scenes) - 1):
+        if scenes[index]["sourceEnd"] > scenes[index + 1]["sourceStart"]:
+            boundary = round((scenes[index]["sourceEnd"] + scenes[index + 1]["sourceStart"]) / 2, 3)
+            scenes[index]["sourceEnd"] = boundary
+            scenes[index + 1]["sourceStart"] = boundary
+
+    edited_duration = sum(max(0.1, scene["sourceEnd"] - scene["sourceStart"]) for scene in scenes)
+    music_path = sound_dir / "marketing-upbeat-bed.wav"
+    whoosh_path = sound_dir / "soft-whoosh.wav"
+    try:
+        if not music_path.exists():
+            run_command(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"sine=frequency=96:duration={edited_duration + 1:.3f}:sample_rate=48000",
+                    "-af",
+                    "volume=0.055,afade=t=in:st=0:d=0.45",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(music_path),
+                ]
+            )
+        if not whoosh_path.exists():
+            run_command(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "anoisesrc=color=pink:sample_rate=48000:duration=0.45:amplitude=0.28",
+                    "-af",
+                    "afade=t=in:st=0:d=0.03,afade=t=out:st=0.22:d=0.23,highpass=f=420,lowpass=f=4200",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(whoosh_path),
+                ]
+            )
+    except Exception:
+        pass
+
+    starts: list[float] = []
+    cursor = 0.0
+    for scene in scenes:
+        starts.append(cursor)
+        cursor += scene["sourceEnd"] - scene["sourceStart"]
+
+    manifest = {
+        "fps": fps,
+        "width": 1080,
+        "height": 1920,
+        "source": {
+            "publicPath": f"/remotion/inputs/{source_copy.name}",
+            "originalPath": str(transparent_source_path),
+            "durationSeconds": round(duration, 3),
+            "hasAlpha": True,
+            "framesPublicPath": f"/remotion/inputs/{frames_dir.name}",
+            "framePattern": "frame_%05d.png",
+        },
+        "audio": {
+            "sourcePublicPath": f"/remotion/inputs/{audio_path.name}",
+            "backgroundMusic": {"publicPath": "/remotion/sound/marketing-upbeat-bed.wav", "volume": 0.42} if music_path.exists() else None,
+            "soundEffects": [
+                {"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.42}
+                for start in starts[1:]
+                if whoosh_path.exists()
+            ],
+        },
+        "style": {"fontFamily": "ConnecAssistant", "arabicFontFamily": "ConnecCairo"},
+        "scenes": scenes,
+        "durationSeconds": round(edited_duration, 3),
+    }
+    manifest_path = src_dir / "manifest.generated.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return manifest_path, scenes
+
+
+def render_remotion_montage(
+    *,
+    transparent_source_path: Path,
+    output_path: Path,
+    suite: Suite,
+    input_data: dict[str, Any],
+) -> dict[str, Any]:
+    if not ffmpeg_available():
+        return {"rendered": False, "reason": "FFmpeg/FFprobe are not installed in this runtime."}
+    if not transparent_source_path.exists():
+        return {"rendered": False, "reason": "Transparent subject video was not found."}
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    duration = min(probe_duration_seconds(transparent_source_path), 45.0)
+    transcript_segments, transcript_warning = transcribe_video_segments(transparent_source_path, output_path.parent)
+    warnings = [transcript_warning] if transcript_warning else []
+    work_dir = remotion_work_dir(output_path)
+    manifest_path, scenes = build_remotion_scene_manifest(
+        transparent_source_path=transparent_source_path,
+        work_dir=work_dir,
+        suite=suite,
+        input_data=input_data,
+        duration=duration,
+        transcript_segments=transcript_segments,
+    )
+    public_dir = work_dir / "public"
+    entry = work_dir / "src" / "remotion" / "index.ts"
+    try:
+        run_command(
+            [
+                "npm",
+                "exec",
+                "--prefix",
+                str(WEB_ROOT),
+                "remotion",
+                "--",
+                "render",
+                str(entry),
+                "AiMontage",
+                str(output_path),
+                "--public-dir",
+                str(public_dir),
+            ]
+        )
+    except subprocess.CalledProcessError as exc:
+        return {
+            "rendered": False,
+            "reason": (exc.stderr or exc.stdout or str(exc))[-1200:],
+            "manifest_path": str(manifest_path),
+            "warnings": warnings,
+        }
+
+    return {
+        "rendered": output_path.exists(),
+        "duration_seconds": duration,
+        "output_url": public_static_url(output_path),
+        "capabilities_applied": [
+            "api_background_removal",
+            "transparent_subject_frames",
+            "remotion_layered_render",
+            "animated_background",
+            "behind_person_3d_title",
+            "rtl_text_overlay",
+            "visual_transitions",
+            "sound_effect_transitions",
+            "music_bed",
+            "mp4_delivery",
+        ],
+        "warnings": warnings,
+        "manifest_path": str(manifest_path),
+        "scene_count": len(scenes),
+    }
 
 
 def cut_dead_spaces(source_path: Path, output_path: Path, duration: float) -> tuple[Path, bool, str | None]:
@@ -819,8 +1207,9 @@ def build_render_package(
     options = input_data.get("options")
     if not isinstance(options, list):
         options = []
+    engine = str(render_result.get("engine") or "")
     package = {
-        "version": "video_montage_v1",
+        "version": "video_montage_remotion_v1" if engine == "remotion_veed_fal" else "video_montage_v1",
         "suite_id": suite.id,
         "mode": input_data.get("mode") or "talking_head",
         "source_url": input_data.get("source_url"),
@@ -830,11 +1219,9 @@ def build_render_package(
         "render": render_result,
         "source_warning": source_warning,
         "next_engine_steps": [
-            "wire_remotion_manifest_from_transcript",
-            "apply_silence_cutting",
-            "mix_music_and_sound_effects",
-            "enable_background_removal_provider",
             "store_outputs_in_cloud_storage",
+            "enable_customer_uploaded_files_for_provider_via_r2",
+            "add_final_audio_sidechain_mix_for_delivery",
         ],
     }
     manifest_path = output_dir / "render-package.json"
@@ -866,16 +1253,66 @@ async def generate_video_montage_for_suite(
     emit("preparing_source", "Preparing video source.", 15)
     source_warning = None
     source_path = None
+    provider_result: dict[str, Any] | None = None
     uploaded_path = input_data.get("source_file_path")
+
+    source_url = str(input_data.get("source_url") or "").strip()
+    options = requested_options(input_data)
+    if "background" in options and source_url and settings.fal_key:
+        emit("background_removal", "Removing video background with VEED/fal.", 35)
+        transparent_path = output_dir / "transparent-subject.webm"
+        provider_result = remove_background_with_veed_fal(
+            source_url=source_url,
+            output_path=transparent_path,
+            fal_key=settings.fal_key,
+        )
+        if provider_result.get("ok") and transparent_path.exists():
+            emit("rendering", "Rendering layered Remotion montage.", 68)
+            output_path = output_dir / "render.mp4"
+            render_result = render_remotion_montage(
+                transparent_source_path=transparent_path,
+                output_path=output_path,
+                suite=suite,
+                input_data=input_data,
+            )
+            render_result["engine"] = "remotion_veed_fal"
+            render_result["background_removal"] = provider_result
+            if render_result.get("rendered"):
+                emit("packaging", "Packaging montage output.", 88)
+                package = build_render_package(
+                    suite=suite,
+                    input_data=input_data,
+                    output_dir=output_dir,
+                    source_path=transparent_path,
+                    render_result=render_result,
+                    source_warning=None,
+                )
+                package["version"] = "video_montage_remotion_v1"
+                package["background_removal"] = provider_result
+                return {
+                    "video_montage": package,
+                    "output_url": render_result.get("output_url"),
+                    "package_url": package.get("package_url"),
+                    "rendered": True,
+                    "source_warning": None,
+                }
+            source_warning = f"Remotion render failed after VEED/fal background removal: {render_result.get('reason') or 'unknown error'}"
+        else:
+            source_warning = f"VEED/fal background removal failed: {provider_result.get('error') or 'unknown error'}"
+    elif "background" in options and source_url and not settings.fal_key:
+        source_warning = "FAL_KEY is missing; falling back to local FFmpeg chromakey preview."
+    elif "background" in options and uploaded_path and not source_url:
+        source_warning = "A public source URL is required for VEED/fal background removal; falling back to local FFmpeg chromakey preview."
+
     if uploaded_path:
         candidate = Path(str(uploaded_path))
         if candidate.exists():
             source_path = candidate
         else:
             source_warning = "Uploaded source file was not found on disk."
-    elif input_data.get("source_url"):
+    elif source_url:
         source_path, source_warning = await download_source(
-            str(input_data.get("source_url") or ""),
+            source_url,
             output_dir / "source_from_url.mp4",
         )
 
@@ -891,6 +1328,9 @@ async def generate_video_montage_for_suite(
         if source_path
         else {"rendered": False, "reason": source_warning or "No source video was provided."}
     )
+    render_result.setdefault("engine", "ffmpeg_local_fallback")
+    if provider_result:
+        render_result["background_removal"] = provider_result
 
     emit("packaging", "Packaging montage output.", 88)
     package = build_render_package(

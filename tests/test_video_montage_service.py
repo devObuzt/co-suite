@@ -1,9 +1,11 @@
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from api.models.suite import Suite
+from api.services import video_montage
 from api.services.video_montage import foreground_filter_chain, render_v1_video
 
 
@@ -13,6 +15,224 @@ def test_foreground_filter_preserves_subject_quality():
     assert "chromakey=0x00b050:0.18:0.03" in chain
     assert "scale=w='iw*" not in chain
     assert "flags=lanczos" in chain
+
+
+def test_veed_fal_background_removal_requests_transparent_person_video(tmp_path, monkeypatch):
+    calls: list[tuple[str, dict | None]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict | None = None, content: bytes = b""):
+            self._payload = payload or {}
+            self.content = content
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return self._payload
+
+    def fake_post(url: str, *, headers: dict, json: dict, timeout: int):
+        calls.append((url, json))
+        assert headers["Authorization"] == "Key test-fal-key"
+        return FakeResponse({"request_id": "req-123"})
+
+    def fake_get(url: str, *, headers: dict | None = None, timeout: int):
+        calls.append((url, None))
+        if url.endswith("/status"):
+            return FakeResponse({"status": "COMPLETED"})
+        if url.endswith("req-123"):
+            return FakeResponse({"video": [{"url": "https://cdn.example/transparent.webm"}]})
+        return FakeResponse(content=b"transparent-video")
+
+    monkeypatch.setattr(video_montage.requests, "post", fake_post)
+    monkeypatch.setattr(video_montage.requests, "get", fake_get)
+    monkeypatch.setattr(video_montage.time, "sleep", lambda _seconds: None)
+
+    result = video_montage.remove_background_with_veed_fal(
+        source_url="https://drive.google.com/uc?export=download&id=abc",
+        output_path=tmp_path / "subject.webm",
+        fal_key="test-fal-key",
+        poll_seconds=0,
+        max_wait_seconds=20,
+    )
+
+    assert result["ok"] is True
+    assert result["provider"] == "veed-fal"
+    assert result["output_path"] == str(tmp_path / "subject.webm")
+    assert (tmp_path / "subject.webm").read_bytes() == b"transparent-video"
+    submit_url, payload = calls[0]
+    assert submit_url == "https://queue.fal.run/veed/video-background-removal"
+    assert payload == {
+        "video_url": "https://drive.google.com/uc?export=download&id=abc",
+        "output_codec": "vp9",
+        "refine_foreground_edges": True,
+        "subject_is_person": True,
+    }
+
+
+def test_render_remotion_pipeline_uses_transparent_subject_layers(tmp_path, monkeypatch):
+    source = tmp_path / "transparent.webm"
+    output = tmp_path / "render.mp4"
+    source.write_bytes(b"webm")
+
+    monkeypatch.setattr(video_montage, "ffmpeg_available", lambda: True)
+    monkeypatch.setattr(video_montage, "probe_duration_seconds", lambda _path: 6.0)
+    monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
+    monkeypatch.setattr(video_montage, "transcribe_video_segments", lambda _path, _dir: ([{"start": 0.0, "end": 2.8, "text": "هيك فيك تجيب ليدز جداد"}, {"start": 2.9, "end": 5.8, "text": "ونزيد المبيعات بسرعة"}], None))
+
+    def fake_run_command(command: list[str]):
+        command_text = " ".join(command)
+        if "frame_%05d.png" in command_text:
+            frames_dir = Path(command[-1]).parent
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            (frames_dir / "frame_00000.png").write_bytes(b"png")
+        elif command[:2] == ["npm", "exec"]:
+            output.write_bytes(b"mp4")
+        elif "-c:a" in command:
+            Path(command[-1]).write_bytes(b"audio")
+
+        class Result:
+            stdout = "6.0"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(video_montage, "run_command", fake_run_command)
+
+    suite = Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"name": "كونيك", "colors": {"primary": "#2f80ff"}},
+    )
+
+    result = video_montage.render_remotion_montage(
+        transparent_source_path=source,
+        output_path=output,
+        suite=suite,
+        input_data={"options": ["captions", "titles", "music"], "notes": "فيديو تسويقي"},
+    )
+
+    assert result["rendered"] is True
+    assert "api_background_removal" in result["capabilities_applied"]
+    assert "remotion_layered_render" in result["capabilities_applied"]
+    assert "behind_person_3d_title" in result["capabilities_applied"]
+    assert "sound_effect_transitions" in result["capabilities_applied"]
+    manifest = (output.parent / "remotion-work" / "src" / "remotion" / "manifest.generated.json")
+    assert manifest.exists()
+    assert '"hasAlpha": true' in manifest.read_text(encoding="utf-8")
+
+
+def test_remotion_component_renders_background_music_and_sound_effects():
+    source = Path("web/src/remotion/AiMontage.tsx").read_text(encoding="utf-8")
+
+    assert "manifest.audio.backgroundMusic" in source
+    assert "manifest.audio.soundEffects" in source
+    assert "key={`sfx-" in source
+
+
+def test_remotion_manifest_generates_silent_audio_when_source_has_no_audio(tmp_path, monkeypatch):
+    source = tmp_path / "transparent.webm"
+    source.write_bytes(b"webm")
+    work_dir = tmp_path / "work"
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: False)
+
+    def fake_run_command(command: list[str]):
+        commands.append(command)
+        command_text = " ".join(command)
+        if "frame_%05d.png" in command_text:
+            frames_dir = Path(command[-1]).parent
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            (frames_dir / "frame_00000.png").write_bytes(b"png")
+        elif "anullsrc=channel_layout=stereo" in command_text:
+            Path(command[-1]).write_bytes(b"silent-audio")
+        elif "-c:a" in command:
+            Path(command[-1]).write_bytes(b"audio")
+
+        class Result:
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(video_montage, "run_command", fake_run_command)
+
+    suite = Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"name": "كونيك"},
+    )
+
+    manifest_path, _scenes = video_montage.build_remotion_scene_manifest(
+        transparent_source_path=source,
+        work_dir=work_dir,
+        suite=suite,
+        input_data={"notes": "نص عربي"},
+        duration=3.0,
+        transcript_segments=[],
+    )
+
+    assert any("anullsrc=channel_layout=stereo" in " ".join(command) for command in commands)
+    assert (work_dir / "public" / "remotion" / "inputs" / "transparent-audio.m4a").read_bytes() == b"silent-audio"
+    assert '"/remotion/inputs/transparent-audio.m4a"' in manifest_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_generate_video_montage_prefers_veed_remotion_pipeline(tmp_path, monkeypatch):
+    from api.core.config import settings
+
+    monkeypatch.setattr(video_montage, "job_dir", lambda _job_id: tmp_path)
+    monkeypatch.setattr(settings, "fal_key", "test-fal-key")
+
+    def fake_remove_background(**kwargs):
+        transparent = Path(kwargs["output_path"])
+        transparent.write_bytes(b"transparent-webm")
+        return {"ok": True, "provider": "veed-fal", "output_path": str(transparent)}
+
+    def fake_render_remotion(**kwargs):
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+        return {
+            "rendered": True,
+            "output_url": "/static/video_montage/job-1/render.mp4",
+            "capabilities_applied": ["api_background_removal", "remotion_layered_render"],
+            "warnings": [],
+        }
+
+    def fail_legacy_render(**_kwargs):
+        raise AssertionError("legacy chromakey render should not run when VEED/Remotion succeeds")
+
+    monkeypatch.setattr(video_montage, "remove_background_with_veed_fal", fake_remove_background)
+    monkeypatch.setattr(video_montage, "render_remotion_montage", fake_render_remotion)
+    monkeypatch.setattr(video_montage, "render_v1_video", fail_legacy_render)
+
+    suite = Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"name": "كونيك", "colors": {"primary": "#2f80ff"}},
+    )
+
+    result = await video_montage.generate_video_montage_for_suite(
+        suite=suite,
+        job_id="job-1",
+        input_data={
+            "source_url": "https://drive.google.com/file/d/abc/view",
+            "options": ["background", "captions", "titles", "music"],
+            "notes": "كابشن عربي",
+        },
+    )
+
+    assert result["rendered"] is True
+    render = result["video_montage"]["render"]
+    assert render["engine"] == "remotion_veed_fal"
+    assert "api_background_removal" in render["capabilities_applied"]
+    assert result["output_url"] == "/static/video_montage/job-1/render.mp4"
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="ffmpeg is required")
