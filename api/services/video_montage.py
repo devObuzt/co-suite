@@ -408,6 +408,77 @@ def foreground_filter_chain(*, include_despill: bool) -> str:
     return ",".join(filters)
 
 
+def create_local_transparent_subject(
+    *,
+    source_path: Path,
+    output_path: Path,
+    duration: float,
+) -> dict[str, Any]:
+    """Create a transparent VP9 subject video from a local green-screen source.
+
+    This keeps uploaded files on the same Remotion rendering path as the
+    provider-based transparent subject path. The old direct FFmpeg montage is
+    still available as a last-resort fallback, but it should not be the default
+    for green-screen talking-head videos.
+    """
+    if not ffmpeg_available():
+        return {"ok": False, "provider": "local-chromakey", "error": "FFmpeg/FFprobe are not installed."}
+    if not ffmpeg_filter_available("chromakey"):
+        return {"ok": False, "provider": "local-chromakey", "error": "FFmpeg chromakey filter is unavailable."}
+    if not source_path.exists():
+        return {"ok": False, "provider": "local-chromakey", "error": "Source file was not found."}
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    video_filter = foreground_filter_chain(include_despill=ffmpeg_filter_available("despill")) + ",format=yuva420p"
+    command = [
+        "ffmpeg",
+        "-y",
+        "-t",
+        str(max(0.1, duration)),
+        "-i",
+        str(source_path),
+        "-filter_complex",
+        f"[0:v]{video_filter}[fg]",
+        "-map",
+        "[fg]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libvpx-vp9",
+        "-pix_fmt",
+        "yuva420p",
+        "-auto-alt-ref",
+        "0",
+        "-b:v",
+        "0",
+        "-crf",
+        "28",
+        "-c:a",
+        "libopus",
+        str(output_path),
+    ]
+    try:
+        run_command(command)
+    except subprocess.CalledProcessError as exc:
+        output_path.unlink(missing_ok=True)
+        return {
+            "ok": False,
+            "provider": "local-chromakey",
+            "error": (exc.stderr or exc.stdout or str(exc))[-1200:],
+        }
+
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        output_path.unlink(missing_ok=True)
+        return {"ok": False, "provider": "local-chromakey", "error": "Transparent local subject video was empty."}
+
+    return {
+        "ok": True,
+        "provider": "local-chromakey",
+        "output_path": str(output_path),
+        "duration_seconds": round(duration, 3),
+    }
+
+
 def detect_silences(path: Path) -> list[tuple[float, float]]:
     if not ffprobe_has_audio(path):
         return []
@@ -774,7 +845,7 @@ def build_remotion_scene_manifest(
                 "-i",
                 str(transparent_source_path),
                 "-vf",
-                "scale=1080:1920",
+                f"fps={fps},scale=1080:1920:flags=lanczos",
                 "-start_number",
                 "0",
                 str(frames_dir / "frame_%05d.png"),
@@ -1379,7 +1450,7 @@ def build_render_package(
         options = []
     engine = str(render_result.get("engine") or "")
     package = {
-        "version": "video_montage_remotion_v1" if engine == "remotion_veed_fal" else "video_montage_v1",
+        "version": "video_montage_remotion_v1" if engine in {"remotion_veed_fal", "remotion_local_chromakey"} else "video_montage_v1",
         "suite_id": suite.id,
         "mode": input_data.get("mode") or "talking_head",
         "source_url": input_data.get("source_url"),
@@ -1485,6 +1556,53 @@ async def generate_video_montage_for_suite(
             source_url,
             output_dir / "source_from_url.mp4",
         )
+
+    if source_path and "background" in options and ffmpeg_filter_available("chromakey"):
+        emit("background_removal", "Preparing transparent subject locally.", 48)
+        transparent_path = output_dir / "transparent-local-subject.webm"
+        local_duration = min(probe_duration_seconds(source_path), 45.0)
+        provider_result = create_local_transparent_subject(
+            source_path=source_path,
+            output_path=transparent_path,
+            duration=local_duration,
+        )
+        if provider_result.get("ok") and transparent_path.exists():
+            emit("rendering", "Rendering layered Remotion montage.", 68)
+            output_path = output_dir / "render.mp4"
+            render_result = render_remotion_montage(
+                transparent_source_path=transparent_path,
+                output_path=output_path,
+                suite=suite,
+                input_data=input_data,
+            )
+            render_result["engine"] = "remotion_local_chromakey"
+            render_result["background_removal"] = provider_result
+            if source_warning:
+                render_result["provider_note"] = source_warning
+            if render_result.get("rendered"):
+                emit("packaging", "Packaging montage output.", 88)
+                package = build_render_package(
+                    suite=suite,
+                    input_data=input_data,
+                    output_dir=output_dir,
+                    source_path=source_path,
+                    render_result=render_result,
+                    source_warning=None,
+                )
+                package["version"] = "video_montage_remotion_v1"
+                package["background_removal"] = provider_result
+                return {
+                    "video_montage": package,
+                    "output_url": render_result.get("output_url"),
+                    "package_url": package.get("package_url"),
+                    "rendered": True,
+                    "source_warning": None,
+                }
+            source_warning = f"Remotion render failed after local chromakey: {render_result.get('reason') or 'unknown error'}"
+        else:
+            source_warning = f"Local chromakey background removal failed: {provider_result.get('error') or 'unknown error'}"
+    elif source_path and "background" in options:
+        source_warning = "FFmpeg chromakey filter is unavailable; falling back to local FFmpeg preview."
 
     emit("rendering", "Rendering V1 montage preview.", 60)
     output_path = output_dir / "render.mp4"

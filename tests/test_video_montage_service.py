@@ -284,6 +284,73 @@ async def test_generate_video_montage_prefers_veed_remotion_pipeline(tmp_path, m
     assert result["output_url"] == "/static/video_montage/job-1/render.mp4"
 
 
+@pytest.mark.asyncio
+async def test_generate_video_montage_uses_remotion_for_uploaded_green_screen_source(tmp_path, monkeypatch):
+    from api.core.config import settings
+
+    source = tmp_path / "uploaded.mp4"
+    source.write_bytes(b"green-screen-source")
+
+    monkeypatch.setattr(video_montage, "job_dir", lambda _job_id: tmp_path)
+    monkeypatch.setattr(settings, "fal_key", "")
+    monkeypatch.setattr(video_montage, "ffmpeg_filter_available", lambda name: name == "chromakey")
+    monkeypatch.setattr(video_montage, "probe_duration_seconds", lambda _path: 8.0)
+
+    def fake_local_chromakey(**kwargs):
+        transparent = Path(kwargs["output_path"])
+        transparent.write_bytes(b"transparent-local-webm")
+        return {"ok": True, "provider": "local-chromakey", "output_path": str(transparent)}
+
+    def fake_render_remotion(**kwargs):
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+        return {
+            "rendered": True,
+            "output_url": "/static/video_montage/job-upload/render.mp4",
+            "capabilities_applied": [
+                "remotion_layered_render",
+                "behind_person_3d_title",
+                "sound_effect_transitions",
+                "music_bed",
+            ],
+            "warnings": [],
+            "scene_count": 3,
+        }
+
+    def fail_legacy_render(**_kwargs):
+        raise AssertionError("legacy chromakey render should not run for uploaded green-screen source")
+
+    monkeypatch.setattr(video_montage, "create_local_transparent_subject", fake_local_chromakey)
+    monkeypatch.setattr(video_montage, "render_remotion_montage", fake_render_remotion)
+    monkeypatch.setattr(video_montage, "render_v1_video", fail_legacy_render)
+
+    suite = Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"name": "كونيك", "colors": {"primary": "#2f80ff"}},
+    )
+
+    result = await video_montage.generate_video_montage_for_suite(
+        suite=suite,
+        job_id="job-upload",
+        input_data={
+            "source_file_path": str(source),
+            "options": ["background", "captions", "titles", "music"],
+            "notes": "كابشن عربي",
+        },
+    )
+
+    render = result["video_montage"]["render"]
+    assert result["rendered"] is True
+    assert render["engine"] == "remotion_local_chromakey"
+    assert render["scene_count"] == 3
+    assert "behind_person_3d_title" in render["capabilities_applied"]
+    assert "sound_effect_transitions" in render["capabilities_applied"]
+    assert result["source_warning"] is None
+    assert result["video_montage"]["source_warning"] is None
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="ffmpeg is required")
 def test_render_v1_video_applies_rtl_overlays_and_green_screen_removal(tmp_path, monkeypatch):
     from api.core.config import settings
