@@ -282,6 +282,22 @@ def create_montage_background(path: Path, suite: Suite) -> Path:
     return path
 
 
+def foreground_filter_chain(*, include_despill: bool) -> str:
+    filters = [
+        "format=rgba",
+        "chromakey=0x00b050:0.18:0.03",
+    ]
+    if include_despill:
+        filters.append("despill=green")
+    filters.extend(
+        [
+            "scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos",
+            "setsar=1",
+        ]
+    )
+    return ",".join(filters)
+
+
 def detect_silences(path: Path) -> list[tuple[float, float]]:
     if not ffprobe_has_audio(path):
         return []
@@ -684,10 +700,7 @@ def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input
             "drawbox=x=70:y=105:w=940:h=1710:color=white@0.06:t=3[bg]"
         )
         filter_parts.append(
-            "[1:v]chromakey=0x00b050:0.22:0.10,"
-            "scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "scale=w='iw*(1+0.025*sin(t*0.75))':h='ih*(1+0.025*sin(t*0.75))':eval=frame,"
-            "setsar=1[fg]"
+            f"[1:v]{foreground_filter_chain(include_despill=ffmpeg_filter_available('despill'))}[fg]"
         )
         last_label = "bg"
         capabilities.append("green_screen_background_removal")

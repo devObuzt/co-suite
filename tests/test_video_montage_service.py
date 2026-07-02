@@ -4,7 +4,15 @@ import subprocess
 import pytest
 
 from api.models.suite import Suite
-from api.services.video_montage import render_v1_video
+from api.services.video_montage import foreground_filter_chain, render_v1_video
+
+
+def test_foreground_filter_preserves_subject_quality():
+    chain = foreground_filter_chain(include_despill=True)
+
+    assert "chromakey=0x00b050:0.18:0.03" in chain
+    assert "scale=w='iw*" not in chain
+    assert "flags=lanczos" in chain
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="ffmpeg is required")
