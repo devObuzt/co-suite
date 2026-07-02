@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import math
+import random
 import re
 import shutil
 import subprocess
 import time
+import wave
 from pathlib import Path
 from typing import Any, Callable
 
@@ -559,9 +561,124 @@ def copy_remotion_runtime(work_dir: Path) -> tuple[Path, Path]:
 
     source_fonts = WEB_ROOT / "public" / "remotion" / "fonts"
     target_fonts = public_dir / "fonts"
-    if source_fonts.exists() and not target_fonts.exists():
-        shutil.copytree(source_fonts, target_fonts)
+    target_fonts.mkdir(parents=True, exist_ok=True)
+    if source_fonts.exists():
+        for font_file in source_fonts.iterdir():
+            if font_file.is_file():
+                shutil.copy2(font_file, target_fonts / font_file.name)
+    fallback_fonts = Path(__file__).resolve().parent.parent / "engine" / "assets" / "fonts"
+    if fallback_fonts.exists():
+        for name in ("Cairo-Regular.ttf", "Cairo-Bold.ttf", "Cairo-Black.ttf"):
+            source = fallback_fonts / name
+            target = target_fonts / name
+            if source.exists() and not target.exists():
+                shutil.copy2(source, target)
     return src_dir, public_dir
+
+
+def write_mono_pcm_wav(path: Path, samples: list[float], sample_rate: int = 48000) -> None:
+    peak = max(0.001, max(abs(sample) for sample in samples))
+    rms = math.sqrt(sum(sample * sample for sample in samples) / max(1, len(samples)))
+    target_rms = 10 ** (-16 / 20)
+    gain = min(0.92 / peak, target_rms / max(0.001, rms))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        frames = bytearray()
+        for sample in samples:
+            value = int(max(-0.92, min(0.92, sample * gain)) * 32767)
+            frames.extend(value.to_bytes(2, byteorder="little", signed=True))
+        handle.writeframes(bytes(frames))
+
+
+def generate_marketing_music_bed(path: Path, duration: float) -> None:
+    """Create a present but light local music bed without external services."""
+
+    sample_rate = 48000
+    total = max(sample_rate, int(duration * sample_rate))
+    audio = [0.0] * total
+    rng = random.Random(7)
+    bpm = 124
+    beat = 60 / bpm
+
+    def add_signal(start: float, length: float, fn: Callable[[float], float], gain: float) -> None:
+        start_index = max(0, int(start * sample_rate))
+        length_samples = max(1, int(length * sample_rate))
+        end_index = min(total, start_index + length_samples)
+        if end_index <= start_index:
+            return
+        attack = max(1, int(0.012 * sample_rate))
+        release = max(1, int(0.09 * sample_rate))
+        for index in range(start_index, end_index):
+            local = index - start_index
+            t = local / sample_rate
+            env = 1.0
+            if local < attack:
+                env *= local / attack
+            tail = end_index - index
+            if tail < release:
+                env *= tail / release
+            audio[index] += fn(t) * gain * env
+
+    def tone(freq: float, harmonic: float = 0.25) -> Callable[[float], float]:
+        return lambda t: math.sin(2 * math.pi * freq * t) + harmonic * math.sin(2 * math.pi * freq * 2 * t)
+
+    chords = [(55, 82.41, 110), (49, 73.42, 98), (43.65, 65.41, 87.31), (46.25, 69.3, 92.5)]
+    bars = int(math.ceil(duration / (beat * 4)))
+    for bar in range(bars):
+        start = bar * beat * 4
+        chord = chords[bar % len(chords)]
+        for step in range(4):
+            step_start = start + step * beat
+            bass = chord[0] if step != 3 else chord[0] * 1.5
+            add_signal(step_start, beat * 0.86, tone(bass, 0.18), 0.22)
+            for freq in chord[1:]:
+                add_signal(step_start, beat * 0.58, tone(freq, 0.08), 0.045)
+        for step in (0, 2, 3.5):
+            def kick(t: float) -> float:
+                freq = 120 * math.exp(-8 * t) + 42
+                return math.sin(2 * math.pi * freq * t) * math.exp(-8.5 * t)
+
+            add_signal(start + step * beat, 0.34, kick, 0.82)
+        for step in (1, 3):
+            def snare(t: float) -> float:
+                return (rng.uniform(-1, 1) * 0.72 + math.sin(2 * math.pi * 190 * t) * 0.25) * math.exp(-15 * t)
+
+            add_signal(start + step * beat, 0.22, snare, 0.26)
+        for step in range(8):
+            def hat(t: float) -> float:
+                return rng.uniform(-1, 1) * math.exp(-42 * t)
+
+            add_signal(start + step * beat / 2, 0.075, hat, 0.055 if step % 2 else 0.082)
+
+    fade_in = min(total, int(0.45 * sample_rate))
+    fade_out = min(total, int(1.0 * sample_rate))
+    for index in range(fade_in):
+        audio[index] *= index / max(1, fade_in)
+    for index in range(fade_out):
+        audio[total - 1 - index] *= index / max(1, fade_out)
+    write_mono_pcm_wav(path, audio, sample_rate)
+
+
+def generate_soft_whoosh(path: Path) -> None:
+    sample_rate = 48000
+    duration = 0.48
+    total = int(duration * sample_rate)
+    rng = random.Random(11)
+    previous = 0.0
+    samples: list[float] = []
+    for index in range(total):
+        t = index / sample_rate
+        progress = t / duration
+        noise = rng.uniform(-1, 1)
+        high = noise - previous
+        previous = noise
+        sweep = math.sin(2 * math.pi * (320 + 2900 * progress) * t)
+        env = math.sin(math.pi * progress) ** 1.8
+        samples.append((high * 0.55 + sweep * 0.35) * env)
+    write_mono_pcm_wav(path, samples, sample_rate)
 
 
 def build_remotion_scene_manifest(
@@ -670,37 +787,9 @@ def build_remotion_scene_manifest(
     whoosh_path = sound_dir / "soft-whoosh.wav"
     try:
         if not music_path.exists():
-            run_command(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    f"sine=frequency=96:duration={edited_duration + 1:.3f}:sample_rate=48000",
-                    "-af",
-                    "volume=0.055,afade=t=in:st=0:d=0.45",
-                    "-c:a",
-                    "pcm_s16le",
-                    str(music_path),
-                ]
-            )
+            generate_marketing_music_bed(music_path, edited_duration + 1)
         if not whoosh_path.exists():
-            run_command(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "anoisesrc=color=pink:sample_rate=48000:duration=0.45:amplitude=0.28",
-                    "-af",
-                    "afade=t=in:st=0:d=0.03,afade=t=out:st=0.22:d=0.23,highpass=f=420,lowpass=f=4200",
-                    "-c:a",
-                    "pcm_s16le",
-                    str(whoosh_path),
-                ]
-            )
+            generate_soft_whoosh(whoosh_path)
     except Exception:
         pass
 
@@ -724,9 +813,9 @@ def build_remotion_scene_manifest(
         },
         "audio": {
             "sourcePublicPath": f"/remotion/inputs/{audio_path.name}",
-            "backgroundMusic": {"publicPath": "/remotion/sound/marketing-upbeat-bed.wav", "volume": 0.42} if music_path.exists() else None,
+            "backgroundMusic": {"publicPath": "/remotion/sound/marketing-upbeat-bed.wav", "volume": 0.32} if music_path.exists() else None,
             "soundEffects": [
-                {"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.42}
+                {"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.58}
                 for start in starts[1:]
                 if whoosh_path.exists()
             ],
