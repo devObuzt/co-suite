@@ -182,6 +182,55 @@ def test_remotion_manifest_generates_silent_audio_when_source_has_no_audio(tmp_p
     assert '"/remotion/inputs/transparent-audio.m4a"' in manifest_path.read_text(encoding="utf-8")
 
 
+def test_remotion_manifest_splits_single_transcript_into_multiple_scenes(tmp_path, monkeypatch):
+    source = tmp_path / "transparent.webm"
+    source.write_bytes(b"webm")
+    work_dir = tmp_path / "work"
+
+    monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
+    monkeypatch.setattr(video_montage, "non_silent_segments", lambda _path, _duration: [(0.0, 3.0), (3.4, 6.2), (6.8, 9.0)])
+
+    def fake_run_command(command: list[str]):
+        command_text = " ".join(command)
+        if "frame_%05d.png" in command_text:
+            frames_dir = Path(command[-1]).parent
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            (frames_dir / "frame_00000.png").write_bytes(b"png")
+        elif "-c:a" in command:
+            Path(command[-1]).write_bytes(b"audio")
+
+        class Result:
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(video_montage, "run_command", fake_run_command)
+
+    suite = Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"name": "كونيك"},
+    )
+
+    manifest_path, scenes = video_montage.build_remotion_scene_manifest(
+        transparent_source_path=source,
+        work_dir=work_dir,
+        suite=suite,
+        input_data={"options": ["dead_spaces"], "notes": "عنوان أول. عنوان ثاني. عنوان ثالث"},
+        duration=9.0,
+        transcript_segments=[{"start": 0.0, "end": 9.0, "text": "عنوان أول عنوان ثاني عنوان ثالث عنوان رابع"}],
+    )
+
+    manifest = manifest_path.read_text(encoding="utf-8")
+    assert len(scenes) == 3
+    assert '"sceneCount": 3' in manifest
+    assert '"soundEffectCount": 2' in manifest
+    assert manifest.count('"publicPath": "/remotion/sound/soft-whoosh.wav"') == 2
+
+
 @pytest.mark.asyncio
 async def test_generate_video_montage_prefers_veed_remotion_pipeline(tmp_path, monkeypatch):
     from api.core.config import settings

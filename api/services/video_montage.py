@@ -536,6 +536,65 @@ def fallback_caption_segments(duration: float, caption_text: str) -> list[dict[s
     return segments
 
 
+def split_text_into_caption_chunks(text: str, count: int) -> list[str]:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        clean = "مونتاج تسويقي جاهز"
+    sentences = [chunk.strip() for chunk in re.split(r"[.؟!،]\s*", clean) if chunk.strip()]
+    if len(sentences) >= count:
+        return sentences[:count]
+    words = clean.split()
+    if len(words) >= count * 3:
+        chunk_size = max(3, math.ceil(len(words) / count))
+        chunks = [" ".join(words[index : index + chunk_size]).strip() for index in range(0, len(words), chunk_size)]
+    else:
+        chunks = sentences or [clean]
+    while len(chunks) < count:
+        chunks.append(chunks[len(chunks) % max(1, len(chunks))])
+    return chunks[:count]
+
+
+def normalize_scene_segments(
+    *,
+    duration: float,
+    transcript_segments: list[dict[str, Any]],
+    fallback_text: str,
+    timing_segments: list[tuple[float, float]] | None = None,
+) -> list[dict[str, Any]]:
+    valid_segments = [
+        {
+            "start": max(0.0, float(segment.get("start") or 0)),
+            "end": min(duration, float(segment.get("end") or duration)),
+            "text": re.sub(r"\s+", " ", str(segment.get("text") or fallback_text)).strip(),
+        }
+        for segment in transcript_segments
+        if float(segment.get("end") or 0) > float(segment.get("start") or 0)
+    ]
+    if len(valid_segments) >= 2:
+        return valid_segments[:18]
+
+    base_timings = [
+        (max(0.0, start), min(duration, end))
+        for start, end in (timing_segments or [])
+        if end - start >= 0.45
+    ]
+    if len(base_timings) < 2:
+        target_count = max(2, min(8, math.ceil(duration / 4.2)))
+        segment_len = duration / target_count
+        base_timings = [
+            (round(index * segment_len, 3), round(min(duration, (index + 1) * segment_len), 3))
+            for index in range(target_count)
+        ]
+
+    text_seed = valid_segments[0]["text"] if valid_segments else fallback_text
+    chunks = split_text_into_caption_chunks(text_seed, len(base_timings))
+    return [
+        {"start": round(start, 3), "end": round(end, 3), "text": chunks[index]}
+        for index, (start, end) in enumerate(base_timings[:18])
+        if end > start
+    ]
+
+
 def remotion_work_dir(output_path: Path) -> Path:
     path = output_path.parent / "remotion-work"
     path.mkdir(parents=True, exist_ok=True)
@@ -743,8 +802,16 @@ def build_remotion_scene_manifest(
         )
 
     notes = str(input_data.get("notes") or "").strip()
+    options = requested_options(input_data)
     if not transcript_segments:
         transcript_segments = fallback_caption_segments(duration, notes or "مونتاج تسويقي جاهز")
+    timing_segments = non_silent_segments(transparent_source_path, duration) if "dead_spaces" in options else None
+    transcript_segments = normalize_scene_segments(
+        duration=duration,
+        transcript_segments=transcript_segments,
+        fallback_text=notes or title_from_suite(suite),
+        timing_segments=timing_segments,
+    )
 
     scenes: list[dict[str, Any]] = []
     for index, segment in enumerate(transcript_segments[:18]):
@@ -823,6 +890,12 @@ def build_remotion_scene_manifest(
         "style": {"fontFamily": "ConnecAssistant", "arabicFontFamily": "ConnecCairo"},
         "scenes": scenes,
         "durationSeconds": round(edited_duration, 3),
+        "diagnostics": {
+            "sceneCount": len(scenes),
+            "soundEffectCount": max(0, len(starts) - 1) if whoosh_path.exists() else 0,
+            "musicBed": music_path.exists(),
+            "timingSource": "non_silent_segments" if timing_segments and len(timing_segments) > 1 else "transcript_or_timed_split",
+        },
     }
     manifest_path = src_dir / "manifest.generated.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1090,7 +1163,9 @@ def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input
     warnings: list[str] = []
 
     working_source = source_path
+    timing_segments: list[tuple[float, float]] | None = None
     if "dead_spaces" in options:
+        timing_segments = non_silent_segments(source_path, duration)
         working_source, cut_applied, cut_warning = cut_dead_spaces(
             source_path,
             output_path.with_name("cut-source.mp4"),
@@ -1115,6 +1190,12 @@ def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input
             capabilities.append("transcribed_captions")
         else:
             transcript_segments = fallback_caption_segments(duration, caption_text)
+        transcript_segments = normalize_scene_segments(
+            duration=duration,
+            transcript_segments=transcript_segments,
+            fallback_text=caption_text,
+            timing_segments=timing_segments,
+        )
     if "titles" in options:
         behind_title = title_from_caption(
             transcript_segments[0]["text"] if transcript_segments else title_text,
