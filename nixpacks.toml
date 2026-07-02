@@ -3,7 +3,7 @@ PYTHON_VERSION = "3.12"
 NODE_VERSION = "22"
 
 [phases.setup]
-nixPkgs = ["python312", "ffmpeg", "nodejs_22"]
+nixPkgs = ["python312", "python312Packages.pip", "ffmpeg", "nodejs_22"]
 
 [phases.install]
 cmds = [
