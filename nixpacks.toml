@@ -7,7 +7,7 @@ nixPkgs = ["python312", "python312Packages.pip", "python312Packages.virtualenv",
 
 [phases.install]
 cmds = [
-  "python -m virtualenv /opt/venv",
+  "virtualenv /opt/venv",
   "/opt/venv/bin/pip install -r requirements.txt",
   "cd web && npm ci"
 ]
