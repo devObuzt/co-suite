@@ -666,6 +666,14 @@ def normalize_scene_segments(
     ]
 
 
+def text_override_at(input_data: dict[str, Any], key: str, index: int) -> str | None:
+    values = input_data.get(key)
+    if not isinstance(values, list) or index >= len(values):
+        return None
+    value = re.sub(r"\s+", " ", str(values[index] or "")).strip()
+    return value or None
+
+
 def remotion_work_dir(output_path: Path) -> Path:
     path = output_path.parent / "remotion-work"
     path.mkdir(parents=True, exist_ok=True)
@@ -890,7 +898,10 @@ def build_remotion_scene_manifest(
         end = min(duration, float(segment.get("end") or duration) + 0.12)
         if end <= start:
             end = min(duration, start + 1.5)
-        caption = re.sub(r"\s+", " ", str(segment.get("text") or notes or title_from_suite(suite))).strip()
+        generated_caption = re.sub(r"\s+", " ", str(segment.get("text") or notes or title_from_suite(suite))).strip()
+        caption = text_override_at(input_data, "caption_overrides", index) or generated_caption
+        generated_title = title_from_caption(caption, title_from_suite(suite))
+        behind_text = text_override_at(input_data, "title_overrides", index) or generated_title
         palette = [
             ["#07111f", "#2f80ed", "#e8f3ff"],
             ["#15120f", "#e6aa3b", "#fff2cf"],
@@ -907,7 +918,9 @@ def build_remotion_scene_manifest(
                 "sourceStart": round(start, 3),
                 "sourceEnd": round(end, 3),
                 "caption": caption,
-                "behindText": title_from_caption(caption, title_from_suite(suite)),
+                "behindText": behind_text,
+                "generatedCaption": generated_caption,
+                "generatedBehindText": generated_title,
                 "backgroundPrompt": f"Vertical editorial background inspired by this spoken line: {caption}",
                 "palette": palette,
                 "backgroundImagePublicPath": f"/remotion/backgrounds/{background_path.name}",
@@ -1044,6 +1057,16 @@ def render_remotion_montage(
         "warnings": warnings,
         "manifest_path": str(manifest_path),
         "scene_count": len(scenes),
+        "scenes": [
+            {
+                "id": scene.get("id"),
+                "start": scene.get("sourceStart"),
+                "end": scene.get("sourceEnd"),
+                "caption": scene.get("caption"),
+                "behindText": scene.get("behindText"),
+            }
+            for scene in scenes
+        ],
     }
 
 

@@ -64,6 +64,25 @@ def parse_options(options_json: str | None) -> list[str]:
     return [str(item)[:80] for item in parsed[:20] if str(item).strip()]
 
 
+def parse_text_overrides(overrides_json: str | None, *, max_items: int = 18) -> list[str]:
+    if not overrides_json:
+        return []
+    try:
+        parsed = json.loads(overrides_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid text overrides JSON.") from exc
+    if not isinstance(parsed, list):
+        raise HTTPException(status_code=400, detail="Text overrides must be a list.")
+    values: list[str] = []
+    for item in parsed[:max_items]:
+        text = str(item or "").strip()
+        if text:
+            values.append(text[:360])
+        else:
+            values.append("")
+    return values
+
+
 @router.get("/jobs/latest")
 async def get_latest_video_montage_job(
     suite_id: str,
@@ -101,6 +120,8 @@ async def create_video_montage_job(
     mode: str = Form("talking_head"),
     source_url: str = Form(""),
     options_json: str = Form("[]"),
+    caption_overrides_json: str = Form("[]"),
+    title_overrides_json: str = Form("[]"),
     notes: str = Form(""),
     source_file: UploadFile | None = File(None),
     current_user: User = Depends(get_current_user),
@@ -112,10 +133,14 @@ async def create_video_montage_job(
         return serialize_job(existing, suite_id=suite_id)
 
     options = parse_options(options_json)
+    caption_overrides = parse_text_overrides(caption_overrides_json)
+    title_overrides = parse_text_overrides(title_overrides_json)
     input_data: dict[str, Any] = {
         "mode": mode[:80],
         "source_url": source_url.strip()[:1500],
         "options": options,
+        "caption_overrides": caption_overrides,
+        "title_overrides": title_overrides,
         "notes": notes.strip()[:3000],
     }
     job = await create_job(

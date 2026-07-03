@@ -231,6 +231,59 @@ def test_remotion_manifest_splits_single_transcript_into_multiple_scenes(tmp_pat
     assert manifest.count('"publicPath": "/remotion/sound/soft-whoosh.wav"') == 2
 
 
+def test_remotion_manifest_uses_manual_caption_and_title_overrides(tmp_path, monkeypatch):
+    source = tmp_path / "transparent.webm"
+    source.write_bytes(b"webm")
+    work_dir = tmp_path / "work"
+
+    monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
+
+    def fake_run_command(command: list[str]):
+        command_text = " ".join(command)
+        if "frame_%05d.png" in command_text:
+            frames_dir = Path(command[-1]).parent
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            (frames_dir / "frame_00000.png").write_bytes(b"png")
+        elif "-c:a" in command:
+            Path(command[-1]).write_bytes(b"audio")
+
+        class Result:
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(video_montage, "run_command", fake_run_command)
+
+    suite = Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"name": "كونيك"},
+    )
+
+    manifest_path, scenes = video_montage.build_remotion_scene_manifest(
+        transparent_source_path=source,
+        work_dir=work_dir,
+        suite=suite,
+        input_data={
+            "caption_overrides": ["كابشن معدل يدويا"],
+            "title_overrides": ["عنوان آمن"],
+            "notes": "نص افتراضي",
+        },
+        duration=3.0,
+        transcript_segments=[{"start": 0.0, "end": 2.5, "text": "كابشن من التفريغ"}],
+    )
+
+    manifest = manifest_path.read_text(encoding="utf-8")
+    assert scenes[0]["caption"] == "كابشن معدل يدويا"
+    assert scenes[0]["behindText"] == "عنوان آمن"
+    assert scenes[0]["generatedCaption"] == "كابشن من التفريغ"
+    assert "كابشن معدل يدويا" in manifest
+    assert "عنوان آمن" in manifest
+
+
 @pytest.mark.asyncio
 async def test_generate_video_montage_prefers_veed_remotion_pipeline(tmp_path, monkeypatch):
     from api.core.config import settings
