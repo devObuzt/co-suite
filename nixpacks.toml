@@ -3,7 +3,37 @@ PYTHON_VERSION = "3.12"
 NODE_VERSION = "22"
 
 [phases.setup]
-nixPkgs = ["python312", "python312Packages.pip", "python312Packages.virtualenv", "ffmpeg", "nodejs_22", "git"]
+nixPkgs = [
+  "python312",
+  "python312Packages.pip",
+  "python312Packages.virtualenv",
+  "ffmpeg",
+  "nodejs_22",
+  "git",
+  "alsa-lib",
+  "atk",
+  "at-spi2-atk",
+  "cairo",
+  "cups",
+  "dbus",
+  "expat",
+  "fontconfig",
+  "glib",
+  "gtk3",
+  "libdrm",
+  "libX11",
+  "libxcb",
+  "libXcomposite",
+  "libXdamage",
+  "libXext",
+  "libXfixes",
+  "libXrandr",
+  "libxkbcommon",
+  "mesa",
+  "nspr",
+  "nss",
+  "pango"
+]
 
 [phases.install]
 cmds = [
