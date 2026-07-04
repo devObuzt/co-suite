@@ -459,6 +459,7 @@ async def execute_claimed_job(
                 if not suite:
                     return await mark_failed(db, job.id, "Suite not found")
                 montage_result = await generate_video_montage_for_suite(
+                    db=db,
                     suite=suite,
                     job_id=job.id,
                     input_data=input_data,

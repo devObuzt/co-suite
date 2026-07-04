@@ -91,6 +91,11 @@ async def startup():
                     "CREATE INDEX IF NOT EXISTS ix_app_text_overrides_language ON app_text_overrides (language)",
                     "CREATE INDEX IF NOT EXISTS ix_app_text_overrides_text_key ON app_text_overrides (text_key)",
                     "CREATE INDEX IF NOT EXISTS ix_app_text_overrides_updated_at ON app_text_overrides (updated_at)",
+                    "CREATE TABLE IF NOT EXISTS creative_assets (id VARCHAR PRIMARY KEY, kind VARCHAR NOT NULL, title VARCHAR NOT NULL, storage_url TEXT NOT NULL, source_url TEXT, content_type VARCHAR, duration_seconds DOUBLE PRECISION, tags JSON, use_cases JSON, classification JSON, active BOOLEAN DEFAULT TRUE NOT NULL, usage_count INTEGER DEFAULT 0 NOT NULL, last_used_at TIMESTAMP WITH TIME ZONE, metadata_json JSON, created_by_user_id VARCHAR REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE DEFAULT now(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT now())",
+                    "CREATE INDEX IF NOT EXISTS ix_creative_assets_kind ON creative_assets (kind)",
+                    "CREATE INDEX IF NOT EXISTS ix_creative_assets_active ON creative_assets (active)",
+                    "CREATE INDEX IF NOT EXISTS ix_creative_assets_created_at ON creative_assets (created_at)",
+                    "CREATE INDEX IF NOT EXISTS ix_creative_assets_created_by_user_id ON creative_assets (created_by_user_id)",
                 ):
                     await conn.execute(text(statement))
         except Exception as e:

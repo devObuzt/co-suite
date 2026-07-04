@@ -4,7 +4,7 @@ from datetime import datetime
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.database import get_db
 from ..core.config import settings
 from ..core.security import get_current_user, hash_password
-from ..models.admin import AppTextOverride, AuditLog, ProviderUsageEvent
+from ..models.admin import AppTextOverride, AuditLog, CreativeAsset, ProviderUsageEvent
 from ..models.billing import UsageEvent
 from ..models.generation_job import GenerationJob
 from ..models.suite import Suite
@@ -24,6 +24,12 @@ from ..services.admin_audit import (
     serialize_user_public,
 )
 from ..services.provider_pricing import infer_provider_usage_from_billing_event
+from ..services.creative_assets import (
+    ALL_KINDS,
+    create_asset_from_bytes,
+    create_asset_from_remote,
+    serialize_creative_asset,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -44,6 +50,20 @@ class AppTextOverrideUpdate(BaseModel):
     language: str = Field(min_length=2, max_length=12)
     key: str = Field(min_length=1, max_length=240)
     value: str | None = Field(default=None, max_length=5000)
+
+
+class CreativeAssetUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=240)
+    tags: list[str] | None = None
+    use_cases: list[str] | None = None
+    classification: dict[str, Any] | None = None
+    active: bool | None = None
+
+
+class CreativeAssetRemoteCreate(BaseModel):
+    kind: str = Field(min_length=2, max_length=40)
+    source_url: str = Field(min_length=8, max_length=2000)
+    title: str | None = Field(default=None, max_length=240)
 
 
 async def _admin_user(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> User:
@@ -475,6 +495,161 @@ async def provider_usage_summary(
         }
         for provider, model, requests, total_tokens, cost, successes in rows
     ]
+
+
+@router.get("/creative-assets")
+async def creative_assets(
+    kind: str | None = Query(default=None, max_length=40),
+    active: bool | None = True,
+    q: str | None = Query(default=None, max_length=120),
+    limit: int = Query(default=200, ge=1, le=500),
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(CreativeAsset).order_by(CreativeAsset.kind.asc(), CreativeAsset.usage_count.desc(), CreativeAsset.created_at.desc()).limit(limit)
+    if kind:
+        if kind not in ALL_KINDS:
+            raise HTTPException(status_code=400, detail="Unsupported creative asset kind")
+        query = query.where(CreativeAsset.kind == kind)
+    if active is not None:
+        query = query.where(CreativeAsset.active.is_(active))
+    if q:
+        pattern = f"%{q.strip()}%"
+        query = query.where(or_(CreativeAsset.title.ilike(pattern), CreativeAsset.storage_url.ilike(pattern)))
+    rows = (await db.execute(query)).scalars().all()
+    return [serialize_creative_asset(row) for row in rows]
+
+
+@router.post("/creative-assets")
+async def create_creative_asset_remote(
+    payload: CreativeAssetRemoteCreate,
+    request: Request,
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.kind not in ALL_KINDS:
+        raise HTTPException(status_code=400, detail="Unsupported creative asset kind")
+    try:
+        row = await create_asset_from_remote(
+            db,
+            kind=payload.kind,
+            source_url=payload.source_url,
+            title=payload.title,
+            created_by_user_id=admin.id,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not import asset: {exc}") from exc
+    await record_audit_log(
+        db,
+        action="admin.creative_asset.create_remote",
+        resource_type="creative_asset",
+        resource_id=row.id,
+        actor=admin,
+        request=request,
+        metadata={"kind": row.kind, "title": row.title, "source_url": payload.source_url},
+    )
+    await db.commit()
+    await db.refresh(row)
+    return serialize_creative_asset(row)
+
+
+@router.post("/creative-assets/upload")
+async def upload_creative_asset(
+    request: Request,
+    kind: str = Form(...),
+    title: str = Form(""),
+    file: UploadFile = File(...),
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if kind not in ALL_KINDS:
+        raise HTTPException(status_code=400, detail="Unsupported creative asset kind")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded asset is empty")
+    if len(data) > 300 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Creative asset is too large. Maximum is 300 MB.")
+    row = await create_asset_from_bytes(
+        db,
+        kind=kind,
+        title=title or file.filename or kind,
+        filename=file.filename or f"{kind}.bin",
+        data=data,
+        content_type=file.content_type,
+        created_by_user_id=admin.id,
+    )
+    await record_audit_log(
+        db,
+        action="admin.creative_asset.upload",
+        resource_type="creative_asset",
+        resource_id=row.id,
+        actor=admin,
+        request=request,
+        metadata={"kind": row.kind, "title": row.title, "content_type": row.content_type},
+    )
+    await db.commit()
+    await db.refresh(row)
+    return serialize_creative_asset(row)
+
+
+@router.patch("/creative-assets/{asset_id}")
+async def update_creative_asset(
+    asset_id: str,
+    payload: CreativeAssetUpdate,
+    request: Request,
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    row = await db.get(CreativeAsset, asset_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Creative asset not found")
+    before = serialize_creative_asset(row)
+    if payload.title is not None:
+        row.title = payload.title.strip()
+    if payload.tags is not None:
+        row.tags = [str(item).strip()[:60] for item in payload.tags if str(item).strip()][:30]
+    if payload.use_cases is not None:
+        row.use_cases = [str(item).strip()[:80] for item in payload.use_cases if str(item).strip()][:30]
+    if payload.classification is not None:
+        row.classification = payload.classification
+    if payload.active is not None:
+        row.active = payload.active
+    await record_audit_log(
+        db,
+        action="admin.creative_asset.update",
+        resource_type="creative_asset",
+        resource_id=row.id,
+        actor=admin,
+        request=request,
+        metadata={"before": before, "after": serialize_creative_asset(row)},
+    )
+    await db.commit()
+    await db.refresh(row)
+    return serialize_creative_asset(row)
+
+
+@router.delete("/creative-assets/{asset_id}")
+async def deactivate_creative_asset(
+    asset_id: str,
+    request: Request,
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    row = await db.get(CreativeAsset, asset_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Creative asset not found")
+    row.active = False
+    await record_audit_log(
+        db,
+        action="admin.creative_asset.deactivate",
+        resource_type="creative_asset",
+        resource_id=row.id,
+        actor=admin,
+        request=request,
+        metadata={"kind": row.kind, "title": row.title},
+    )
+    await db.commit()
+    return {"ok": True, "deactivated": True}
 
 
 def _audit_log_out(log: AuditLog) -> dict[str, Any]:

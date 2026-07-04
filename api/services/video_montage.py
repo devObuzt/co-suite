@@ -13,12 +13,22 @@ from typing import Any, Callable
 
 import httpx
 import requests
+from sqlalchemy.ext.asyncio import AsyncSession
 from arabic_reshaper import reshape
 from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
 
 from ..core.config import settings
 from ..models.suite import Suite
+from .creative_assets import (
+    AUDIO_KINDS,
+    VISUAL_KINDS,
+    generate_visual_asset_for_scene,
+    list_active_assets,
+    pick_asset,
+    record_asset_usage,
+    serialize_creative_asset,
+)
 
 ProgressWriter = Callable[[dict[str, Any]], None]
 
@@ -44,6 +54,23 @@ def public_static_url(path: Path) -> str:
     except ValueError:
         return path.as_uri()
     return f"/static/{relative.as_posix()}"
+
+
+def remotion_public_asset_path(storage_url: str, work_dir: Path, asset_id: str | None = None) -> str:
+    if storage_url.startswith("http://") or storage_url.startswith("https://"):
+        return storage_url
+    if not storage_url.startswith("/static/"):
+        return storage_url
+    source = STATIC_ROOT / storage_url.removeprefix("/static/")
+    if not source.exists():
+        return storage_url
+    target_dir = work_dir / "public" / "remotion" / "creative-assets"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_name = safe_filename(f"{asset_id or source.stem}{source.suffix}", source.name)
+    target = target_dir / target_name
+    if not target.exists():
+        shutil.copyfile(source, target)
+    return f"/remotion/creative-assets/{target.name}"
 
 
 def safe_filename(filename: str | None, fallback: str = "source.mp4") -> str:
@@ -819,8 +846,9 @@ def generate_soft_whoosh(path: Path) -> None:
     write_mono_pcm_wav(path, samples, sample_rate)
 
 
-def build_remotion_scene_manifest(
+async def build_remotion_scene_manifest(
     *,
+    db: AsyncSession | None,
     transparent_source_path: Path,
     work_dir: Path,
     suite: Suite,
@@ -892,6 +920,8 @@ def build_remotion_scene_manifest(
         timing_segments=timing_segments,
     )
 
+    active_assets = await list_active_assets(db, kinds=AUDIO_KINDS | VISUAL_KINDS) if db else []
+    selected_asset_ids: list[str] = []
     scenes: list[dict[str, Any]] = []
     for index, segment in enumerate(transcript_segments[:18]):
         start = max(0.0, float(segment.get("start") or 0) - 0.12)
@@ -909,8 +939,22 @@ def build_remotion_scene_manifest(
             ["#201225", "#d85cff", "#ffe9ff"],
             ["#1c1d21", "#ff5f45", "#fff0ec"],
         ][index % 5]
+        visual_asset = pick_asset(active_assets, kind="visual_image", scene_text=caption)
+        if not visual_asset and db and index < 4:
+            try:
+                visual_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption)
+                if visual_asset:
+                    active_assets.append(visual_asset)
+            except Exception:
+                visual_asset = None
         background_path = backgrounds_dir / f"scene-{index + 1:02d}.png"
-        if not background_path.exists():
+        background_public_path = f"/remotion/backgrounds/{background_path.name}"
+        background_asset_id = None
+        if visual_asset:
+            background_public_path = remotion_public_asset_path(visual_asset.storage_url, work_dir, visual_asset.id)
+            background_asset_id = visual_asset.id
+            selected_asset_ids.append(visual_asset.id)
+        elif not background_path.exists():
             create_montage_background(background_path, suite)
         scenes.append(
             {
@@ -923,7 +967,8 @@ def build_remotion_scene_manifest(
                 "generatedBehindText": generated_title,
                 "backgroundPrompt": f"Vertical editorial background inspired by this spoken line: {caption}",
                 "palette": palette,
-                "backgroundImagePublicPath": f"/remotion/backgrounds/{background_path.name}",
+                "backgroundImagePublicPath": background_public_path,
+                "backgroundAssetId": background_asset_id,
             }
         )
 
@@ -934,6 +979,9 @@ def build_remotion_scene_manifest(
             scenes[index + 1]["sourceStart"] = boundary
 
     edited_duration = sum(max(0.1, scene["sourceEnd"] - scene["sourceStart"]) for scene in scenes)
+    music_asset = pick_asset(active_assets, kind="music", scene_text=f"{suite.name} {' '.join(scene['caption'] for scene in scenes[:3])}")
+    transition_assets = [asset for asset in active_assets if asset.kind == "transition"]
+    sfx_assets = [asset for asset in active_assets if asset.kind == "sfx"]
     music_path = sound_dir / "marketing-upbeat-bed.wav"
     whoosh_path = sound_dir / "soft-whoosh.wav"
     try:
@@ -950,6 +998,50 @@ def build_remotion_scene_manifest(
         starts.append(cursor)
         cursor += scene["sourceEnd"] - scene["sourceStart"]
 
+    sound_effects: list[dict[str, Any]] = []
+    for index, start in enumerate(starts[1:]):
+        asset = transition_assets[index % len(transition_assets)] if transition_assets else None
+        if asset:
+            selected_asset_ids.append(asset.id)
+            sound_effects.append({"publicPath": remotion_public_asset_path(asset.storage_url, work_dir, asset.id), "at": round(start, 3), "volume": 0.5, "assetId": asset.id, "kind": "transition"})
+        elif whoosh_path.exists():
+            sound_effects.append({"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.58, "kind": "transition"})
+
+    beat_cursor = 0.0
+    for scene_index, scene in enumerate(scenes):
+        duration_for_scene = max(0.1, scene["sourceEnd"] - scene["sourceStart"])
+        beat_count = max(1, int(duration_for_scene // 2.7))
+        for beat_index in range(beat_count):
+            if not sfx_assets:
+                continue
+            asset = sfx_assets[(scene_index + beat_index) % len(sfx_assets)]
+            selected_asset_ids.append(asset.id)
+            sound_effects.append(
+                {
+                    "publicPath": remotion_public_asset_path(asset.storage_url, work_dir, asset.id),
+                    "at": round(beat_cursor + min(duration_for_scene - 0.2, 0.7 + beat_index * 2.8), 3),
+                    "volume": 0.34,
+                    "assetId": asset.id,
+                    "kind": "sfx",
+                }
+            )
+        scene["attentionBeats"] = [
+            {
+                "at": round(min(duration_for_scene - 0.2, 0.55 + beat_index * 2.8), 3),
+                "type": ["zoom", "flash", "overlay", "parallax"][beat_index % 4],
+            }
+            for beat_index in range(beat_count)
+        ]
+        beat_cursor += duration_for_scene
+
+    background_music = {"publicPath": "/remotion/sound/marketing-upbeat-bed.wav", "volume": 0.32} if music_path.exists() else None
+    if music_asset:
+        selected_asset_ids.append(music_asset.id)
+        background_music = {"publicPath": remotion_public_asset_path(music_asset.storage_url, work_dir, music_asset.id), "volume": 0.3, "assetId": music_asset.id}
+
+    if db:
+        await record_asset_usage(db, selected_asset_ids)
+
     manifest = {
         "fps": fps,
         "width": 1080,
@@ -964,20 +1056,18 @@ def build_remotion_scene_manifest(
         },
         "audio": {
             "sourcePublicPath": f"/remotion/inputs/{audio_path.name}",
-            "backgroundMusic": {"publicPath": "/remotion/sound/marketing-upbeat-bed.wav", "volume": 0.32} if music_path.exists() else None,
-            "soundEffects": [
-                {"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.58}
-                for start in starts[1:]
-                if whoosh_path.exists()
-            ],
+            "backgroundMusic": background_music,
+            "soundEffects": sound_effects,
         },
+        "creativeAssets": [serialize_creative_asset(asset) for asset in active_assets],
+        "selectedCreativeAssetIds": sorted(set(selected_asset_ids)),
         "style": {"fontFamily": "ConnecAssistant", "arabicFontFamily": "ConnecCairo"},
         "scenes": scenes,
         "durationSeconds": round(edited_duration, 3),
         "diagnostics": {
             "sceneCount": len(scenes),
-            "soundEffectCount": max(0, len(starts) - 1) if whoosh_path.exists() else 0,
-            "musicBed": music_path.exists(),
+            "soundEffectCount": len(sound_effects),
+            "musicBed": bool(background_music),
             "timingSource": "non_silent_segments" if timing_segments and len(timing_segments) > 1 else "transcript_or_timed_split",
         },
     }
@@ -986,8 +1076,9 @@ def build_remotion_scene_manifest(
     return manifest_path, scenes
 
 
-def render_remotion_montage(
+async def render_remotion_montage(
     *,
+    db: AsyncSession | None,
     transparent_source_path: Path,
     output_path: Path,
     suite: Suite,
@@ -1003,7 +1094,8 @@ def render_remotion_montage(
     transcript_segments, transcript_warning = transcribe_video_segments(transparent_source_path, output_path.parent)
     warnings = [transcript_warning] if transcript_warning else []
     work_dir = remotion_work_dir(output_path)
-    manifest_path, scenes = build_remotion_scene_manifest(
+    manifest_path, scenes = await build_remotion_scene_manifest(
+        db=db,
         transparent_source_path=transparent_source_path,
         work_dir=work_dir,
         suite=suite,
@@ -1496,6 +1588,7 @@ def build_render_package(
 
 async def generate_video_montage_for_suite(
     *,
+    db: AsyncSession | None = None,
     suite: Suite,
     job_id: str,
     input_data: dict[str, Any],
@@ -1533,7 +1626,8 @@ async def generate_video_montage_for_suite(
         if provider_result.get("ok") and transparent_path.exists():
             emit("rendering", "Rendering layered Remotion montage.", 68)
             output_path = output_dir / "render.mp4"
-            render_result = render_remotion_montage(
+            render_result = await render_remotion_montage(
+                db=db,
                 transparent_source_path=transparent_path,
                 output_path=output_path,
                 suite=suite,
@@ -1592,7 +1686,8 @@ async def generate_video_montage_for_suite(
         if provider_result.get("ok") and transparent_path.exists():
             emit("rendering", "Rendering layered Remotion montage.", 68)
             output_path = output_dir / "render.mp4"
-            render_result = render_remotion_montage(
+            render_result = await render_remotion_montage(
+                db=db,
                 transparent_source_path=transparent_path,
                 output_path=output_path,
                 suite=suite,
