@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import mimetypes
 import random
 import re
 import shutil
@@ -20,7 +21,9 @@ from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
 
 from ..core.config import settings
+from ..core.observability import log_event
 from ..models.suite import Suite
+from .media_storage import r2_configured, upload_bytes
 from .creative_assets import (
     AUDIO_KINDS,
     VIDEO_TRANSITION_KINDS,
@@ -60,6 +63,27 @@ def public_static_url(path: Path) -> str:
     return f"/static/{relative.as_posix()}"
 
 
+def publish_montage_media(job_id: str, local_url: str | None) -> str | None:
+    """Rewrite a worker-local /static URL to a public R2 URL.
+
+    The montage worker and the API run in separate containers, so files left
+    under the worker's static dir are unreachable through the API's /static.
+    """
+    url = str(local_url or "")
+    if not url.startswith("/static/"):
+        return local_url
+    path = STATIC_ROOT / url.removeprefix("/static/")
+    if not path.exists() or not r2_configured():
+        return local_url
+    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    try:
+        stored = upload_bytes(f"video_montage/{job_id}/{path.name}", path.read_bytes(), content_type)
+        return stored.url
+    except Exception:
+        log.exception("Failed to publish montage media %s to R2; leaving local URL", path)
+        return local_url
+
+
 def remotion_public_asset_path(storage_url: str, work_dir: Path, asset_id: str | None = None) -> str | None:
     if storage_url.startswith("http://") or storage_url.startswith("https://"):
         return storage_url
@@ -76,6 +100,13 @@ def remotion_public_asset_path(storage_url: str, work_dir: Path, asset_id: str |
     try:
         if not target.exists():
             shutil.copyfile(source, target)
+        if is_video_file(target) and probe_duration_seconds(target) <= 0:
+            log.warning(
+                "Skipping unreadable Remotion creative asset %s at %s (ffprobe found no duration)",
+                asset_id or storage_url,
+                target,
+            )
+            return None
         return f"/remotion/creative-assets/{target.name}"
     except OSError:
         log.exception("Failed to prepare Remotion creative asset %s", asset_id or source.name)
@@ -1201,6 +1232,10 @@ async def render_remotion_montage(
                 str(output_path),
                 "--public-dir",
                 str(public_dir),
+                # Rendering 4K-sourced scenes with default concurrency exhausts
+                # the container's memory (compositor gets SIGKILLed at 8GB).
+                "--concurrency",
+                str(max(1, settings.remotion_render_concurrency)),
             ]
         )
     except subprocess.CalledProcessError as exc:
@@ -1689,6 +1724,19 @@ async def generate_video_montage_for_suite(
             )
 
     emit("preparing_source", "Preparing video source.", 15)
+
+    def note_fallback(reason: str) -> str:
+        log_event(
+            log,
+            logging.WARNING,
+            "Video montage pipeline fell back.",
+            event="video_montage_fallback",
+            job_id=job_id,
+            suite_id=suite.id,
+            reason=reason[:500],
+        )
+        return reason
+
     source_warning = None
     source_path = None
     provider_result: dict[str, Any] | None = None
@@ -1718,6 +1766,7 @@ async def generate_video_montage_for_suite(
             render_result["background_removal"] = provider_result
             if render_result.get("rendered"):
                 emit("packaging", "Packaging montage output.", 88)
+                render_result["output_url"] = publish_montage_media(job_id, render_result.get("output_url"))
                 package = build_render_package(
                     suite=suite,
                     input_data=input_data,
@@ -1728,6 +1777,7 @@ async def generate_video_montage_for_suite(
                 )
                 package["version"] = "video_montage_remotion_v1"
                 package["background_removal"] = provider_result
+                package["package_url"] = publish_montage_media(job_id, package.get("package_url"))
                 return {
                     "video_montage": package,
                     "output_url": render_result.get("output_url"),
@@ -1735,13 +1785,19 @@ async def generate_video_montage_for_suite(
                     "rendered": True,
                     "source_warning": None,
                 }
-            source_warning = f"Remotion render failed after VEED/fal background removal: {render_result.get('reason') or 'unknown error'}"
+            source_warning = note_fallback(
+                f"Remotion render failed after VEED/fal background removal: {render_result.get('reason') or 'unknown error'}"
+            )
         else:
-            source_warning = f"VEED/fal background removal failed: {provider_result.get('error') or 'unknown error'}"
+            source_warning = note_fallback(
+                f"VEED/fal background removal failed: {provider_result.get('error') or 'unknown error'}"
+            )
     elif "background" in options and source_url and not settings.fal_key:
-        source_warning = "FAL_KEY is missing; falling back to local FFmpeg chromakey preview."
+        source_warning = note_fallback("FAL_KEY is missing; falling back to local FFmpeg chromakey preview.")
     elif "background" in options and uploaded_path and not source_url:
-        source_warning = "A public source URL is required for VEED/fal background removal; falling back to local FFmpeg chromakey preview."
+        source_warning = note_fallback(
+            "A public source URL is required for VEED/fal background removal; falling back to local FFmpeg chromakey preview."
+        )
 
     if uploaded_path:
         candidate = Path(str(uploaded_path))
@@ -1780,6 +1836,7 @@ async def generate_video_montage_for_suite(
                 render_result["provider_note"] = source_warning
             if render_result.get("rendered"):
                 emit("packaging", "Packaging montage output.", 88)
+                render_result["output_url"] = publish_montage_media(job_id, render_result.get("output_url"))
                 package = build_render_package(
                     suite=suite,
                     input_data=input_data,
@@ -1790,6 +1847,7 @@ async def generate_video_montage_for_suite(
                 )
                 package["version"] = "video_montage_remotion_v1"
                 package["background_removal"] = provider_result
+                package["package_url"] = publish_montage_media(job_id, package.get("package_url"))
                 return {
                     "video_montage": package,
                     "output_url": render_result.get("output_url"),
@@ -1797,11 +1855,15 @@ async def generate_video_montage_for_suite(
                     "rendered": True,
                     "source_warning": None,
                 }
-            source_warning = f"Remotion render failed after local chromakey: {render_result.get('reason') or 'unknown error'}"
+            source_warning = note_fallback(
+                f"Remotion render failed after local chromakey: {render_result.get('reason') or 'unknown error'}"
+            )
         else:
-            source_warning = f"Local chromakey background removal failed: {provider_result.get('error') or 'unknown error'}"
+            source_warning = note_fallback(
+                f"Local chromakey background removal failed: {provider_result.get('error') or 'unknown error'}"
+            )
     elif source_path and "background" in options:
-        source_warning = "FFmpeg chromakey filter is unavailable; falling back to local FFmpeg preview."
+        source_warning = note_fallback("FFmpeg chromakey filter is unavailable; falling back to local FFmpeg preview.")
 
     emit("rendering", "Rendering V1 montage preview.", 60)
     output_path = output_dir / "render.mp4"
@@ -1820,6 +1882,7 @@ async def generate_video_montage_for_suite(
         render_result["background_removal"] = provider_result
 
     emit("packaging", "Packaging montage output.", 88)
+    render_result["output_url"] = publish_montage_media(job_id, render_result.get("output_url"))
     package = build_render_package(
         suite=suite,
         input_data=input_data,
@@ -1828,6 +1891,7 @@ async def generate_video_montage_for_suite(
         render_result=render_result,
         source_warning=source_warning,
     )
+    package["package_url"] = publish_montage_media(job_id, package.get("package_url"))
     return {
         "video_montage": package,
         "output_url": render_result.get("output_url"),

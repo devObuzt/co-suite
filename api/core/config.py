@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # Generation queue — concurrent jobs per worker process
     generation_worker_concurrency: int = 4
 
+    # Remotion render — browser tabs rendering in parallel; higher values
+    # exhaust worker memory on long/4K sources
+    remotion_render_concurrency: int = 2
+
     @field_validator("database_url", mode="before")
     @classmethod
     def fix_db_url(cls, v: str) -> str:
