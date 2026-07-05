@@ -612,6 +612,68 @@ async def test_demand_supply_queries_hebrew_with_ai_translation_for_unmapped_key
 
 
 @pytest.mark.asyncio
+async def test_demand_supply_seeds_from_keywords_and_services_and_accumulates(monkeypatch):
+    keywords = [f"كلمة {index}" for index in range(1, 8)]
+    services = [f"خدمة {index}" for index in range(1, 8)]
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Amman Services Co",
+        slug="amman-services",
+        brand={"name": "Amman Services Co", "industry": "خدمات", "services": services, "audience_country": "الأردن"},
+        connections={},
+        strategy={"marketing_intelligence": {"keywords": [{"id": f"kw-{index}", "text": text} for index, text in enumerate(keywords, start=1)]}},
+    )
+    calls = []
+
+    async def fake_fetch_keyword_planner_ideas(customer_id, refresh_token, seed_keywords, language, location, *_args, **_kwargs):
+        calls.append(list(seed_keywords))
+        return {
+            "keyword_metrics": [
+                {"keyword": keyword, "average_monthly_searches": 10, "competition_index": 10}
+                for keyword in seed_keywords
+            ],
+            "suggested_keywords": [],
+            "summary": {},
+            "request": {"language": language, "keyword_count": len(seed_keywords)},
+        }
+
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "1234567890")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "platform-client")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_secret", "platform-secret")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_developer_token", "platform-dev-token")
+    monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
+
+    first = (await marketing_plans._save_demand_supply_from_google_ads(suite, "ar"))["demand_supply"]
+
+    assert len(calls) == 1
+    assert len(calls[0]) == 10
+    assert sum(1 for term in calls[0] if term in set(keywords)) == 5
+    assert sum(1 for term in calls[0] if term in set(services)) == 5
+    assert first["remaining_terms"] == 4
+    assert len(first["checked_terms"]) == 10
+    assert len(first["last_seeds"]["keywords"]) == 5
+    assert len(first["last_seeds"]["services"]) == 5
+
+    second = (await marketing_plans._save_demand_supply_from_google_ads(suite, "ar", more=True))["demand_supply"]
+
+    assert len(calls) == 2
+    assert len(calls[1]) == 4
+    assert not set(calls[1]) & set(calls[0])
+    assert second["remaining_terms"] == 0
+    assert len(second["checked_terms"]) == 14
+    assert second["summary"]["analyzed_keywords"] == 14
+
+    third = (await marketing_plans._save_demand_supply_from_google_ads(suite, "ar", more=True))["demand_supply"]
+
+    assert len(calls) == 2
+    assert third["remaining_terms"] == 0
+    assert third["summary"]["analyzed_keywords"] == 14
+    assert third["warning"] is None
+
+
+@pytest.mark.asyncio
 async def test_demand_supply_hebrew_falls_back_to_static_map_when_ai_fails(monkeypatch):
     suite = Suite(
         id="suite-1",

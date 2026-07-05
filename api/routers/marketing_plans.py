@@ -1,6 +1,7 @@
 """Marketing plan deck API."""
 from __future__ import annotations
 
+import random
 import secrets
 from datetime import datetime, timezone
 import json
@@ -512,7 +513,8 @@ async def _hebrew_planner_terms(keywords: list[str], limit: int = 10) -> list[st
         return fallback
 
 
-def _marketing_keywords_for_planner(suite: Suite, language: str | None = None, limit: int = 20) -> list[str]:
+def _demand_supply_seed_pools(suite: Suite, language: str | None = None) -> tuple[list[str], list[str]]:
+    """Two seed pools for the Keyword Planner: plan keywords and suite services/products."""
     output_language = infer_plan_language(suite, language)
     intelligence = _intelligence(suite)
     keywords = [
@@ -520,11 +522,27 @@ def _marketing_keywords_for_planner(suite: Suite, language: str | None = None, l
         for item in intelligence.get("keywords") or []
         if isinstance(item, dict)
     ]
-    if keywords:
-        base = _unique_strings(keywords, limit)
-    else:
-        base = [item["text"] for item in _keyword_candidates(suite, output_language)[:limit]]
-    return base
+    keyword_pool = _unique_strings(keywords, 60)
+    if not keyword_pool:
+        keyword_pool = _unique_strings([item["text"] for item in _keyword_candidates(suite, output_language)], 60)
+    keyword_markers = {item.casefold() for item in keyword_pool}
+    service_pool = [item for item in _suite_services(suite) if item.casefold() not in keyword_markers]
+    return keyword_pool, service_pool
+
+
+def _demand_supply_seed_selection(
+    keyword_pool: list[str],
+    service_pool: list[str],
+    checked: set[str],
+    per_source: int = 5,
+) -> tuple[list[str], list[str], int]:
+    """Randomly pick up to per_source unchecked terms from each pool; also return how many stay unchecked."""
+    remaining_keywords = [item for item in keyword_pool if item.casefold() not in checked]
+    remaining_services = [item for item in service_pool if item.casefold() not in checked]
+    selected_keywords = random.sample(remaining_keywords, min(per_source, len(remaining_keywords)))
+    selected_services = random.sample(remaining_services, min(per_source, len(remaining_services)))
+    remaining = (len(remaining_keywords) - len(selected_keywords)) + (len(remaining_services) - len(selected_services))
+    return selected_keywords, selected_services, remaining
 
 
 def _brand_keyword_markers(brand_name: str) -> set[str]:
@@ -1254,13 +1272,20 @@ def _merge_keyword_planner_results(results: list[dict[str, Any]]) -> dict[str, A
     }
 
 
-async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None = None) -> dict[str, Any]:
+async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None = None, more: bool = False) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
     existing = _strategy(suite).get("marketing_intelligence")
     base = existing if isinstance(existing, dict) else {"phase": "competitors"}
     base = normalize_marketing_intelligence(base, suite_research_payload(suite), output_language)
     customer_id, refresh_token, credential_source, missing_config = _google_ads_keyword_planner_credentials()
-    planner_keywords = _marketing_keywords_for_planner(suite, output_language)
+    previous = base.get("demand_supply") if isinstance(base.get("demand_supply"), dict) else {}
+    previous_metrics = [item for item in (previous.get("keyword_metrics") or []) if isinstance(item, dict)] if more else []
+    previous_suggestions = [item for item in (previous.get("suggested_keywords") or []) if isinstance(item, dict)] if more else []
+    checked_terms = _unique_strings([str(term) for term in previous.get("checked_terms") or []], 200) if more else []
+    checked = {term.casefold() for term in checked_terms}
+    keyword_pool, service_pool = _demand_supply_seed_pools(suite, output_language)
+    selected_keywords, selected_services, remaining_terms = _demand_supply_seed_selection(keyword_pool, service_pool, checked)
+    planner_keywords = _unique_strings([*selected_keywords, *selected_services], 10)
     if missing_config:
         planner = {
             "keyword_metrics": [],
@@ -1268,6 +1293,16 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
             "summary": build_keyword_planner_summary([]),
             "request": {"attempts": 0, "missing_config": missing_config},
             "warning": _platform_google_ads_missing_warning(missing_config, output_language),
+        }
+    elif not planner_keywords:
+        summary = build_keyword_planner_summary(previous_metrics)
+        summary["suggested_keywords"] = len(previous_suggestions)
+        planner = {
+            "keyword_metrics": previous_metrics,
+            "suggested_keywords": previous_suggestions,
+            "summary": summary,
+            "request": {"attempts": 0},
+            "warning": None if previous_metrics else "No keywords or services are available yet to check in Keyword Planner.",
         }
     else:
         needs_hebrew = _needs_hebrew_market_terms(suite, output_language)
@@ -1294,6 +1329,8 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
                     _suite_website_url(suite),
                 )
             )
+        if previous_metrics or previous_suggestions:
+            planner_results.insert(0, {"keyword_metrics": previous_metrics, "suggested_keywords": previous_suggestions, "request": {}})
         planner = _merge_keyword_planner_results(planner_results)
     summary = planner.get("summary") or {}
     warnings: list[str] = []
@@ -1338,6 +1375,9 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         "internal_warning": planner.get("warning"),
         "credential_source": credential_source,
         "missing_config": missing_config,
+        "checked_terms": _unique_strings([*checked_terms, *planner_keywords], 200),
+        "remaining_terms": remaining_terms,
+        "last_seeds": {"keywords": selected_keywords, "services": selected_services},
     }
     return _save_marketing_intelligence(suite, intelligence)
 
@@ -1881,23 +1921,24 @@ async def update_marketing_keywords(
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
 
 
-@router.post("/suites/{suite_id}/marketing-plan/demand-supply/generate")
-async def generate_marketing_demand_supply(
+async def _run_demand_supply_generation(
     suite_id: str,
-    payload: GenerateMarketingPlanRequest | None = None,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    payload: GenerateMarketingPlanRequest | None,
+    current_user: User,
+    db: AsyncSession,
+    more: bool = False,
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or GenerateMarketingPlanRequest()
-    await _save_demand_supply_from_google_ads(suite, request_data.language)
+    await _save_demand_supply_from_google_ads(suite, request_data.language, more=more)
     intelligence = _intelligence(suite)
     demand_supply = intelligence.get("demand_supply") if isinstance(intelligence.get("demand_supply"), dict) else {}
     summary = demand_supply.get("summary") if isinstance(demand_supply.get("summary"), dict) else {}
+    operation_suffix = "generate_more" if more else "generate"
     await record_provider_usage(
         db,
         provider="google",
-        operation="marketing_demand_supply.generate",
+        operation=f"marketing_demand_supply.{operation_suffix}",
         model="Google Ads Keyword Planner",
         endpoint="google_ads.keyword_plan_idea_service",
         status="warning" if demand_supply.get("warning") else "success",
@@ -1912,11 +1953,13 @@ async def generate_marketing_demand_supply(
             "warning": demand_supply.get("warning"),
             "credential_source": demand_supply.get("credential_source"),
             "missing_config": demand_supply.get("missing_config"),
+            "remaining_terms": demand_supply.get("remaining_terms"),
+            "last_seeds": demand_supply.get("last_seeds"),
         },
     )
     await record_audit_log(
         db,
-        action="marketing.demand_supply.generate",
+        action=f"marketing.demand_supply.{operation_suffix}",
         resource_type="marketing_intelligence",
         resource_id=suite.id,
         suite_id=suite.id,
@@ -1925,6 +1968,26 @@ async def generate_marketing_demand_supply(
     )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
+
+
+@router.post("/suites/{suite_id}/marketing-plan/demand-supply/generate")
+async def generate_marketing_demand_supply(
+    suite_id: str,
+    payload: GenerateMarketingPlanRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _run_demand_supply_generation(suite_id, payload, current_user, db, more=False)
+
+
+@router.post("/suites/{suite_id}/marketing-plan/demand-supply/generate-more")
+async def generate_more_marketing_demand_supply(
+    suite_id: str,
+    payload: GenerateMarketingPlanRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _run_demand_supply_generation(suite_id, payload, current_user, db, more=True)
 
 
 @router.post("/suites/{suite_id}/marketing-plan/personas/generate")
