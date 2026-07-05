@@ -60,14 +60,15 @@ def public_static_url(path: Path) -> str:
     return f"/static/{relative.as_posix()}"
 
 
-def remotion_public_asset_path(storage_url: str, work_dir: Path, asset_id: str | None = None) -> str:
+def remotion_public_asset_path(storage_url: str, work_dir: Path, asset_id: str | None = None) -> str | None:
     if storage_url.startswith("http://") or storage_url.startswith("https://"):
         return storage_url
     if not storage_url.startswith("/static/"):
-        return storage_url
+        return storage_url or None
     source = STATIC_ROOT / storage_url.removeprefix("/static/")
     if not source.exists():
-        return storage_url
+        log.warning("Skipping missing local Remotion creative asset %s at %s", asset_id or storage_url, source)
+        return None
     target_dir = work_dir / "public" / "remotion" / "creative-assets"
     target_dir.mkdir(parents=True, exist_ok=True)
     target_name = safe_filename(f"{asset_id or source.stem}{source.suffix}", source.name)
@@ -78,7 +79,16 @@ def remotion_public_asset_path(storage_url: str, work_dir: Path, asset_id: str |
         return f"/remotion/creative-assets/{target.name}"
     except OSError:
         log.exception("Failed to prepare Remotion creative asset %s", asset_id or source.name)
-        return storage_url
+        return None
+
+
+def creative_asset_file_available(asset: Any) -> bool:
+    storage_url = str(getattr(asset, "storage_url", "") or "")
+    if storage_url.startswith("http://") or storage_url.startswith("https://"):
+        return True
+    if not storage_url.startswith("/static/"):
+        return bool(storage_url)
+    return (STATIC_ROOT / storage_url.removeprefix("/static/")).exists()
 
 
 def safe_filename(filename: str | None, fallback: str = "source.mp4") -> str:
@@ -929,6 +939,12 @@ async def build_remotion_scene_manifest(
     )
 
     active_assets = await list_active_assets(db, kinds=AUDIO_KINDS | VISUAL_KINDS | VIDEO_TRANSITION_KINDS) if db else []
+    if active_assets:
+        available_assets = [asset for asset in active_assets if creative_asset_file_available(asset)]
+        skipped_count = len(active_assets) - len(available_assets)
+        if skipped_count:
+            log.warning("Skipped %s missing local creative assets while building Remotion manifest", skipped_count)
+        active_assets = available_assets
     selected_asset_ids: list[str] = []
     scenes: list[dict[str, Any]] = []
     for index, segment in enumerate(transcript_segments[:18]):
@@ -970,16 +986,20 @@ async def build_remotion_scene_manifest(
         background_video_asset_id = None
         background_image_asset_id = None
         if visual_video_asset:
-            background_video_public_path = remotion_public_asset_path(visual_video_asset.storage_url, work_dir, visual_video_asset.id)
-            background_asset_id = visual_video_asset.id
-            background_video_asset_id = visual_video_asset.id
-            selected_asset_ids.append(visual_video_asset.id)
+            prepared_video_path = remotion_public_asset_path(visual_video_asset.storage_url, work_dir, visual_video_asset.id)
+            if prepared_video_path:
+                background_video_public_path = prepared_video_path
+                background_asset_id = visual_video_asset.id
+                background_video_asset_id = visual_video_asset.id
+                selected_asset_ids.append(visual_video_asset.id)
         if visual_asset:
-            background_public_path = remotion_public_asset_path(visual_asset.storage_url, work_dir, visual_asset.id)
-            background_image_asset_id = visual_asset.id
-            background_asset_id = background_asset_id or visual_asset.id
-            selected_asset_ids.append(visual_asset.id)
-        if not visual_asset and not background_path.exists():
+            prepared_image_path = remotion_public_asset_path(visual_asset.storage_url, work_dir, visual_asset.id)
+            if prepared_image_path:
+                background_public_path = prepared_image_path
+                background_image_asset_id = visual_asset.id
+                background_asset_id = background_asset_id or visual_asset.id
+                selected_asset_ids.append(visual_asset.id)
+        if not background_image_asset_id and not background_path.exists():
             create_montage_background(background_path, suite)
         scenes.append(
             {
@@ -1036,23 +1056,27 @@ async def build_remotion_scene_manifest(
     for index, start in enumerate(starts[1:]):
         asset = transition_assets[index % len(transition_assets)] if transition_assets else None
         if asset:
-            selected_asset_ids.append(asset.id)
-            sound_effects.append({"publicPath": remotion_public_asset_path(asset.storage_url, work_dir, asset.id), "at": round(start, 3), "volume": 0.5, "assetId": asset.id, "kind": "transition"})
+            public_path = remotion_public_asset_path(asset.storage_url, work_dir, asset.id)
+            if public_path:
+                selected_asset_ids.append(asset.id)
+                sound_effects.append({"publicPath": public_path, "at": round(start, 3), "volume": 0.5, "assetId": asset.id, "kind": "transition"})
         elif whoosh_path.exists():
             sound_effects.append({"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.58, "kind": "transition"})
         visual_asset = transition_video_assets[index % len(transition_video_assets)] if transition_video_assets else None
         if visual_asset:
-            selected_asset_ids.append(visual_asset.id)
-            visual_transitions.append(
-                {
-                    "publicPath": remotion_public_asset_path(visual_asset.storage_url, work_dir, visual_asset.id),
-                    "at": round(start, 3),
-                    "duration": min(1.2, max(0.35, float(visual_asset.duration_seconds or 0.7))),
-                    "volume": 0.28,
-                    "assetId": visual_asset.id,
-                    "kind": "transition_video",
-                }
-            )
+            public_path = remotion_public_asset_path(visual_asset.storage_url, work_dir, visual_asset.id)
+            if public_path:
+                selected_asset_ids.append(visual_asset.id)
+                visual_transitions.append(
+                    {
+                        "publicPath": public_path,
+                        "at": round(start, 3),
+                        "duration": min(1.2, max(0.35, float(visual_asset.duration_seconds or 0.7))),
+                        "volume": 0.28,
+                        "assetId": visual_asset.id,
+                        "kind": "transition_video",
+                    }
+                )
 
     beat_cursor = 0.0
     for scene_index, scene in enumerate(scenes):
@@ -1062,16 +1086,18 @@ async def build_remotion_scene_manifest(
             if not sfx_assets:
                 continue
             asset = sfx_assets[(scene_index + beat_index) % len(sfx_assets)]
-            selected_asset_ids.append(asset.id)
-            sound_effects.append(
-                {
-                    "publicPath": remotion_public_asset_path(asset.storage_url, work_dir, asset.id),
-                    "at": round(beat_cursor + min(duration_for_scene - 0.2, 0.7 + beat_index * 2.8), 3),
-                    "volume": 0.34,
-                    "assetId": asset.id,
-                    "kind": "sfx",
-                }
-            )
+            public_path = remotion_public_asset_path(asset.storage_url, work_dir, asset.id)
+            if public_path:
+                selected_asset_ids.append(asset.id)
+                sound_effects.append(
+                    {
+                        "publicPath": public_path,
+                        "at": round(beat_cursor + min(duration_for_scene - 0.2, 0.7 + beat_index * 2.8), 3),
+                        "volume": 0.34,
+                        "assetId": asset.id,
+                        "kind": "sfx",
+                    }
+                )
         scene["attentionBeats"] = [
             {
                 "at": round(min(duration_for_scene - 0.2, 0.55 + beat_index * 2.8), 3),
@@ -1083,8 +1109,10 @@ async def build_remotion_scene_manifest(
 
     background_music = {"publicPath": "/remotion/sound/marketing-upbeat-bed.wav", "volume": 0.32} if music_path.exists() else None
     if music_asset:
-        selected_asset_ids.append(music_asset.id)
-        background_music = {"publicPath": remotion_public_asset_path(music_asset.storage_url, work_dir, music_asset.id), "volume": 0.3, "assetId": music_asset.id}
+        public_path = remotion_public_asset_path(music_asset.storage_url, work_dir, music_asset.id)
+        if public_path:
+            selected_asset_ids.append(music_asset.id)
+            background_music = {"publicPath": public_path, "volume": 0.3, "assetId": music_asset.id}
 
     serialized_creative_assets = [serialize_creative_asset(asset) for asset in active_assets]
 
