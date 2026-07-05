@@ -7,6 +7,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..core.observability import log_event, notify_generation_job_alert
+from ..core.config import settings
 from ..core.database import AsyncSessionLocal
 from ..models.generation_job import GenerationJob, GenerationJobStatus, GenerationJobType
 from .content_generator import generate_content_for_suite
@@ -478,9 +479,11 @@ async def execute_claimed_job(
 
 async def run_once(
     session_factory: async_sessionmaker[AsyncSession] = AsyncSessionLocal,
+    recover: bool = True,
 ) -> Optional[str]:
     async with session_factory() as db:
-        await recover_stale_running_jobs(db)
+        if recover:
+            await recover_stale_running_jobs(db)
         job = await claim_next_job(db)
         if not job:
             return None
@@ -490,13 +493,14 @@ async def run_once(
     return job_id
 
 
-async def run_forever(
-    session_factory: async_sessionmaker[AsyncSession] = AsyncSessionLocal,
-    poll_interval_seconds: int = POLL_INTERVAL_SECONDS,
+async def _worker_loop(
+    session_factory: async_sessionmaker[AsyncSession],
+    poll_interval_seconds: int,
+    recover: bool,
 ) -> None:
     while True:
         try:
-            claimed = await run_once(session_factory)
+            claimed = await run_once(session_factory, recover=recover)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -505,3 +509,31 @@ async def run_forever(
             continue
         if not claimed:
             await asyncio.sleep(poll_interval_seconds)
+
+
+async def run_forever(
+    session_factory: async_sessionmaker[AsyncSession] = AsyncSessionLocal,
+    poll_interval_seconds: int = POLL_INTERVAL_SECONDS,
+    concurrency: Optional[int] = None,
+) -> None:
+    if concurrency is None:
+        concurrency = settings.generation_worker_concurrency
+    concurrency = max(1, int(concurrency))
+    if concurrency == 1:
+        await _worker_loop(session_factory, poll_interval_seconds, recover=True)
+        return
+
+    log_event(
+        log,
+        logging.INFO,
+        "Starting generation queue worker loops.",
+        event="generation_worker_started",
+        concurrency=concurrency,
+    )
+    # Stale-job recovery mutates without row locks, so only loop 0 runs it.
+    await asyncio.gather(
+        *(
+            _worker_loop(session_factory, poll_interval_seconds, recover=(index == 0))
+            for index in range(concurrency)
+        )
+    )

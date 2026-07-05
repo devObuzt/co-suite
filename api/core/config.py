@@ -11,6 +11,11 @@ class Settings(BaseSettings):
 
     # Database — Railway provides postgresql://, asyncpg needs postgresql+asyncpg://
     database_url: str = "postgresql+asyncpg://cosuite:cosuite@localhost:5432/cosuite"
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+
+    # Generation queue — concurrent jobs per worker process
+    generation_worker_concurrency: int = 4
 
     @field_validator("database_url", mode="before")
     @classmethod

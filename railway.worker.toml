@@ -1,0 +1,9 @@
+# Railway config for the dedicated generation worker service.
+# The worker service must set "Config file path" (railwayConfigFile) to this file,
+# otherwise railway.toml (the API config) applies.
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "/opt/venv/bin/python -m api.workers.generation_queue"
+restartPolicyType = "ALWAYS"

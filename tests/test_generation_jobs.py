@@ -179,7 +179,7 @@ async def test_worker_loop_continues_after_unexpected_error(monkeypatch):
     calls = {"count": 0}
     sleeps: list[int] = []
 
-    async def fake_run_once(session_factory):
+    async def fake_run_once(session_factory, recover=True):
         calls["count"] += 1
         if calls["count"] == 1:
             raise RuntimeError("database hiccup")
@@ -192,7 +192,29 @@ async def test_worker_loop_continues_after_unexpected_error(monkeypatch):
     monkeypatch.setattr(durable_generation_queue.asyncio, "sleep", fake_sleep)
 
     with pytest.raises(asyncio.CancelledError):
-        await durable_generation_queue.run_forever(session_factory=object(), poll_interval_seconds=2)
+        await durable_generation_queue.run_forever(
+            session_factory=object(), poll_interval_seconds=2, concurrency=1
+        )
 
     assert calls["count"] == 2
     assert sleeps == [10]
+
+
+@pytest.mark.asyncio
+async def test_run_forever_spawns_concurrent_worker_loops(monkeypatch):
+    seen_recover: list[bool] = []
+
+    async def fake_run_once(session_factory, recover=True):
+        seen_recover.append(recover)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(durable_generation_queue, "run_once", fake_run_once)
+
+    with pytest.raises(asyncio.CancelledError):
+        await durable_generation_queue.run_forever(
+            session_factory=object(), poll_interval_seconds=2, concurrency=3
+        )
+
+    # All loops ran; only the first is allowed to recover stale jobs.
+    assert len(seen_recover) == 3
+    assert seen_recover.count(True) == 1
