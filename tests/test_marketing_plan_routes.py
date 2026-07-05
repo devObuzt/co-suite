@@ -545,20 +545,114 @@ async def test_demand_supply_queries_hebrew_for_arabic_israel_market(monkeypatch
             "request": {"language": language, "keyword_count": len(keywords)},
         }
 
+    async def fake_call_text_ai(**_kwargs):
+        return json.dumps({"keywords": ["קורס מסחר", "לימוד מסחר"]}, ensure_ascii=False)
+
     monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "1234567890")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "platform-client")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_client_secret", "platform-secret")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_developer_token", "platform-dev-token")
     monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
+    monkeypatch.setattr(marketing_plans, "call_text_ai", fake_call_text_ai)
 
     intelligence = await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
 
     assert [call["language"] for call in calls] == ["ar", "he"]
     assert calls[0]["location"] == "إسرائيل"
-    assert any("קורס" in keyword or "מסחר" in keyword for keyword in calls[1]["keywords"])
+    assert "קורס מסחר" in calls[1]["keywords"]
     assert intelligence["demand_supply"]["summary"]["analyzed_keywords"] == 2
     assert intelligence["demand_supply"]["summary"]["total_monthly_searches"] == 500
+
+
+@pytest.mark.asyncio
+async def test_demand_supply_queries_hebrew_with_ai_translation_for_unmapped_keywords(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Hummus House",
+        slug="hummus-house",
+        brand={
+            "name": "Hummus House",
+            "industry": "مطاعم",
+            "services": ["مطعم حمص"],
+            "audience_location": {"scope": "custom", "countries": ["إسرائيل"], "cities": []},
+        },
+        connections={},
+        strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "مطعم حمص"}]}},
+    )
+    calls = []
+
+    async def fake_fetch_keyword_planner_ideas(customer_id, refresh_token, keywords, language, location, *_args, **_kwargs):
+        calls.append({"keywords": keywords, "language": language})
+        return {
+            "keyword_metrics": [{"keyword": keywords[0], "average_monthly_searches": 100, "competition_index": 20}],
+            "suggested_keywords": [],
+            "summary": {},
+            "request": {"language": language, "keyword_count": len(keywords)},
+        }
+
+    async def fake_call_text_ai(**_kwargs):
+        return json.dumps({"keywords": ["מסעדת חומוס", "חומוס"]}, ensure_ascii=False)
+
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "1234567890")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "platform-client")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_secret", "platform-secret")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_developer_token", "platform-dev-token")
+    monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
+    monkeypatch.setattr(marketing_plans, "call_text_ai", fake_call_text_ai)
+
+    intelligence = await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
+
+    assert [call["language"] for call in calls] == ["ar", "he"]
+    assert calls[0]["keywords"] == ["مطعم حمص"]
+    assert calls[1]["keywords"] == ["מסעדת חומוס", "חומוס"]
+    assert intelligence["demand_supply"]["summary"]["analyzed_keywords"] == 2
+
+
+@pytest.mark.asyncio
+async def test_demand_supply_hebrew_falls_back_to_static_map_when_ai_fails(monkeypatch):
+    suite = Suite(
+        id="suite-1",
+        owner_id="user-1",
+        name="Smart Line Academy",
+        slug="smart-line",
+        brand={
+            "name": "Smart Line Academy",
+            "industry": "تعليم تداول",
+            "services": ["دورات تداول"],
+            "audience_location": {"scope": "custom", "countries": ["إسرائيل"], "cities": []},
+        },
+        connections={},
+        strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "دورات تداول"}]}},
+    )
+    calls = []
+
+    async def fake_fetch_keyword_planner_ideas(customer_id, refresh_token, keywords, language, location, *_args, **_kwargs):
+        calls.append({"keywords": keywords, "language": language})
+        return {
+            "keyword_metrics": [{"keyword": keywords[0], "average_monthly_searches": 100, "competition_index": 20}],
+            "suggested_keywords": [],
+            "summary": {},
+            "request": {"language": language, "keyword_count": len(keywords)},
+        }
+
+    async def failing_call_text_ai(**_kwargs):
+        raise RuntimeError("AI unavailable")
+
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "1234567890")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "platform-client")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_client_secret", "platform-secret")
+    monkeypatch.setattr(marketing_plans.settings, "google_ads_developer_token", "platform-dev-token")
+    monkeypatch.setattr(marketing_plans, "fetch_keyword_planner_ideas", fake_fetch_keyword_planner_ideas)
+    monkeypatch.setattr(marketing_plans, "call_text_ai", failing_call_text_ai)
+
+    await marketing_plans._save_demand_supply_from_google_ads(suite, "ar")
+
+    assert [call["language"] for call in calls] == ["ar", "he"]
+    assert any("קורס" in keyword or "מסחר" in keyword for keyword in calls[1]["keywords"])
 
 
 @pytest.mark.asyncio
@@ -593,7 +687,11 @@ async def test_generate_demand_supply_route_returns_planner_metrics(monkeypatch)
     async def fake_record_audit_log(*_args, **_kwargs):
         return None
 
+    async def fake_call_text_ai(**_kwargs):
+        return json.dumps({"keywords": ["קורס מסחר"]}, ensure_ascii=False)
+
     monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans, "call_text_ai", fake_call_text_ai)
     monkeypatch.setattr(marketing_plans.settings, "google_ads_customer_id", "1234567890")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_refresh_token", "platform-refresh-token")
     monkeypatch.setattr(marketing_plans.settings, "google_ads_client_id", "platform-client")

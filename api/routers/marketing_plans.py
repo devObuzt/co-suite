@@ -464,6 +464,10 @@ def _needs_hebrew_market_terms(suite: Suite, language: str) -> bool:
     return _is_israel_market(suite)
 
 
+def _contains_hebrew(text: str) -> bool:
+    return any("\u0590" <= char <= "\u05ff" for char in str(text or ""))
+
+
 def _hebrew_market_terms(values: list[str], limit: int = 10) -> list[str]:
     terms: list[str] = []
     for value in values:
@@ -474,9 +478,38 @@ def _hebrew_market_terms(values: list[str], limit: int = 10) -> list[str]:
         for arabic, hebrew in HEBREW_MARKET_TERM_MAP.items():
             if arabic.casefold() in lowered:
                 terms.append(hebrew)
-        if any("\u0590" <= char <= "\u05ff" for char in text):
+        if _contains_hebrew(text):
             terms.append(text)
     return _unique_strings(terms, limit)
+
+
+async def _hebrew_planner_terms(keywords: list[str], limit: int = 10) -> list[str]:
+    """Hebrew Keyword Planner seeds: AI translation of the plan keywords, with the static map as fallback."""
+    fallback = _hebrew_market_terms(keywords, limit)
+    source = [keyword for keyword in _unique_strings(keywords, limit) if not _contains_hebrew(keyword)]
+    if not source:
+        return fallback
+    try:
+        prompt = {
+            "keywords": source,
+            "instructions": "Translate every keyword into the Hebrew search term Israelis would actually type into Google for the same intent (1-3 words each). Return JSON only: {\"keywords\":[\"...\"]}.",
+        }
+        raw = await call_text_ai(
+            max_tokens=800,
+            messages=[{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+            system="You translate marketing search keywords into natural Hebrew search terms. Return strict JSON only.",
+            timeout=40,
+        )
+        parsed = json.loads(raw)
+        incoming = parsed.get("keywords") if isinstance(parsed, dict) else []
+        translated = [
+            _clean_search_fragment(item)
+            for item in incoming or []
+            if isinstance(item, str) and _contains_hebrew(item)
+        ]
+        return _unique_strings([*translated, *fallback], limit)
+    except Exception:
+        return fallback
 
 
 def _marketing_keywords_for_planner(suite: Suite, language: str | None = None, limit: int = 20) -> list[str]:
@@ -491,8 +524,6 @@ def _marketing_keywords_for_planner(suite: Suite, language: str | None = None, l
         base = _unique_strings(keywords, limit)
     else:
         base = [item["text"] for item in _keyword_candidates(suite, output_language)[:limit]]
-    if _needs_hebrew_market_terms(suite, output_language):
-        base = _unique_strings([*base, *_hebrew_market_terms(base, 8)], limit)
     return base
 
 
@@ -1239,23 +1270,25 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
             "warning": _platform_google_ads_missing_warning(missing_config, output_language),
         }
     else:
+        needs_hebrew = _needs_hebrew_market_terms(suite, output_language)
+        primary_keywords = [keyword for keyword in planner_keywords if not _contains_hebrew(keyword)] or planner_keywords
         planner_results = [
             await fetch_keyword_planner_ideas(
                 customer_id,
                 refresh_token,
-                planner_keywords,
+                primary_keywords,
                 output_language,
                 _suite_location(suite),
                 _suite_website_url(suite),
             )
         ]
-        hebrew_terms = _hebrew_market_terms(planner_keywords, 10) if _needs_hebrew_market_terms(suite, output_language) else []
-        if hebrew_terms:
+        hebrew_terms = await _hebrew_planner_terms(planner_keywords, 10) if needs_hebrew else []
+        if needs_hebrew and (hebrew_terms or _suite_website_url(suite)):
             planner_results.append(
                 await fetch_keyword_planner_ideas(
                     customer_id,
                     refresh_token,
-                    _unique_strings(hebrew_terms, 10),
+                    hebrew_terms,
                     "he",
                     _suite_location(suite),
                     _suite_website_url(suite),
