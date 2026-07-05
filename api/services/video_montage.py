@@ -939,6 +939,14 @@ async def build_remotion_scene_manifest(
             ["#201225", "#d85cff", "#ffe9ff"],
             ["#1c1d21", "#ff5f45", "#fff0ec"],
         ][index % 5]
+        visual_video_asset = pick_asset(active_assets, kind="visual_video", scene_text=caption)
+        if not visual_video_asset and db and index < 2:
+            try:
+                visual_video_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption, kind="visual_video")
+                if visual_video_asset:
+                    active_assets.append(visual_video_asset)
+            except Exception:
+                visual_video_asset = None
         visual_asset = pick_asset(active_assets, kind="visual_image", scene_text=caption)
         if not visual_asset and db and index < 4:
             try:
@@ -949,12 +957,21 @@ async def build_remotion_scene_manifest(
                 visual_asset = None
         background_path = backgrounds_dir / f"scene-{index + 1:02d}.png"
         background_public_path = f"/remotion/backgrounds/{background_path.name}"
+        background_video_public_path = None
         background_asset_id = None
+        background_video_asset_id = None
+        background_image_asset_id = None
+        if visual_video_asset:
+            background_video_public_path = remotion_public_asset_path(visual_video_asset.storage_url, work_dir, visual_video_asset.id)
+            background_asset_id = visual_video_asset.id
+            background_video_asset_id = visual_video_asset.id
+            selected_asset_ids.append(visual_video_asset.id)
         if visual_asset:
             background_public_path = remotion_public_asset_path(visual_asset.storage_url, work_dir, visual_asset.id)
-            background_asset_id = visual_asset.id
+            background_image_asset_id = visual_asset.id
+            background_asset_id = background_asset_id or visual_asset.id
             selected_asset_ids.append(visual_asset.id)
-        elif not background_path.exists():
+        if not visual_asset and not background_path.exists():
             create_montage_background(background_path, suite)
         scenes.append(
             {
@@ -968,7 +985,11 @@ async def build_remotion_scene_manifest(
                 "backgroundPrompt": f"Vertical editorial background inspired by this spoken line: {caption}",
                 "palette": palette,
                 "backgroundImagePublicPath": background_public_path,
+                "backgroundVideoPublicPath": background_video_public_path,
                 "backgroundAssetId": background_asset_id,
+                "backgroundVideoAssetId": background_video_asset_id,
+                "backgroundImageAssetId": background_image_asset_id,
+                "backgroundAssetKind": "visual_video" if background_video_public_path else ("visual_image" if background_asset_id else "generated_static"),
             }
         )
 

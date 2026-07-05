@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -13,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.admin import CreativeAsset
 from ..models.suite import Suite
-from .content_generator import _generate_image
+from .content_generator import _generate_image, _generate_video_media
+
+log = logging.getLogger(__name__)
 
 STATIC_ROOT = Path(__file__).resolve().parent.parent / "static"
 CREATIVE_ROOT = STATIC_ROOT / "creative_assets"
@@ -132,6 +135,8 @@ async def create_asset_from_bytes(
     content_type: str | None = None,
     source_url: str | None = None,
     created_by_user_id: str | None = None,
+    classification_prompt: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> CreativeAsset:
     if kind not in ALL_KINDS:
         raise ValueError(f"Unsupported creative asset kind: {kind}")
@@ -142,7 +147,7 @@ async def create_asset_from_bytes(
     path.write_bytes(data)
     guessed_type, _ = mimetypes.guess_type(path.name)
     media_type = content_type or guessed_type or "application/octet-stream"
-    classification = classify_asset(title or filename, kind=kind)
+    classification = classify_asset(title or filename, kind=kind, prompt=classification_prompt)
     row = CreativeAsset(
         kind=kind,
         title=title.strip() or safe_asset_filename(filename),
@@ -152,7 +157,7 @@ async def create_asset_from_bytes(
         tags=classification["tags"],
         use_cases=classification["use_cases"],
         classification=classification,
-        metadata_json={"filename": filename},
+        metadata_json={"filename": filename, **(metadata or {})},
         created_by_user_id=created_by_user_id,
     )
     db.add(row)
@@ -192,27 +197,77 @@ async def generate_visual_asset_for_scene(
     scene_text: str,
     kind: str = "visual_image",
 ) -> CreativeAsset | None:
-    if kind != "visual_image":
-        return None
-    prompt = (
-        "Vertical cinematic marketing background for a short social video. "
-        "No text, no logos, leave clean center space for a talking person. "
-        "Make it modern, high-energy, premium, suitable for this spoken line: "
+    base_prompt = (
+        "Vertical 9:16 cinematic marketing background for a short social video. "
+        "No readable text, no logos, no UI screenshots. Leave clean center space for a talking person. "
+        "Make it modern, high-energy, premium, and clearly connected to this spoken line: "
         f"{scene_text}. Business name: {suite.name}."
     )
-    image_bytes = _generate_image(prompt, "9:16", allow_imagen_fallback=True, visible_text=None)
-    if not image_bytes:
-        return None
-    return await create_asset_from_bytes(
-        db,
-        kind="visual_image",
-        title=f"{suite.name} visual background",
-        filename=f"{suite.slug or suite.id}-visual.png",
-        data=image_bytes,
-        content_type="image/png",
-        source_url=None,
-        created_by_user_id=None,
-    )
+    if kind == "visual_video":
+        video_prompt = (
+            f"{base_prompt} Create subtle continuous motion: moving light streaks, depth, camera drift, "
+            "soft particles or contextual b-roll movement. It should work as a background layer behind a speaker."
+        )
+        idea = {
+            "id": f"visual-background-{uuid.uuid4().hex[:8]}",
+            "division": "marketing",
+            "topic": scene_text[:120],
+            "aspect_ratio": "9:16",
+            "video_subtype": "video_with_titles",
+            "video_prompt": video_prompt,
+            "video_title_en": "",
+            "video_hook_en": "",
+            "music_style": "silent visual background, no voiceover, no prominent music",
+            "sfx_notes": "No sound is needed. Generate only a clean moving visual background.",
+            "generation_request": {"model_tier": "fast"},
+            "use_voiceover": False,
+        }
+        brand = {
+            "name": suite.name,
+            "industry": (suite.brand or {}).get("industry") if isinstance(suite.brand, dict) else None,
+            "niche": (suite.brand or {}).get("niche") if isinstance(suite.brand, dict) else None,
+            "services": (suite.brand or {}).get("services") if isinstance(suite.brand, dict) else [],
+            "products": (suite.brand or {}).get("products") if isinstance(suite.brand, dict) else [],
+            "target_audience": (suite.brand or {}).get("target_audience") if isinstance(suite.brand, dict) else None,
+        }
+        try:
+            video_bytes = _generate_video_media(idea, brand)
+        except Exception as exc:
+            log.warning("Visual video background generation failed for suite %s: %s", suite.id, exc)
+            return None
+        if not video_bytes:
+            return None
+        return await create_asset_from_bytes(
+            db,
+            kind="visual_video",
+            title=f"{suite.name} animated background",
+            filename=f"{suite.slug or suite.id}-visual-background.mp4",
+            data=video_bytes,
+            content_type="video/mp4",
+            source_url=None,
+            created_by_user_id=None,
+            classification_prompt=video_prompt,
+            metadata={"scene_text": scene_text, "generated": True, "provider": "google_veo"},
+        )
+
+    if kind == "visual_image":
+        image_bytes = _generate_image(base_prompt, "9:16", allow_imagen_fallback=True, visible_text=None)
+        if not image_bytes:
+            return None
+        return await create_asset_from_bytes(
+            db,
+            kind="visual_image",
+            title=f"{suite.name} visual background",
+            filename=f"{suite.slug or suite.id}-visual.png",
+            data=image_bytes,
+            content_type="image/png",
+            source_url=None,
+            created_by_user_id=None,
+            classification_prompt=base_prompt,
+            metadata={"scene_text": scene_text, "generated": True, "provider": "google_image"},
+        )
+
+    return None
 
 
 def serialize_creative_asset(asset: CreativeAsset) -> dict[str, Any]:
