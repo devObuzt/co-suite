@@ -28,6 +28,7 @@ from ..services.creative_assets import (
     ALL_KINDS,
     create_asset_from_bytes,
     create_asset_from_remote,
+    seed_builtin_creative_assets,
     serialize_creative_asset,
 )
 
@@ -518,6 +519,25 @@ async def creative_assets(
         query = query.where(or_(CreativeAsset.title.ilike(pattern), CreativeAsset.storage_url.ilike(pattern)))
     rows = (await db.execute(query)).scalars().all()
     return [serialize_creative_asset(row) for row in rows]
+
+
+@router.post("/creative-assets/seed-builtins")
+async def seed_creative_asset_builtins(
+    request: Request,
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    seeded = await seed_builtin_creative_assets(db)
+    await record_audit_log(
+        db,
+        action="admin.creative_asset.seed_builtins",
+        resource_type="creative_asset",
+        actor=admin,
+        request=request,
+        metadata={"seeded": seeded},
+    )
+    await db.commit()
+    return {"ok": True, "seeded": seeded}
 
 
 @router.post("/creative-assets")
