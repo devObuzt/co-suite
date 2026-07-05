@@ -84,6 +84,62 @@ def publish_montage_media(job_id: str, local_url: str | None) -> str | None:
         return local_url
 
 
+def normalize_montage_source(source_path: Path, output_dir: Path) -> Path | None:
+    """Downscale/transcode the source to fit 1080x1920 H.264 before provider processing.
+
+    The output montage is 1080x1920 anyway, and the container's libvpx decoder
+    rejects VP9 frames beyond 5120x3200 — 4K portrait sources (2160x3840) from
+    VEED were undecodable without this.
+    """
+    target = output_dir / "normalized-source.mp4"
+    if target.exists() and target.stat().st_size > 0:
+        return target
+    try:
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source_path),
+                "-vf",
+                "scale=w=1080:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "20",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "160k",
+                "-movflags",
+                "+faststart",
+                str(target),
+            ]
+        )
+    except Exception:
+        log.exception("Failed to normalize montage source %s", source_path)
+        return None
+    return target if target.exists() and target.stat().st_size > 0 else None
+
+
+def publish_veed_source(job_id: str, source_path: Path) -> str | None:
+    """Upload the normalized source to R2 and return a public URL for VEED/fal."""
+    if not r2_configured():
+        return None
+    try:
+        stored = upload_bytes(
+            f"video_montage/{job_id}/{source_path.name}",
+            source_path.read_bytes(),
+            "video/mp4",
+        )
+        return stored.url
+    except Exception:
+        log.exception("Failed to publish normalized montage source %s to R2", source_path)
+        return None
+
+
 def remotion_public_asset_path(storage_url: str, work_dir: Path, asset_id: str | None = None) -> str | None:
     if storage_url.startswith("http://") or storage_url.startswith("https://"):
         return storage_url
@@ -1755,11 +1811,42 @@ async def generate_video_montage_for_suite(
 
     source_url = str(input_data.get("source_url") or "").strip()
     options = requested_options(input_data)
-    if "background" in options and source_url and settings.fal_key:
+
+    if uploaded_path:
+        candidate = Path(str(uploaded_path))
+        if candidate.exists():
+            source_path = candidate
+        else:
+            source_warning = note_fallback("Uploaded source file was not found on disk.")
+    elif source_url:
+        source_path, source_warning = await download_source(
+            source_url,
+            output_dir / "source_from_url.mp4",
+        )
+        if source_warning:
+            note_fallback(source_warning)
+
+    veed_source_url = None
+    if "background" in options and settings.fal_key and (source_path or source_url):
+        if source_path and r2_configured():
+            normalized_path = normalize_montage_source(source_path, output_dir)
+            if normalized_path:
+                veed_source_url = publish_veed_source(job_id, normalized_path)
+        if not veed_source_url and source_url:
+            veed_source_url = source_url
+            note_fallback("Could not stage a normalized montage source on R2; sending the original URL to VEED/fal.")
+        if not veed_source_url:
+            source_warning = note_fallback(
+                "VEED/fal needs a public source URL and R2 staging is unavailable; falling back to local chromakey preview."
+            )
+    elif "background" in options and not settings.fal_key:
+        source_warning = note_fallback("FAL_KEY is missing; falling back to local FFmpeg chromakey preview.")
+
+    if veed_source_url:
         emit("background_removal", "Removing video background with VEED/fal.", 35)
         transparent_path = output_dir / "transparent-subject.webm"
         provider_result = remove_background_with_veed_fal(
-            source_url=source_url,
+            source_url=veed_source_url,
             output_path=transparent_path,
             fal_key=settings.fal_key,
         )
@@ -1803,24 +1890,6 @@ async def generate_video_montage_for_suite(
             source_warning = note_fallback(
                 f"VEED/fal background removal failed: {provider_result.get('error') or 'unknown error'}"
             )
-    elif "background" in options and source_url and not settings.fal_key:
-        source_warning = note_fallback("FAL_KEY is missing; falling back to local FFmpeg chromakey preview.")
-    elif "background" in options and uploaded_path and not source_url:
-        source_warning = note_fallback(
-            "A public source URL is required for VEED/fal background removal; falling back to local FFmpeg chromakey preview."
-        )
-
-    if uploaded_path:
-        candidate = Path(str(uploaded_path))
-        if candidate.exists():
-            source_path = candidate
-        else:
-            source_warning = "Uploaded source file was not found on disk."
-    elif source_url:
-        source_path, source_warning = await download_source(
-            source_url,
-            output_dir / "source_from_url.mp4",
-        )
 
     if source_path and "background" in options and ffmpeg_filter_available("chromakey"):
         emit("background_removal", "Preparing transparent subject locally.", 48)

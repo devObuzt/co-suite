@@ -299,7 +299,33 @@ async def test_generate_video_montage_prefers_veed_remotion_pipeline(tmp_path, m
     monkeypatch.setattr(video_montage, "job_dir", lambda _job_id: tmp_path)
     monkeypatch.setattr(settings, "fal_key", "test-fal-key")
 
+    downloaded = tmp_path / "source_from_url.mp4"
+
+    async def fake_download_source(_url, target):
+        Path(target).write_bytes(b"downloaded-source")
+        return Path(target), None
+
+    normalized = tmp_path / "normalized-source.mp4"
+
+    def fake_normalize(_source_path, _output_dir):
+        normalized.write_bytes(b"normalized-source")
+        return normalized
+
+    staged_urls: list[str] = []
+
+    def fake_publish_veed_source(_job_id, source_path):
+        staged_urls.append(str(source_path))
+        return "https://cdn.example/video_montage/job-1/normalized-source.mp4"
+
+    monkeypatch.setattr(video_montage, "download_source", fake_download_source)
+    monkeypatch.setattr(video_montage, "r2_configured", lambda: True)
+    monkeypatch.setattr(video_montage, "normalize_montage_source", fake_normalize)
+    monkeypatch.setattr(video_montage, "publish_veed_source", fake_publish_veed_source)
+
+    veed_calls: list[str] = []
+
     def fake_remove_background(**kwargs):
+        veed_calls.append(kwargs["source_url"])
         transparent = Path(kwargs["output_path"])
         transparent.write_bytes(b"transparent-webm")
         return {"ok": True, "provider": "veed-fal", "output_path": str(transparent)}
@@ -343,6 +369,9 @@ async def test_generate_video_montage_prefers_veed_remotion_pipeline(tmp_path, m
     assert render["engine"] == "remotion_veed_fal"
     assert "api_background_removal" in render["capabilities_applied"]
     assert result["output_url"] == "/static/video_montage/job-1/render.mp4"
+    # VEED must receive the R2-staged normalized source, not the raw Drive URL
+    assert veed_calls == ["https://cdn.example/video_montage/job-1/normalized-source.mp4"]
+    assert staged_urls == [str(normalized)]
 
 
 @pytest.mark.asyncio
