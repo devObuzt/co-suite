@@ -1125,7 +1125,7 @@ async def build_remotion_scene_manifest(
         },
     }
     manifest_path = src_dir / "manifest.generated.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return manifest_path, scenes
 
 

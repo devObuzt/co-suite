@@ -345,6 +345,13 @@ async def generate_visual_asset_for_scene(
 
 
 def serialize_creative_asset(asset: CreativeAsset) -> dict[str, Any]:
+    def serialize_datetime(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
+
     return {
         "id": asset.id,
         "kind": asset.kind,
@@ -358,8 +365,8 @@ def serialize_creative_asset(asset: CreativeAsset) -> dict[str, Any]:
         "classification": asset.classification or {},
         "active": asset.active,
         "usage_count": asset.usage_count,
-        "last_used_at": asset.last_used_at,
+        "last_used_at": serialize_datetime(asset.last_used_at),
         "metadata": asset.metadata_json or {},
-        "created_at": asset.created_at,
-        "updated_at": asset.updated_at,
+        "created_at": serialize_datetime(asset.created_at),
+        "updated_at": serialize_datetime(asset.updated_at),
     }
