@@ -1,0 +1,1632 @@
+{
+  "source": "Videos Assets.zip",
+  "asset_count": 44,
+  "assets": [
+    {
+      "library_key": "a68fb2c5e9dcfc0b0e13a5d73eed62f3f0e0712c",
+      "kind": "music",
+      "title": "Freepik ascend",
+      "storage_url": "/static/creative_assets/library/music/freepik-ascend-9189efc98c.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 177.001,
+      "tags": [
+        "business",
+        "energy"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "business",
+          "energy"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/freepik-ascend.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "06c1be3af74a985f8850addd4f773e77ea1392c0",
+      "kind": "music",
+      "title": "Freepik clean funk vision",
+      "storage_url": "/static/creative_assets/library/music/freepik-clean-funk-vision-cfe9c795e8.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 143.458,
+      "tags": [
+        "business",
+        "energy",
+        "happy"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "business",
+          "energy",
+          "happy"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/freepik-clean-funk-vision.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "8d025f7244c7d6f6f47c8f412b3c25e55ac6050d",
+      "kind": "music",
+      "title": "Freepik fashion runway",
+      "storage_url": "/static/creative_assets/library/music/freepik-fashion-runway-aec96c71a1.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 143.0,
+      "tags": [
+        "fashion"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "fashion"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/freepik-fashion-runway.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "4596f097434e8cd068678586bf02a0a3fc9025c3",
+      "kind": "music",
+      "title": "Magnific apricity",
+      "storage_url": "/static/creative_assets/library/music/magnific-apricity-e218356ba9.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 56.64,
+      "tags": [
+        "business",
+        "energy"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "business",
+          "energy"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/magnific-apricity.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "549911f561c2d232afe4fef11075542e22a49578",
+      "kind": "music",
+      "title": "Magnific ascend",
+      "storage_url": "/static/creative_assets/library/music/magnific-ascend-51ce7c98a1.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 177.001,
+      "tags": [
+        "business",
+        "energy"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "business",
+          "energy"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/magnific-ascend.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "fb563a1c0a36bdd20d6a57682093e4e04969f10d",
+      "kind": "music",
+      "title": "Magnific core circuit",
+      "storage_url": "/static/creative_assets/library/music/magnific-core-circuit-d19ce578fe.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 56.0,
+      "tags": [
+        "business",
+        "energy"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "business",
+          "energy"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/magnific-core-circuit.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "241a23a12af9f2927f190f07435a27d83d29b8b8",
+      "kind": "music",
+      "title": "Magnific fashion runway",
+      "storage_url": "/static/creative_assets/library/music/magnific-fashion-runway-1eb832e6c3.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 143.0,
+      "tags": [
+        "fashion"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "fashion"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/magnific-fashion-runway.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "4671cc95343bbc11764966cefe558536a69d51fd",
+      "kind": "music",
+      "title": "Magnific future innovators",
+      "storage_url": "/static/creative_assets/library/music/magnific-future-innovators-7d8df301eb.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 124.002,
+      "tags": [
+        "business",
+        "energy"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "business",
+          "energy"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/magnific-future-innovators.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "b6bd4db03840102fef1d039ed8c36950ea44398a",
+      "kind": "music",
+      "title": "Magnific innovate and inspire",
+      "storage_url": "/static/creative_assets/library/music/magnific-innovate-and-inspire-c28897c6ce.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 144.0,
+      "tags": [
+        "business",
+        "energy"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "business",
+          "energy"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/magnific-innovate-and-inspire.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "f08dacf1785a5937c99ea6b365a37c663dffb4a6",
+      "kind": "music",
+      "title": "Magnific magnetic motion",
+      "storage_url": "/static/creative_assets/library/music/magnific-magnetic-motion-fddb5c890b.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 199.962,
+      "tags": [
+        "business",
+        "energy"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "business",
+          "energy"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/magnific-magnetic-motion.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "b1b4bb1ecaf478abc7da49d1e9d795e3d25e2cb6",
+      "kind": "music",
+      "title": "Magnific papers",
+      "storage_url": "/static/creative_assets/library/music/magnific-papers-76d7b172d4.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 268.56,
+      "tags": [
+        "business",
+        "energy"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "business",
+          "energy"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/magnific-papers.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "43bd2513234fc6da83384f4c4687fb6de85f2657",
+      "kind": "music",
+      "title": "Magnific prestige luxe",
+      "storage_url": "/static/creative_assets/library/music/magnific-prestige-luxe-10a8c35b8f.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 94.008,
+      "tags": [
+        "business",
+        "energy",
+        "fashion",
+        "luxury"
+      ],
+      "use_cases": [
+        "background_music",
+        "mood_bed"
+      ],
+      "classification": {
+        "tags": [
+          "business",
+          "energy",
+          "fashion",
+          "luxury"
+        ],
+        "use_cases": [
+          "background_music",
+          "mood_bed"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Music"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Music/magnific-prestige-luxe.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "3632c9202a1446cf8bd6ca9a9e054ecb99685d88",
+      "kind": "sfx",
+      "title": "Camera Shutter",
+      "storage_url": "/static/creative_assets/library/sfx/camera-shutter-d12319a24d.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 7.28,
+      "tags": [
+        "camera",
+        "shutter"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "camera",
+          "shutter"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Camera Shutter.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "d6453d24474e397fc8712560071d04f1f8ca12d0",
+      "kind": "sfx",
+      "title": "Camera shutter 2",
+      "storage_url": "/static/creative_assets/library/sfx/camera-shutter-2-10afa7a407.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 11.921,
+      "tags": [
+        "camera",
+        "shutter"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "camera",
+          "shutter"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Camera shutter 2.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "2fc9943ca1efb351101512a6e47d90ee2e84f0ce",
+      "kind": "sfx",
+      "title": "Camera shutter 4",
+      "storage_url": "/static/creative_assets/library/sfx/camera-shutter-4-bea90e343d.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 2.442,
+      "tags": [
+        "camera",
+        "shutter"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "camera",
+          "shutter"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Camera shutter 4.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "26872c0cbfbebf4dd222765d3314f9099c1f7e6d",
+      "kind": "sfx",
+      "title": "Camera shutter 5",
+      "storage_url": "/static/creative_assets/library/sfx/camera-shutter-5-74c4706f4d.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 5.145,
+      "tags": [
+        "camera",
+        "shutter"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "camera",
+          "shutter"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Camera shutter 5.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "b73191cd00be6ae9b34c6c4469ad14c7d2b4a92e",
+      "kind": "sfx",
+      "title": "Long Shutter",
+      "storage_url": "/static/creative_assets/library/sfx/long-shutter-12ae92013b.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 13.348,
+      "tags": [
+        "camera",
+        "shutter"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "camera",
+          "shutter"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Long Shutter.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "91f09eab0e7b9474d80a6802a29c335c476dd8a6",
+      "kind": "sfx",
+      "title": "Notification",
+      "storage_url": "/static/creative_assets/library/sfx/notification-dce37e169d.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 1.719,
+      "tags": [
+        "notification",
+        "scifi"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "notification",
+          "scifi"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Notification.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "a1c7e5eeeb41241d2318fd7c6a6adcf43ec2bf9f",
+      "kind": "sfx",
+      "title": "Notification 2",
+      "storage_url": "/static/creative_assets/library/sfx/notification-2-95b1e599fd.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 13.782,
+      "tags": [
+        "notification",
+        "scifi"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "notification",
+          "scifi"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Notification 2.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "a585bfe0d980983936cc613f2ace861e95464354",
+      "kind": "sfx",
+      "title": "Notification scifi",
+      "storage_url": "/static/creative_assets/library/sfx/notification-scifi-ae4dac8c01.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 18.331,
+      "tags": [
+        "notification",
+        "scifi"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "notification",
+          "scifi"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/notification scifi.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "d531af16e65ecbcac1355175d433f700e227236f",
+      "kind": "sfx",
+      "title": "Notification scifi 2",
+      "storage_url": "/static/creative_assets/library/sfx/notification-scifi-2-452b63626e.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 14.0,
+      "tags": [
+        "notification",
+        "scifi"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "notification",
+          "scifi"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/notification scifi 2.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "73569a79c9fbafab8e918a24d8bd36f51150fb9c",
+      "kind": "sfx",
+      "title": "Pop sounds",
+      "storage_url": "/static/creative_assets/library/sfx/pop-sounds-7da7956388.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 10.812,
+      "tags": [
+        "energy",
+        "pop"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "energy",
+          "pop"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/pop sounds.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "52799be5c4549a5fa6ff426f7d2c5b3673db1368",
+      "kind": "sfx",
+      "title": "Ringtone Scifi",
+      "storage_url": "/static/creative_assets/library/sfx/ringtone-scifi-4e8b0d32ee.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 22.571,
+      "tags": [
+        "notification",
+        "scifi"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "notification",
+          "scifi"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Ringtone Scifi.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "085dd3d9c05e7c1f89c6900a89713150b5c3831f",
+      "kind": "sfx",
+      "title": "Scifi",
+      "storage_url": "/static/creative_assets/library/sfx/scifi-0720d00587.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 19.799,
+      "tags": [
+        "impact"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "impact"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Scifi.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "a1c714e780c360ba9c38bbf0ec55c0f749489cc5",
+      "kind": "sfx",
+      "title": "Scifi notification",
+      "storage_url": "/static/creative_assets/library/sfx/scifi-notification-f6c8b4a88d.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 12.738,
+      "tags": [
+        "notification",
+        "scifi"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "notification",
+          "scifi"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Scifi notification.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "c38916bec1ce9bf6e1dfd67c2be4c6fbf94cf927",
+      "kind": "sfx",
+      "title": "Shutter 3",
+      "storage_url": "/static/creative_assets/library/sfx/shutter-3-3a5c6ccce9.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 2.749,
+      "tags": [
+        "camera",
+        "shutter"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "camera",
+          "shutter"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Shutter 3.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "1ae0231c2143c07d5fc97054b509a21f35d150d3",
+      "kind": "sfx",
+      "title": "Shutter 6",
+      "storage_url": "/static/creative_assets/library/sfx/shutter-6-19bbb6d2ec.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 12.32,
+      "tags": [
+        "camera",
+        "shutter"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "camera",
+          "shutter"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Shutter 6.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "b1229e5e7ef71073d588267a9ce2838db5d28c63",
+      "kind": "sfx",
+      "title": "Swoosh + sound",
+      "storage_url": "/static/creative_assets/library/sfx/swoosh-sound-dbd92ba78e.mp3",
+      "content_type": "audio/mpeg",
+      "duration_seconds": 9.784,
+      "tags": [
+        "impact",
+        "transition",
+        "whoosh"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "impact",
+          "transition",
+          "whoosh"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Sfx"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Sfx/Swoosh + sound.mp3",
+        "orientation": null,
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "13d99a2819872be75ad844f40c2f7dfe4eaa54ce",
+      "kind": "transition_video",
+      "title": "Film 1 16.9",
+      "storage_url": "/static/creative_assets/library/transition_video/landscape/film-1-16.9-6b20eb6663.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 0.667,
+      "tags": [
+        "16:9",
+        "classic",
+        "film",
+        "landscape"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "16:9",
+          "classic",
+          "film",
+          "landscape"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/landscape"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/landscape/Film 1 16.9.mp4",
+        "orientation": "landscape",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "875285e35e62d97bf4701c6642dd2d607697d1b3",
+      "kind": "transition_video",
+      "title": "Film 2 16.9",
+      "storage_url": "/static/creative_assets/library/transition_video/landscape/film-2-16.9-0e9c74642f.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 0.767,
+      "tags": [
+        "16:9",
+        "classic",
+        "film",
+        "landscape"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "16:9",
+          "classic",
+          "film",
+          "landscape"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/landscape"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/landscape/Film 2 16.9.mp4",
+        "orientation": "landscape",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "c9429a24210d63ecfdfc8eff83f6d5782e6834d0",
+      "kind": "transition_video",
+      "title": "Film 4 16.9",
+      "storage_url": "/static/creative_assets/library/transition_video/landscape/film-4-16.9-ad9cd70d7d.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 1.068,
+      "tags": [
+        "16:9",
+        "classic",
+        "film",
+        "landscape"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "16:9",
+          "classic",
+          "film",
+          "landscape"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/landscape"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/landscape/Film 4 16.9.mp4",
+        "orientation": "landscape",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "55778e2fada5404679aa7a816f060a7e5fb32581",
+      "kind": "transition_video",
+      "title": "Flash 1 16.9",
+      "storage_url": "/static/creative_assets/library/transition_video/landscape/flash-1-16.9-b3dc3dc018.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 0.834,
+      "tags": [
+        "16:9",
+        "flash",
+        "landscape",
+        "light"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "16:9",
+          "flash",
+          "landscape",
+          "light"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/landscape"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/landscape/Flash 1 16.9.mp4",
+        "orientation": "landscape",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "f840c9813ab836cbf9a987b2209824462b056432",
+      "kind": "transition_video",
+      "title": "Flash 2 16.9",
+      "storage_url": "/static/creative_assets/library/transition_video/landscape/flash-2-16.9-187b9a12fe.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 0.801,
+      "tags": [
+        "16:9",
+        "flash",
+        "landscape",
+        "light"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "16:9",
+          "flash",
+          "landscape",
+          "light"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/landscape"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/landscape/Flash 2 16.9.mp4",
+        "orientation": "landscape",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "01a916b385b92f6e00cd86b12e70d363a618650e",
+      "kind": "transition_video",
+      "title": "Flash 4 16.9",
+      "storage_url": "/static/creative_assets/library/transition_video/landscape/flash-4-16.9-574b7c27c2.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 1.034,
+      "tags": [
+        "16:9",
+        "flash",
+        "landscape",
+        "light"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "16:9",
+          "flash",
+          "landscape",
+          "light"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/landscape"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/landscape/Flash 4 16.9.mp4",
+        "orientation": "landscape",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "6a24e383b3f2c101ea7c43d8125139174223c6b6",
+      "kind": "transition_video",
+      "title": "Flash 5 16.9",
+      "storage_url": "/static/creative_assets/library/transition_video/landscape/flash-5-16.9-5639c489c7.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 0.834,
+      "tags": [
+        "16:9",
+        "flash",
+        "landscape",
+        "light"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "16:9",
+          "flash",
+          "landscape",
+          "light"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/landscape"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/landscape/Flash 5 16.9.mp4",
+        "orientation": "landscape",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "a43a5e0a94e8eaba0070609bc19a36f0da440f6d",
+      "kind": "transition_video",
+      "title": "Flash 6 16.9",
+      "storage_url": "/static/creative_assets/library/transition_video/landscape/flash-6-16.9-1c567c4a89.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 1.101,
+      "tags": [
+        "16:9",
+        "flash",
+        "landscape",
+        "light"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "16:9",
+          "flash",
+          "landscape",
+          "light"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/landscape"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/landscape/Flash 6 16.9.mp4",
+        "orientation": "landscape",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "0cf2e1ae9ee68e011a1898be18687436981954e8",
+      "kind": "transition_video",
+      "title": "Film 1 9.16",
+      "storage_url": "/static/creative_assets/library/transition_video/portrait/film-1-9.16-ecca72650c.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 0.667,
+      "tags": [
+        "9:16",
+        "classic",
+        "film",
+        "portrait"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "9:16",
+          "classic",
+          "film",
+          "portrait"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/Portrait"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/Portrait/Film 1 9.16.mp4",
+        "orientation": "portrait",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "8028e4929d14eeff8ee439c208221e6c34c88ea9",
+      "kind": "transition_video",
+      "title": "Film 3 9.16",
+      "storage_url": "/static/creative_assets/library/transition_video/portrait/film-3-9.16-ca72dacdbc.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 0.934,
+      "tags": [
+        "9:16",
+        "classic",
+        "film",
+        "portrait"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "9:16",
+          "classic",
+          "film",
+          "portrait"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/Portrait"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/Portrait/Film 3 9.16.mp4",
+        "orientation": "portrait",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "6ff7286e17c243445045b49a1ae2eb7bb25f7346",
+      "kind": "transition_video",
+      "title": "Film 4 9.16",
+      "storage_url": "/static/creative_assets/library/transition_video/portrait/film-4-9.16-9b774f0871.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 1.068,
+      "tags": [
+        "9:16",
+        "classic",
+        "film",
+        "portrait"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "9:16",
+          "classic",
+          "film",
+          "portrait"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/Portrait"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/Portrait/Film 4 9.16.mp4",
+        "orientation": "portrait",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "a36ef93ccb006ff32e311d7e0fc6ba8ba1fb0ed6",
+      "kind": "transition_video",
+      "title": "Flash 1 9.16",
+      "storage_url": "/static/creative_assets/library/transition_video/portrait/flash-1-9.16-b88120f8fb.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 0.834,
+      "tags": [
+        "9:16",
+        "flash",
+        "light",
+        "portrait"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "9:16",
+          "flash",
+          "light",
+          "portrait"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/Portrait"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/Portrait/Flash 1 9.16.mp4",
+        "orientation": "portrait",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "cd19dfb1b9dfe5ec46e5463fde6ee5e18de230cd",
+      "kind": "transition_video",
+      "title": "Flash 2 9.16",
+      "storage_url": "/static/creative_assets/library/transition_video/portrait/flash-2-9.16-4f1799f7b3.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 0.801,
+      "tags": [
+        "9:16",
+        "flash",
+        "light",
+        "portrait"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "9:16",
+          "flash",
+          "light",
+          "portrait"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/Portrait"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/Portrait/Flash 2 9.16.mp4",
+        "orientation": "portrait",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "e2a3a3920a4808ff5a88a034353c3e5992352d33",
+      "kind": "transition_video",
+      "title": "Flash 4 9.16",
+      "storage_url": "/static/creative_assets/library/transition_video/portrait/flash-4-9.16-b866481aec.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 1.034,
+      "tags": [
+        "9:16",
+        "flash",
+        "light",
+        "portrait"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "9:16",
+          "flash",
+          "light",
+          "portrait"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/Portrait"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/Portrait/Flash 4 9.16.mp4",
+        "orientation": "portrait",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "e9a1962b02e40f129e79ddddaa1f9992caf204b5",
+      "kind": "transition_video",
+      "title": "Flash 5 9.16",
+      "storage_url": "/static/creative_assets/library/transition_video/portrait/flash-5-9.16-08523e0761.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 0.834,
+      "tags": [
+        "9:16",
+        "flash",
+        "light",
+        "portrait"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "9:16",
+          "flash",
+          "light",
+          "portrait"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/Portrait"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/Portrait/Flash 5 9.16.mp4",
+        "orientation": "portrait",
+        "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "3ab1d20e2fa297dfd3edf5a7ad464588e2fd12ad",
+      "kind": "transition_video",
+      "title": "Flash 6 9.16",
+      "storage_url": "/static/creative_assets/library/transition_video/portrait/flash-6-9.16-5ce8b482ae.mp4",
+      "content_type": "video/mp4",
+      "duration_seconds": 1.101,
+      "tags": [
+        "9:16",
+        "flash",
+        "light",
+        "portrait"
+      ],
+      "use_cases": [
+        "visual_transition",
+        "scene_boundary",
+        "flash_overlay"
+      ],
+      "classification": {
+        "tags": [
+          "9:16",
+          "flash",
+          "light",
+          "portrait"
+        ],
+        "use_cases": [
+          "visual_transition",
+          "scene_boundary",
+          "flash_overlay"
+        ],
+        "auto_classified": true,
+        "source_folder": "Videos Assets/Trasnitions & sfx/Portrait"
+      },
+      "metadata": {
+        "original_path": "Videos Assets/Trasnitions & sfx/Portrait/Flash 6 9.16.mp4",
+        "orientation": "portrait",
+        "library": "Videos Assets"
+      },
+      "active": true
+    }
+  ]
+}

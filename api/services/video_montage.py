@@ -22,6 +22,7 @@ from ..core.config import settings
 from ..models.suite import Suite
 from .creative_assets import (
     AUDIO_KINDS,
+    VIDEO_TRANSITION_KINDS,
     VISUAL_KINDS,
     generate_visual_asset_for_scene,
     list_active_assets,
@@ -920,7 +921,7 @@ async def build_remotion_scene_manifest(
         timing_segments=timing_segments,
     )
 
-    active_assets = await list_active_assets(db, kinds=AUDIO_KINDS | VISUAL_KINDS) if db else []
+    active_assets = await list_active_assets(db, kinds=AUDIO_KINDS | VISUAL_KINDS | VIDEO_TRANSITION_KINDS) if db else []
     selected_asset_ids: list[str] = []
     scenes: list[dict[str, Any]] = []
     for index, segment in enumerate(transcript_segments[:18]):
@@ -1002,6 +1003,10 @@ async def build_remotion_scene_manifest(
     edited_duration = sum(max(0.1, scene["sourceEnd"] - scene["sourceStart"]) for scene in scenes)
     music_asset = pick_asset(active_assets, kind="music", scene_text=f"{suite.name} {' '.join(scene['caption'] for scene in scenes[:3])}")
     transition_assets = [asset for asset in active_assets if asset.kind == "transition"]
+    transition_video_assets = [
+        asset for asset in active_assets
+        if asset.kind == "transition_video" and ("portrait" in [str(tag).lower() for tag in (asset.tags or [])] or "9:16" in str(asset.metadata_json or {}))
+    ] or [asset for asset in active_assets if asset.kind == "transition_video"]
     sfx_assets = [asset for asset in active_assets if asset.kind == "sfx"]
     music_path = sound_dir / "marketing-upbeat-bed.wav"
     whoosh_path = sound_dir / "soft-whoosh.wav"
@@ -1020,6 +1025,7 @@ async def build_remotion_scene_manifest(
         cursor += scene["sourceEnd"] - scene["sourceStart"]
 
     sound_effects: list[dict[str, Any]] = []
+    visual_transitions: list[dict[str, Any]] = []
     for index, start in enumerate(starts[1:]):
         asset = transition_assets[index % len(transition_assets)] if transition_assets else None
         if asset:
@@ -1027,6 +1033,19 @@ async def build_remotion_scene_manifest(
             sound_effects.append({"publicPath": remotion_public_asset_path(asset.storage_url, work_dir, asset.id), "at": round(start, 3), "volume": 0.5, "assetId": asset.id, "kind": "transition"})
         elif whoosh_path.exists():
             sound_effects.append({"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.58, "kind": "transition"})
+        visual_asset = transition_video_assets[index % len(transition_video_assets)] if transition_video_assets else None
+        if visual_asset:
+            selected_asset_ids.append(visual_asset.id)
+            visual_transitions.append(
+                {
+                    "publicPath": remotion_public_asset_path(visual_asset.storage_url, work_dir, visual_asset.id),
+                    "at": round(start, 3),
+                    "duration": min(1.2, max(0.35, float(visual_asset.duration_seconds or 0.7))),
+                    "volume": 0.28,
+                    "assetId": visual_asset.id,
+                    "kind": "transition_video",
+                }
+            )
 
     beat_cursor = 0.0
     for scene_index, scene in enumerate(scenes):
@@ -1082,6 +1101,7 @@ async def build_remotion_scene_manifest(
             "backgroundMusic": background_music,
             "soundEffects": sound_effects,
         },
+        "visualTransitions": visual_transitions,
         "creativeAssets": serialized_creative_assets,
         "selectedCreativeAssetIds": sorted(set(selected_asset_ids)),
         "style": {"fontFamily": "ConnecAssistant", "arabicFontFamily": "ConnecCairo"},

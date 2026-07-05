@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import mimetypes
 import logging
 import re
@@ -24,7 +25,9 @@ CREATIVE_ROOT.mkdir(parents=True, exist_ok=True)
 
 AUDIO_KINDS = {"sfx", "music", "transition"}
 VISUAL_KINDS = {"visual_image", "visual_video"}
-ALL_KINDS = AUDIO_KINDS | VISUAL_KINDS
+VIDEO_TRANSITION_KINDS = {"transition_video"}
+ALL_KINDS = AUDIO_KINDS | VISUAL_KINDS | VIDEO_TRANSITION_KINDS
+BUILTIN_LIBRARY_MANIFEST = CREATIVE_ROOT / "library" / "manifest.json"
 
 
 def public_static_url(path: Path) -> str:
@@ -54,6 +57,12 @@ def classify_asset(filename: str, *, kind: str, prompt: str | None = None) -> di
         ("classic", ["classic", "soft", "piano", "كلاسيك", "هادئ"]),
         ("noise", ["noise", "static", "glitch", "distort", "ضجيج", "تشويش"]),
         ("whoosh", ["whoosh", "swipe", "sweep", "انتقال", "سحب"]),
+        ("shutter", ["shutter", "camera", "كاميرا", "تصوير"]),
+        ("notification", ["notification", "ringtone", "notify", "اشعار", "تنبيه"]),
+        ("pop", ["pop", "bubble", "click", "بوب", "نقرة"]),
+        ("film", ["film", "grain", "cinematic", "سينمائي", "فيلم"]),
+        ("portrait", ["portrait", "9.16", "9:16", "vertical", "بورتريت", "عمودي"]),
+        ("landscape", ["landscape", "16.9", "16:9", "horizontal", "لاندسكيب", "افقي"]),
         ("business", ["business", "office", "meeting", "market", "work", "اعمال", "مكتب"]),
         ("search", ["search", "google", "seo", "بحث", "جوجل"]),
     ]
@@ -64,6 +73,8 @@ def classify_asset(filename: str, *, kind: str, prompt: str | None = None) -> di
         tags.extend(["energy", "business"])
     if kind == "sfx" and not tags:
         tags.append("impact")
+    if kind == "transition_video" and not any(tag in tags for tag in ["light", "film", "noise", "shock", "portrait", "landscape"]):
+        tags.extend(["light", "portrait"])
     if kind in VISUAL_KINDS and not tags:
         tags.extend(["business", "energy"])
     return {
@@ -80,6 +91,8 @@ def suggested_use_cases(kind: str, tags: list[str]) -> list[str]:
         return ["scene_boundary", "attention_beat", "text_hit"]
     if kind == "sfx":
         return ["attention_beat", "title_pop", "visual_accent"]
+    if kind == "transition_video":
+        return ["visual_transition", "scene_boundary", "flash_overlay"]
     if kind == "visual_video":
         return ["animated_background", "topic_cutaway", "scene_layer"]
     return ["background_image", "topic_cutaway", "scene_layer"]
@@ -188,6 +201,53 @@ async def create_asset_from_remote(
         source_url=source_url,
         created_by_user_id=created_by_user_id,
     )
+
+
+async def seed_builtin_creative_assets(db: AsyncSession) -> int:
+    if not BUILTIN_LIBRARY_MANIFEST.exists():
+        return 0
+    try:
+        manifest = json.loads(BUILTIN_LIBRARY_MANIFEST.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("Could not read built-in creative asset manifest: %s", exc)
+        return 0
+
+    entries = manifest.get("assets") if isinstance(manifest, dict) else None
+    if not isinstance(entries, list):
+        return 0
+
+    changed = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        kind = str(entry.get("kind") or "").strip()
+        storage_url = str(entry.get("storage_url") or "").strip()
+        library_key = str(entry.get("library_key") or "").strip()
+        if kind not in ALL_KINDS or not storage_url.startswith("/static/") or not library_key:
+            continue
+        source_url = f"builtin:{library_key}"
+        row = (
+            await db.execute(select(CreativeAsset).where(CreativeAsset.source_url == source_url))
+        ).scalar_one_or_none()
+        metadata = dict(entry.get("metadata") or {})
+        metadata.update({"builtin": True, "library_key": library_key})
+        if not row:
+            row = CreativeAsset(kind=kind, title=str(entry.get("title") or library_key), storage_url=storage_url, source_url=source_url)
+            db.add(row)
+            changed += 1
+        row.kind = kind
+        row.title = str(entry.get("title") or row.title or library_key)
+        row.storage_url = storage_url
+        row.content_type = entry.get("content_type")
+        row.duration_seconds = entry.get("duration_seconds")
+        row.tags = entry.get("tags") or []
+        row.use_cases = entry.get("use_cases") or suggested_use_cases(kind, row.tags or [])
+        row.classification = entry.get("classification") or classify_asset(row.title, kind=kind)
+        row.metadata_json = metadata
+        row.active = bool(entry.get("active", True))
+    if changed or entries:
+        await db.commit()
+    return changed
 
 
 async def generate_visual_asset_for_scene(
