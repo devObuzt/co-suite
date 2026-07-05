@@ -140,7 +140,18 @@ def google_drive_direct_url(url: str) -> str:
 
 
 def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=True, capture_output=True, text=True)
+    try:
+        return subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        # CalledProcessError's message only carries the argv; surface the
+        # actual tool output so remote failures are diagnosable from logs.
+        log.error(
+            "Command failed (%s, exit %s): %s",
+            command[0] if command else "?",
+            exc.returncode,
+            ((exc.stderr or exc.stdout or "").strip() or "no output")[-800:],
+        )
+        raise
 
 
 def remove_background_with_veed_fal(
