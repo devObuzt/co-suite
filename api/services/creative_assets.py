@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.admin import CreativeAsset
@@ -251,6 +251,17 @@ async def seed_builtin_creative_assets(db: AsyncSession) -> int:
     if changed or entries:
         await db.commit()
     return changed
+
+
+async def count_builtin_creative_assets(db: AsyncSession) -> int:
+    return int(
+        (
+            await db.execute(
+                select(func.count()).select_from(CreativeAsset).where(CreativeAsset.source_url.like("builtin:%"))
+            )
+        ).scalar_one()
+        or 0
+    )
 
 
 async def generate_visual_asset_for_scene(

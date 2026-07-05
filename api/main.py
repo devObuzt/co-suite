@@ -19,7 +19,7 @@ from .routers import admin
 from .routers import app_text
 from .routers import video_montage
 from .services.durable_generation_queue import run_forever
-from .services.creative_assets import seed_builtin_creative_assets
+from .services.creative_assets import count_builtin_creative_assets, seed_builtin_creative_assets
 
 app = FastAPI(title=settings.app_name, docs_url="/docs" if settings.debug else None)
 configure_logging()
@@ -115,8 +115,8 @@ async def startup():
         try:
             async with AsyncSessionLocal() as session:
                 seeded_assets = await seed_builtin_creative_assets(session)
-                if seeded_assets:
-                    log.info("Seeded %d built-in creative assets.", seeded_assets)
+                builtins_count = await count_builtin_creative_assets(session)
+                log.info("Built-in creative assets synced. inserted=%d total=%d", seeded_assets, builtins_count)
         except Exception as e:
             log.warning("built-in creative asset seed skipped: %s", e)
 
