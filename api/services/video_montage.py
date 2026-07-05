@@ -1060,6 +1060,8 @@ async def build_remotion_scene_manifest(
         selected_asset_ids.append(music_asset.id)
         background_music = {"publicPath": remotion_public_asset_path(music_asset.storage_url, work_dir, music_asset.id), "volume": 0.3, "assetId": music_asset.id}
 
+    serialized_creative_assets = [serialize_creative_asset(asset) for asset in active_assets]
+
     if db:
         await record_asset_usage(db, selected_asset_ids)
 
@@ -1080,7 +1082,7 @@ async def build_remotion_scene_manifest(
             "backgroundMusic": background_music,
             "soundEffects": sound_effects,
         },
-        "creativeAssets": [serialize_creative_asset(asset) for asset in active_assets],
+        "creativeAssets": serialized_creative_assets,
         "selectedCreativeAssetIds": sorted(set(selected_asset_ids)),
         "style": {"fontFamily": "ConnecAssistant", "arabicFontFamily": "ConnecCairo"},
         "scenes": scenes,
