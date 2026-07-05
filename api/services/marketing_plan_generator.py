@@ -27,10 +27,10 @@ MARKET_RESEARCH_MAX_TOKENS = 3000
 MARKET_RESEARCH_TIMEOUT_SECONDS = 160
 CUSTOMER_PERSONAS_MAX_TOKENS = 2200
 CUSTOMER_PERSONAS_TIMEOUT_SECONDS = 20
-SOCIAL_CONTENT_PLAN_MAX_TOKENS = 4200
-SOCIAL_CONTENT_PLAN_TIMEOUT_SECONDS = 120
-PAID_CONTENT_PLAN_MAX_TOKENS = 4200
-PAID_CONTENT_PLAN_TIMEOUT_SECONDS = 120
+SOCIAL_CONTENT_PLAN_MAX_TOKENS = 16000
+SOCIAL_CONTENT_PLAN_TIMEOUT_SECONDS = 240
+PAID_CONTENT_PLAN_MAX_TOKENS = 12000
+PAID_CONTENT_PLAN_TIMEOUT_SECONDS = 180
 
 
 class MarketingPlanGenerationError(RuntimeError):
@@ -145,6 +145,44 @@ def _extract_json_object(text: str) -> str | None:
     return None
 
 
+def _repair_truncated_json(text: str) -> str | None:
+    """Salvage a max_tokens-truncated JSON object: cut at the last completed
+    element and close every bracket that is still open."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    in_string, escape = False, False
+    stack: list[str] = []
+    last_close = -1
+    open_at_last_close: list[str] = []
+    for i, c in enumerate(text[start:], start):
+        if escape:
+            escape = False
+            continue
+        if c == "\\" and in_string:
+            escape = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c in "{[":
+            stack.append(c)
+        elif c in "}]":
+            if not stack:
+                return None
+            stack.pop()
+            if not stack:
+                return None  # complete object; nothing to repair
+            last_close = i
+            open_at_last_close = list(stack)
+    if last_close == -1:
+        return None
+    closers = "".join("}" if bracket == "{" else "]" for bracket in reversed(open_at_last_close))
+    return text[start : last_close + 1] + closers
+
+
 def parse_marketing_plan_json(raw: str) -> dict[str, Any]:
     text = raw.strip()
     if "```" in text:
@@ -158,7 +196,20 @@ def parse_marketing_plan_json(raw: str) -> dict[str, Any]:
             try:
                 return json.loads(candidate)
             except json.JSONDecodeError:
-                log.warning("Could not parse marketing plan JSON: %.240s", raw)
+                pass
+        repaired = _repair_truncated_json(text)
+        if repaired:
+            try:
+                data = json.loads(repaired)
+                log.warning(
+                    "Recovered truncated marketing plan JSON: kept %d of %d chars",
+                    len(repaired),
+                    len(text),
+                )
+                return data
+            except json.JSONDecodeError:
+                pass
+        log.warning("Could not parse marketing plan JSON: %.240s", raw)
         return {}
 
 
@@ -1435,16 +1486,29 @@ def _social_content_plan_context(payload: dict[str, Any], language: str) -> dict
     }
 
 
+SOCIAL_CONTENT_TYPE_KEYS = ("attraction", "trust", "sales")
+
+
 def build_social_content_plan_prompt(
     payload: dict[str, Any],
     language: str,
     monthly_posts: int,
     provider: str,
+    content_type: str | None = None,
 ) -> str:
     required_counts = social_content_required_counts(monthly_posts)
     context = _social_content_plan_context(payload, language)
     context_json = json.dumps(context, ensure_ascii=False, default=str)
     prompts = DEFAULT_SOCIAL_WORK_PLAN_PROMPTS
+    included_types = (
+        [content_type] if content_type in SOCIAL_CONTENT_TYPE_KEYS else list(SOCIAL_CONTENT_TYPE_KEYS)
+    )
+    type_field = included_types[0] if len(included_types) == 1 else "|".join(SOCIAL_CONTENT_TYPE_KEYS)
+    required_lines = "\n".join(f"- {kind}: {required_counts[kind]}" for kind in included_types)
+    type_sections = "\n\n".join(
+        f"{kind.capitalize()} prompt:\n{prompts[f'social.{kind}'].format(count=required_counts[kind])}"
+        for kind in included_types
+    )
     return f"""Generate candidate social media work-plan ideas for OneShare.
 
 Provider batch: {provider}.
@@ -1457,7 +1521,7 @@ Return this exact shape:
 {{
   "items": [
     {{
-      "type": "attraction|trust|sales",
+      "type": "{type_field}",
       "title": "short powerful title",
       "format": "reel|post|carousel",
       "hook_style": "Curiosity Hook|Promise Hook|Pattern Break / Shock|Question Hook|Story Hook",
@@ -1470,21 +1534,12 @@ Return this exact shape:
 }}
 
 Required count from this provider:
-- attraction: {required_counts["attraction"]}
-- trust: {required_counts["trust"]}
-- sales: {required_counts["sales"]}
+{required_lines}
 
 Base business definition:
 {prompts["social.base"]}
 
-Attraction prompt:
-{prompts["social.attraction"].format(count=required_counts["attraction"])}
-
-Trust prompt:
-{prompts["social.trust"].format(count=required_counts["trust"])}
-
-Sales prompt:
-{prompts["social.sales"].format(count=required_counts["sales"])}
+{type_sections}
 
 Hooks and idea rules:
 {prompts["social.hooks"]}
@@ -1704,8 +1759,10 @@ async def _generate_social_content_provider_batch(
     language: str,
     monthly_posts: int,
     provider: str,
+    content_type: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     model = settings.openai_text_model if provider == "openai" else settings.anthropic_text_model
+    label = f"{provider} ({content_type})" if content_type else provider
     if provider == "openai" and not settings.openai_api_key:
         return [], "OPENAI_API_KEY is missing; skipped OpenAI candidate batch."
     if provider == "anthropic" and not settings.anthropic_api_key:
@@ -1715,7 +1772,7 @@ async def _generate_social_content_provider_batch(
             provider=provider,
             model=model,
             max_tokens=SOCIAL_CONTENT_PLAN_MAX_TOKENS,
-            messages=[{"role": "user", "content": build_social_content_plan_prompt(payload, language, monthly_posts, provider)}],
+            messages=[{"role": "user", "content": build_social_content_plan_prompt(payload, language, monthly_posts, provider, content_type)}],
             system="You are a senior social media strategist. Return valid JSON only.",
             timeout=SOCIAL_CONTENT_PLAN_TIMEOUT_SECONDS,
         )
@@ -1723,15 +1780,18 @@ async def _generate_social_content_provider_batch(
         source_items = _list(_dict(parsed).get("items")) or _list(parsed)
         items = []
         for index, item in enumerate(source_items, start=1):
-            normalized = _normalize_social_content_candidate(item, index, provider)
-            if normalized:
+            normalized = _normalize_social_content_candidate(item, index, provider, kind_hint=content_type)
+            if normalized and (not content_type or normalized["type"] == content_type):
                 items.append(normalized)
         if not items:
-            return [], f"{provider} did not return usable social content ideas."
+            return [], f"{label} did not return usable social content ideas."
         return items, None
     except Exception as exc:
-        log.warning("Social content plan provider batch failed", extra={"provider": provider, "error": str(exc)})
-        return [], f"{provider} failed: {str(exc)}"
+        log.warning(
+            "Social content plan provider batch failed",
+            extra={"provider": provider, "content_type": content_type, "error": str(exc)},
+        )
+        return [], f"{label} failed: {str(exc)}"
 
 
 async def generate_social_content_work_plan(
@@ -1743,8 +1803,11 @@ async def generate_social_content_work_plan(
     monthly_posts = _safe_int(monthly_posts, 15, minimum=1, maximum=31)
     payload = suite_research_payload(suite, planning_inputs={"monthly_posts": monthly_posts})
     batches = await asyncio.gather(
-        _generate_social_content_provider_batch(payload, output_language, monthly_posts, "anthropic"),
-        _generate_social_content_provider_batch(payload, output_language, monthly_posts, "openai"),
+        *[
+            _generate_social_content_provider_batch(payload, output_language, monthly_posts, provider, content_type)
+            for provider in ("anthropic", "openai")
+            for content_type in SOCIAL_CONTENT_TYPE_KEYS
+        ]
     )
     all_items: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -1754,7 +1817,8 @@ async def generate_social_content_work_plan(
             warnings.append(warning)
     if not all_items:
         all_items = _fallback_social_content_items(payload, output_language, monthly_posts)
-    return normalize_social_content_plan(all_items, payload, output_language, monthly_posts, warnings)
+    deduped_warnings = list(dict.fromkeys(warnings))
+    return normalize_social_content_plan(all_items, payload, output_language, monthly_posts, deduped_warnings)
 
 
 DEFAULT_PAID_CONTENT_PLAN_PROMPTS = {
