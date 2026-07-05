@@ -12,6 +12,11 @@ from urllib.parse import quote_plus
 from ..core.config import settings
 from ..core.llm_client import call_text_ai
 from ..models.suite import Suite
+from .content_rules import (
+    apply_replace_rules_to_item,
+    brand_content_rules,
+    format_content_rules_prompt,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1509,6 +1514,8 @@ def build_social_content_plan_prompt(
         f"{kind.capitalize()} prompt:\n{prompts[f'social.{kind}'].format(count=required_counts[kind])}"
         for kind in included_types
     )
+    rules_block = format_content_rules_prompt(brand_content_rules(_dict(payload.get("brand"))))
+    rules_section = f"\n{rules_block}\n" if rules_block else ""
     return f"""Generate candidate social media work-plan ideas for OneShare.
 
 Provider batch: {provider}.
@@ -1543,7 +1550,7 @@ Base business definition:
 
 Hooks and idea rules:
 {prompts["social.hooks"]}
-
+{rules_section}
 Business/profile data:
 {context_json}
 """
@@ -1721,6 +1728,11 @@ def normalize_social_content_plan(
             if len(grouped[item_type]) >= minimum_candidates:
                 break
 
+    content_rules = brand_content_rules(_dict(payload.get("brand")))
+    for group in grouped.values():
+        for item in group:
+            apply_replace_rules_to_item(item, content_rules, ("title", "idea", "script", "cta", "rationale"))
+
     selected_ids: list[str] = []
     for item_type, count in required_counts.items():
         selected_ids.extend(item["id"] for item in grouped[item_type][:count])
@@ -1873,6 +1885,8 @@ def build_paid_content_plan_prompt(payload: dict[str, Any], language: str, provi
     context_json = json.dumps(context, ensure_ascii=False, default=str)
     stages_json = json.dumps(PAID_CONTENT_FUNNEL_STAGES, ensure_ascii=False)
     prompts = DEFAULT_PAID_CONTENT_PLAN_PROMPTS
+    rules_block = format_content_rules_prompt(brand_content_rules(_dict(payload.get("brand"))))
+    rules_section = f"\n{rules_block}\n" if rules_block else ""
     return f"""Generate paid marketing content-plan ad ideas for OneShare.
 
 Provider batch: {provider}.
@@ -1908,7 +1922,7 @@ Base business definition:
 
 Paid funnel rules:
 {prompts["paid.stage"]}
-
+{rules_section}
 Stages:
 {stages_json}
 
@@ -2098,6 +2112,13 @@ def normalize_paid_content_plan(
             seen.add(marker)
             if len(grouped[key]) >= 2:
                 break
+
+    content_rules = brand_content_rules(_dict(payload.get("brand")))
+    for group in grouped.values():
+        for item in group:
+            apply_replace_rules_to_item(
+                item, content_rules, ("title", "hook", "visual_idea", "copy", "cta", "prompt", "rationale")
+            )
 
     selected_ids: list[str] = []
     for stage in PAID_CONTENT_FUNNEL_STAGES:

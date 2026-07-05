@@ -11,6 +11,11 @@ from ..models.suite import Suite, SuiteMember, SuiteStatus, MemberRole
 from ..services.media_storage import storage_status, test_public_storage
 from ..services.multi_scraper import search_market_content
 from ..services.meta_ads_library import fetch_meta_ads_inspiration
+from ..services.content_rules import (
+    new_rule,
+    normalize_content_rules,
+    suggest_rules_from_feedback,
+)
 from ..services.suite_memory import build_suite_memory_v0, merge_suite_brand
 
 router = APIRouter(prefix="/suites", tags=["suites"])
@@ -183,6 +188,102 @@ async def update_brand(
         suite.status = SuiteStatus.active
     await db.commit()
     return {"ok": True}
+
+
+class ContentRuleInput(BaseModel):
+    text: str = ""
+    replace_from: str = Field(default="", alias="from")
+    replace_to: str = Field(default="", alias="to")
+
+    model_config = {"populate_by_name": True}
+
+
+class AddContentRulesRequest(BaseModel):
+    rules: list[ContentRuleInput] = Field(default_factory=list)
+    source: str = "manual"
+
+
+class TeachContentRulesRequest(BaseModel):
+    feedback: str = ""
+    original: str = ""
+    edited: str = ""
+
+
+async def _get_owned_suite(db: AsyncSession, suite_id: str, user: User) -> Suite:
+    result = await db.execute(select(Suite).where(Suite.id == suite_id))
+    suite = result.scalar_one_or_none()
+    if not suite or suite.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="Suite not found")
+    return suite
+
+
+@router.get("/{suite_id}/content-rules")
+async def list_content_rules(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_owned_suite(db, suite_id, current_user)
+    return {"rules": normalize_content_rules((suite.brand or {}).get("content_rules"))}
+
+
+@router.post("/{suite_id}/content-rules")
+async def add_content_rules(
+    suite_id: str,
+    data: AddContentRulesRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_owned_suite(db, suite_id, current_user)
+    incoming = []
+    for item in data.rules:
+        rule = new_rule(
+            text=item.text,
+            replace_from=item.replace_from,
+            replace_to=item.replace_to,
+            source=data.source or "manual",
+        )
+        if rule:
+            incoming.append(rule)
+    if not incoming:
+        raise HTTPException(status_code=422, detail="No valid rules in request")
+    brand = dict(suite.brand or {})
+    rules = normalize_content_rules([*(brand.get("content_rules") or []), *incoming])
+    brand["content_rules"] = rules
+    suite.brand = brand
+    await db.commit()
+    return {"ok": True, "rules": rules}
+
+
+@router.delete("/{suite_id}/content-rules/{rule_id}")
+async def delete_content_rule(
+    suite_id: str,
+    rule_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_owned_suite(db, suite_id, current_user)
+    brand = dict(suite.brand or {})
+    rules = normalize_content_rules(brand.get("content_rules"))
+    remaining = [rule for rule in rules if rule.get("id") != rule_id]
+    if len(remaining) == len(rules):
+        raise HTTPException(status_code=404, detail="Rule not found")
+    brand["content_rules"] = remaining
+    suite.brand = brand
+    await db.commit()
+    return {"ok": True, "rules": remaining}
+
+
+@router.post("/{suite_id}/content-rules/teach")
+async def teach_content_rules(
+    suite_id: str,
+    data: TeachContentRulesRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _get_owned_suite(db, suite_id, current_user)
+    suggestions = await suggest_rules_from_feedback(data.feedback, data.original, data.edited)
+    return {"suggestions": suggestions}
 
 
 @router.get("/{suite_id}/loops")

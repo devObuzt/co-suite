@@ -31,6 +31,12 @@ from .ai_router import (
     resolve_ai_route,
     text_rendering_mode_for_media,
 )
+from .content_rules import (
+    apply_replace_rules,
+    apply_replace_rules_to_item,
+    brand_content_rules,
+    format_content_rules_prompt,
+)
 from .media_storage import STATIC_DIR, store_post_media
 
 log = logging.getLogger(__name__)
@@ -221,14 +227,9 @@ def _build_brand_summary(brand: dict, strategy: Optional[dict] = None, use_brand
             f"\nContent themes: {', '.join(plan.get('content_themes') or [])}"
         )
 
-    rules = brand.get("content_rules") or []
-    if rules:
-        summary += "\n\nLEARNED CONTENT RULES FROM USER FEEDBACK:"
-        for rule in rules[-12:]:
-            if isinstance(rule, dict):
-                summary += f"\n- {rule.get('text', '')}"
-            else:
-                summary += f"\n- {rule}"
+    rules_block = format_content_rules_prompt(brand_content_rules(brand))
+    if rules_block:
+        summary += f"\n\n{rules_block}"
 
     return summary
 
@@ -385,10 +386,30 @@ def _generate_ideas(
                 messages=[{"role": "user", "content": user}],
             )
             data = json.loads(_strip_json_fences(raw))
-            return _normalize_ideas(data.get("posts", []), language=language, options=options)
+            ideas = _normalize_ideas(data.get("posts", []), language=language, options=options)
+            return _apply_content_rules_to_ideas(ideas, brand)
         except json.JSONDecodeError as e:
             log.warning("Attempt %d: invalid JSON from Claude: %s", attempt + 1, e)
     return []
+
+
+_IDEA_RULE_FIELDS = ("topic", "caption", "hook", "cta", "visible_text", "image_title_ar", "video_title_ar")
+_SLIDE_RULE_FIELDS = ("visible_text", "title_ar", "title", "text", "headline")
+
+
+def _apply_content_rules_to_ideas(ideas: list[dict], brand: dict) -> list[dict]:
+    """Enforce user replace-rules on every text field the audience can see."""
+    rules = brand_content_rules(brand)
+    if not rules:
+        return ideas
+    for idea in ideas:
+        apply_replace_rules_to_item(idea, rules, _IDEA_RULE_FIELDS)
+        for slide in idea.get("carousel_slides") or []:
+            if isinstance(slide, dict):
+                apply_replace_rules_to_item(slide, rules, _SLIDE_RULE_FIELDS)
+        if isinstance(idea.get("hashtags"), list):
+            idea["hashtags"] = [apply_replace_rules(tag, rules) for tag in idea["hashtags"]]
+    return ideas
 
 
 def _normalize_ideas(posts: list[dict], language: str = "ar", options: Optional[dict] = None) -> list[dict]:
