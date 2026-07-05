@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.admin import CreativeAsset
@@ -216,6 +216,8 @@ async def seed_builtin_creative_assets(db: AsyncSession) -> int:
     if not isinstance(entries, list):
         return 0
 
+    await db.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": 1937440217})
+
     changed = 0
     for entry in entries:
         if not isinstance(entry, dict):
@@ -226,9 +228,10 @@ async def seed_builtin_creative_assets(db: AsyncSession) -> int:
         if kind not in ALL_KINDS or not storage_url.startswith("/static/") or not library_key:
             continue
         source_url = f"builtin:{library_key}"
-        row = (
-            await db.execute(select(CreativeAsset).where(CreativeAsset.source_url == source_url))
-        ).scalar_one_or_none()
+        with db.no_autoflush:
+            row = (
+                await db.execute(select(CreativeAsset).where(CreativeAsset.source_url == source_url))
+            ).scalar_one_or_none()
         metadata = dict(entry.get("metadata") or {})
         metadata.update({"builtin": True, "library_key": library_key})
         if not row:
