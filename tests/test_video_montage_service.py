@@ -70,7 +70,8 @@ def test_veed_fal_background_removal_requests_transparent_person_video(tmp_path,
     }
 
 
-def test_render_remotion_pipeline_uses_transparent_subject_layers(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_render_remotion_pipeline_uses_transparent_subject_layers(tmp_path, monkeypatch):
     source = tmp_path / "transparent.webm"
     output = tmp_path / "render.mp4"
     source.write_bytes(b"webm")
@@ -107,7 +108,8 @@ def test_render_remotion_pipeline_uses_transparent_subject_layers(tmp_path, monk
         brand={"name": "كونيك", "colors": {"primary": "#2f80ff"}},
     )
 
-    result = video_montage.render_remotion_montage(
+    result = await video_montage.render_remotion_montage(
+        db=None,
         transparent_source_path=source,
         output_path=output,
         suite=suite,
@@ -132,7 +134,8 @@ def test_remotion_component_renders_background_music_and_sound_effects():
     assert "key={`sfx-" in source
 
 
-def test_remotion_manifest_generates_silent_audio_when_source_has_no_audio(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_remotion_manifest_generates_silent_audio_when_source_has_no_audio(tmp_path, monkeypatch):
     source = tmp_path / "transparent.webm"
     source.write_bytes(b"webm")
     work_dir = tmp_path / "work"
@@ -168,7 +171,8 @@ def test_remotion_manifest_generates_silent_audio_when_source_has_no_audio(tmp_p
         brand={"name": "كونيك"},
     )
 
-    manifest_path, _scenes = video_montage.build_remotion_scene_manifest(
+    manifest_path, _scenes = await video_montage.build_remotion_scene_manifest(
+        db=None,
         transparent_source_path=source,
         work_dir=work_dir,
         suite=suite,
@@ -182,7 +186,8 @@ def test_remotion_manifest_generates_silent_audio_when_source_has_no_audio(tmp_p
     assert '"/remotion/inputs/transparent-audio.m4a"' in manifest_path.read_text(encoding="utf-8")
 
 
-def test_remotion_manifest_splits_single_transcript_into_multiple_scenes(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_remotion_manifest_splits_single_transcript_into_multiple_scenes(tmp_path, monkeypatch):
     source = tmp_path / "transparent.webm"
     source.write_bytes(b"webm")
     work_dir = tmp_path / "work"
@@ -215,7 +220,8 @@ def test_remotion_manifest_splits_single_transcript_into_multiple_scenes(tmp_pat
         brand={"name": "كونيك"},
     )
 
-    manifest_path, scenes = video_montage.build_remotion_scene_manifest(
+    manifest_path, scenes = await video_montage.build_remotion_scene_manifest(
+        db=None,
         transparent_source_path=source,
         work_dir=work_dir,
         suite=suite,
@@ -231,7 +237,8 @@ def test_remotion_manifest_splits_single_transcript_into_multiple_scenes(tmp_pat
     assert manifest.count('"publicPath": "/remotion/sound/soft-whoosh.wav"') == 2
 
 
-def test_remotion_manifest_uses_manual_caption_and_title_overrides(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_remotion_manifest_uses_manual_caption_and_title_overrides(tmp_path, monkeypatch):
     source = tmp_path / "transparent.webm"
     source.write_bytes(b"webm")
     work_dir = tmp_path / "work"
@@ -263,7 +270,8 @@ def test_remotion_manifest_uses_manual_caption_and_title_overrides(tmp_path, mon
         brand={"name": "كونيك"},
     )
 
-    manifest_path, scenes = video_montage.build_remotion_scene_manifest(
+    manifest_path, scenes = await video_montage.build_remotion_scene_manifest(
+        db=None,
         transparent_source_path=source,
         work_dir=work_dir,
         suite=suite,
@@ -296,7 +304,7 @@ async def test_generate_video_montage_prefers_veed_remotion_pipeline(tmp_path, m
         transparent.write_bytes(b"transparent-webm")
         return {"ok": True, "provider": "veed-fal", "output_path": str(transparent)}
 
-    def fake_render_remotion(**kwargs):
+    async def fake_render_remotion(**kwargs):
         Path(kwargs["output_path"]).write_bytes(b"mp4")
         return {
             "rendered": True,
@@ -354,7 +362,7 @@ async def test_generate_video_montage_uses_remotion_for_uploaded_green_screen_so
         transparent.write_bytes(b"transparent-local-webm")
         return {"ok": True, "provider": "local-chromakey", "output_path": str(transparent)}
 
-    def fake_render_remotion(**kwargs):
+    async def fake_render_remotion(**kwargs):
         Path(kwargs["output_path"]).write_bytes(b"mp4")
         return {
             "rendered": True,
