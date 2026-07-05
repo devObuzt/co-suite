@@ -18,6 +18,7 @@ from .generation_jobs import (
     mark_progress,
     mark_provider_limit,
     mark_running,
+    safe_generation_error,
     update_job,
     utcnow,
 )
@@ -53,10 +54,11 @@ def retry_delay_seconds(job: GenerationJob) -> int:
 def retry_fields_for_error(job: GenerationJob, error: Exception) -> dict:
     next_retry_count = int(job.retry_count or 0) + 1
     if next_retry_count > int(job.max_retries or 0):
+        safe_error = safe_generation_error(str(error)) or "unknown error"
         return {
             "status": GenerationJobStatus.failed,
             "stage": "failed",
-            "message": "Generation failed after retries.",
+            "message": f"Generation failed after retries: {safe_error}",
             "progress": 100,
             "error": str(error),
             "finished_at": utcnow(),

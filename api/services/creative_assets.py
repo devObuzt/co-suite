@@ -135,7 +135,7 @@ async def record_asset_usage(db: AsyncSession, asset_ids: list[str]) -> None:
     for row in rows:
         row.usage_count = int(row.usage_count or 0) + asset_ids.count(row.id)
         row.last_used_at = now
-    await db.commit()
+    await db.flush()
 
 
 async def create_asset_from_bytes(

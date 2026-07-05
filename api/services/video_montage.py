@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import random
 import re
@@ -30,6 +31,8 @@ from .creative_assets import (
     record_asset_usage,
     serialize_creative_asset,
 )
+
+log = logging.getLogger(__name__)
 
 ProgressWriter = Callable[[dict[str, Any]], None]
 
@@ -69,9 +72,13 @@ def remotion_public_asset_path(storage_url: str, work_dir: Path, asset_id: str |
     target_dir.mkdir(parents=True, exist_ok=True)
     target_name = safe_filename(f"{asset_id or source.stem}{source.suffix}", source.name)
     target = target_dir / target_name
-    if not target.exists():
-        shutil.copyfile(source, target)
-    return f"/remotion/creative-assets/{target.name}"
+    try:
+        if not target.exists():
+            shutil.copyfile(source, target)
+        return f"/remotion/creative-assets/{target.name}"
+    except OSError:
+        log.exception("Failed to prepare Remotion creative asset %s", asset_id or source.name)
+        return storage_url
 
 
 def safe_filename(filename: str | None, fallback: str = "source.mp4") -> str:
@@ -1082,7 +1089,10 @@ async def build_remotion_scene_manifest(
     serialized_creative_assets = [serialize_creative_asset(asset) for asset in active_assets]
 
     if db:
-        await record_asset_usage(db, selected_asset_ids)
+        try:
+            await record_asset_usage(db, selected_asset_ids)
+        except Exception:
+            log.exception("Failed to record creative asset usage for video montage job")
 
     manifest = {
         "fps": fps,
