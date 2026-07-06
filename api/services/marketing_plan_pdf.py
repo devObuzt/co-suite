@@ -27,9 +27,37 @@ from api.services.marketing_plan_generator import infer_plan_language
 
 log = logging.getLogger(__name__)
 
-# System library dirs for the WeasyPrint subprocess fallback (nix python cannot
+# Apt library dirs for the WeasyPrint subprocess fallback (nix python cannot
 # dlopen apt-installed pango/gobject without an explicit LD_LIBRARY_PATH).
-_SYSTEM_LIB_DIRS = "/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
+_SYSTEM_LIB_DIRS = ("/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu")
+
+# Never expose the core toolchain libs to the subprocess — shadowing the nix
+# python's own libc/ssl family crashes the interpreter at startup.
+_LIB_EXCLUDE_PREFIXES = (
+    "libc.", "libc-", "libm.", "libm-", "libmvec", "libpthread", "libdl", "librt",
+    "ld-", "libresolv", "libnsl", "libutil", "libgcc_s", "libstdc++",
+    "libssl", "libcrypto", "libnss_", "libanl",
+)
+
+
+def _prepare_weasyprint_lib_dir(tmp: Path) -> str:
+    """Symlink only the pango/gobject dependency closure into a private dir."""
+    libdir = tmp / "libs"
+    libdir.mkdir(exist_ok=True)
+    for src_dir in _SYSTEM_LIB_DIRS:
+        source = Path(src_dir)
+        if not source.is_dir():
+            continue
+        for so_path in source.glob("lib*.so*"):
+            if so_path.name.startswith(_LIB_EXCLUDE_PREFIXES):
+                continue
+            target = libdir / so_path.name
+            if not target.exists():
+                try:
+                    target.symlink_to(so_path)
+                except OSError:
+                    continue
+    return str(libdir)
 
 
 def _render_html_to_pdf(html: str) -> bytes:
@@ -40,11 +68,13 @@ def _render_html_to_pdf(html: str) -> bytes:
     except OSError as exc:
         log.warning("WeasyPrint in-process load failed (%s); falling back to subprocess", exc)
     with tempfile.TemporaryDirectory() as tmp:
-        html_path = Path(tmp) / "deck.html"
-        pdf_path = Path(tmp) / "deck.pdf"
+        tmp_path = Path(tmp)
+        html_path = tmp_path / "deck.html"
+        pdf_path = tmp_path / "deck.pdf"
         html_path.write_text(html, encoding="utf-8")
         env = dict(os.environ)
-        env["LD_LIBRARY_PATH"] = _SYSTEM_LIB_DIRS + ":" + env.get("LD_LIBRARY_PATH", "")
+        libdir = _prepare_weasyprint_lib_dir(tmp_path)
+        env["LD_LIBRARY_PATH"] = libdir + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
         result = subprocess.run(
             [sys.executable, "-m", "weasyprint", str(html_path), str(pdf_path)],
             env=env,
