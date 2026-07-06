@@ -46,6 +46,7 @@ WEB_ROOT = REPO_ROOT / "web"
 MAX_REMOTE_BYTES = 500 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 45
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
+MAX_DISTINCT_BACKGROUND_VIDEOS = 2
 FAL_VEED_MODEL = "veed/video-background-removal"
 
 
@@ -155,7 +156,35 @@ def remotion_public_asset_path(storage_url: str, work_dir: Path, asset_id: str |
     target = target_dir / target_name
     try:
         if not target.exists():
-            shutil.copyfile(source, target)
+            # 4K library clips (e.g. HEVC transitions) blow up the compositor's
+            # decode memory; bring anything above 1080x1920 down before render.
+            if is_video_file(source) and max(probe_video_dimensions(source)) > 1920:
+                try:
+                    run_command(
+                        [
+                            "ffmpeg",
+                            "-y",
+                            "-i",
+                            str(source),
+                            "-vf",
+                            "scale=w=1080:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2",
+                            "-c:v",
+                            "libx264",
+                            "-preset",
+                            "veryfast",
+                            "-crf",
+                            "22",
+                            "-c:a",
+                            "aac",
+                            "-b:a",
+                            "128k",
+                            str(target),
+                        ]
+                    )
+                except Exception:
+                    target.unlink(missing_ok=True)
+            if not target.exists():
+                shutil.copyfile(source, target)
         if is_video_file(target) and probe_duration_seconds(target) <= 0:
             log.warning(
                 "Skipping unreadable Remotion creative asset %s at %s (ffprobe found no duration)",
@@ -367,6 +396,29 @@ def probe_duration_seconds(path: Path) -> float:
         ]
     )
     return max(0.1, float(result.stdout.strip()))
+
+
+def probe_video_dimensions(path: Path) -> tuple[int, int]:
+    try:
+        result = run_command(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=s=x:p=0",
+                str(path),
+            ]
+        )
+        raw = (result.stdout.strip().splitlines() or ["0x0"])[0]
+        width, height = (raw.split("x") + ["0", "0"])[:2]
+        return int(width or 0), int(height or 0)
+    except Exception:
+        return 0, 0
 
 
 async def download_source(source_url: str, destination: Path) -> tuple[Path | None, str | None]:
@@ -1101,6 +1153,7 @@ async def build_remotion_scene_manifest(
             log.warning("Skipped %s missing local creative assets while building Remotion manifest", skipped_count)
         active_assets = available_assets
     selected_asset_ids: list[str] = []
+    distinct_background_video_ids: set[str] = set()
     scenes: list[dict[str, Any]] = []
     for index, segment in enumerate(transcript_segments[:18]):
         start = max(0.0, float(segment.get("start") or 0) - 0.12)
@@ -1126,6 +1179,16 @@ async def build_remotion_scene_manifest(
                     active_assets.append(visual_video_asset)
             except Exception:
                 visual_video_asset = None
+        # Every distinct background video adds an OffthreadVideo decoder to the
+        # compositor; renders were OOM-killed at the 8GB container limit.
+        if (
+            visual_video_asset
+            and visual_video_asset.id not in distinct_background_video_ids
+            and len(distinct_background_video_ids) >= MAX_DISTINCT_BACKGROUND_VIDEOS
+        ):
+            visual_video_asset = None
+        if visual_video_asset:
+            distinct_background_video_ids.add(visual_video_asset.id)
         visual_asset = pick_asset(active_assets, kind="visual_image", scene_text=caption)
         if not visual_asset and db and index < 4:
             try:
