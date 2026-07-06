@@ -1156,14 +1156,9 @@ async def build_remotion_scene_manifest(
     sound_effects: list[dict[str, Any]] = []
     visual_transitions: list[dict[str, Any]] = []
     for index, start in enumerate(starts[1:]):
-        asset = transition_assets[index % len(transition_assets)] if transition_assets else None
-        if asset:
-            public_path = remotion_public_asset_path(asset.storage_url, work_dir, asset.id)
-            if public_path:
-                selected_asset_ids.append(asset.id)
-                sound_effects.append({"publicPath": public_path, "at": round(start, 3), "volume": 0.5, "assetId": asset.id, "kind": "transition"})
-        elif whoosh_path.exists():
-            sound_effects.append({"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.58, "kind": "transition"})
+        # Library transition clips carry their own embedded sound, so a
+        # boundary that gets a visual transition needs no extra audio layer.
+        visual_transition_added = False
         visual_asset = transition_video_assets[index % len(transition_video_assets)] if transition_video_assets else None
         if visual_asset:
             public_path = remotion_public_asset_path(visual_asset.storage_url, work_dir, visual_asset.id)
@@ -1174,11 +1169,22 @@ async def build_remotion_scene_manifest(
                         "publicPath": public_path,
                         "at": round(start, 3),
                         "duration": min(1.2, max(0.35, float(visual_asset.duration_seconds or 0.7))),
-                        "volume": 0.28,
+                        "volume": 0.5,
                         "assetId": visual_asset.id,
                         "kind": "transition_video",
                     }
                 )
+                visual_transition_added = True
+        if visual_transition_added:
+            continue
+        asset = transition_assets[index % len(transition_assets)] if transition_assets else None
+        if asset:
+            public_path = remotion_public_asset_path(asset.storage_url, work_dir, asset.id)
+            if public_path:
+                selected_asset_ids.append(asset.id)
+                sound_effects.append({"publicPath": public_path, "at": round(start, 3), "volume": 0.5, "assetId": asset.id, "kind": "transition"})
+        elif whoosh_path.exists():
+            sound_effects.append({"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.58, "kind": "transition"})
 
     beat_cursor = 0.0
     for scene_index, scene in enumerate(scenes):
