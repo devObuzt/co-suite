@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     # exhaust worker memory on long/4K sources
     remotion_render_concurrency: int = 2
 
+    # Remotion OffthreadVideo frame cache cap. Remotion's default is half the
+    # system memory as seen from inside the container, which ignores the cgroup
+    # limit and lets the kernel OOM-kill the compositor mid-render.
+    remotion_offthread_cache_mb: int = 512
+
     @field_validator("database_url", mode="before")
     @classmethod
     def fix_db_url(cls, v: str) -> str:

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from api.core.config import settings
 from api.models.suite import Suite
 from api.services import video_montage
 from api.services.video_montage import foreground_filter_chain, render_v1_video
@@ -15,6 +16,26 @@ def test_foreground_filter_preserves_subject_quality():
     assert "chromakey=0x00b050:0.18:0.03" in chain
     assert "scale=w='iw*" not in chain
     assert "flags=lanczos" in chain
+
+
+def test_run_command_failure_log_keeps_error_head_and_tail(monkeypatch, caplog):
+    # Remotion prints the real error message before pages of repeated stack
+    # traces; a tail-only excerpt used to lose it.
+    head = "Compositor panicked: could not extract frame from creative asset"
+    stderr = head + "\n" + ("    at offthread-video-server.js:104:26\n" * 300)
+
+    def fake_run(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, ["npm"], output="", stderr=stderr)
+
+    monkeypatch.setattr(video_montage.subprocess, "run", fake_run)
+
+    with caplog.at_level("ERROR", logger=video_montage.log.name):
+        with pytest.raises(subprocess.CalledProcessError):
+            video_montage.run_command(["npm", "exec"])
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert head in logged
+    assert "[... truncated ...]" in logged
 
 
 def test_veed_fal_background_removal_requests_transparent_person_video(tmp_path, monkeypatch):
@@ -81,6 +102,8 @@ async def test_render_remotion_pipeline_uses_transparent_subject_layers(tmp_path
     monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
     monkeypatch.setattr(video_montage, "transcribe_video_segments", lambda _path, _dir: ([{"start": 0.0, "end": 2.8, "text": "هيك فيك تجيب ليدز جداد"}, {"start": 2.9, "end": 5.8, "text": "ونزيد المبيعات بسرعة"}], None))
 
+    render_commands: list[list[str]] = []
+
     def fake_run_command(command: list[str]):
         command_text = " ".join(command)
         if "frame_%05d.png" in command_text:
@@ -88,6 +111,7 @@ async def test_render_remotion_pipeline_uses_transparent_subject_layers(tmp_path
             frames_dir.mkdir(parents=True, exist_ok=True)
             (frames_dir / "frame_00000.png").write_bytes(b"png")
         elif command[:2] == ["npm", "exec"]:
+            render_commands.append(command)
             output.write_bytes(b"mp4")
         elif "-c:a" in command:
             Path(command[-1]).write_bytes(b"audio")
@@ -124,6 +148,13 @@ async def test_render_remotion_pipeline_uses_transparent_subject_layers(tmp_path
     manifest = (output.parent / "remotion-work" / "src" / "remotion" / "manifest.generated.json")
     assert manifest.exists()
     assert '"hasAlpha": true' in manifest.read_text(encoding="utf-8")
+
+    # The compositor sizes its frame cache to half the host memory unless
+    # capped, which OOM-kills renders inside the 8GB worker container.
+    assert len(render_commands) == 1
+    render_command = render_commands[0]
+    cache_flag_index = render_command.index("--offthreadvideo-cache-size-in-bytes")
+    assert render_command[cache_flag_index + 1] == str(settings.remotion_offthread_cache_mb * 1024 * 1024)
 
 
 def test_remotion_component_renders_background_music_and_sound_effects():

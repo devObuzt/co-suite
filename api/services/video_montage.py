@@ -201,11 +201,15 @@ def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
     except subprocess.CalledProcessError as exc:
         # CalledProcessError's message only carries the argv; surface the
         # actual tool output so remote failures are diagnosable from logs.
+        # Keep the head too: Remotion prints the actual error message before
+        # several repeated stack traces, so a tail-only excerpt loses it.
+        output = (exc.stderr or exc.stdout or "").strip() or "no output"
+        excerpt = output if len(output) <= 4000 else f"{output[:2000]}\n[... truncated ...]\n{output[-2000:]}"
         log.error(
             "Command failed (%s, exit %s): %s",
             command[0] if command else "?",
             exc.returncode,
-            ((exc.stderr or exc.stdout or "").strip() or "no output")[-800:],
+            excerpt,
         )
         raise
 
@@ -1303,6 +1307,11 @@ async def render_remotion_montage(
                 # the container's memory (compositor gets SIGKILLed at 8GB).
                 "--concurrency",
                 str(max(1, settings.remotion_render_concurrency)),
+                # Remotion sizes this cache to half the *host* memory by
+                # default; on an 8GB-capped container the kernel OOM-kills the
+                # compositor once scenes stack several OffthreadVideo layers.
+                "--offthreadvideo-cache-size-in-bytes",
+                str(max(64, settings.remotion_offthread_cache_mb) * 1024 * 1024),
             ]
         )
     except subprocess.CalledProcessError as exc:
