@@ -273,6 +273,8 @@ async def generate_visual_asset_for_scene(
 ) -> CreativeAsset | None:
     base_prompt = (
         "Vertical 9:16 cinematic marketing background for a short social video. "
+        "Background plate only: absolutely no people, faces, hands, bodies, or human silhouettes — "
+        "a real person is composited on top and any generated human reads as a glitch. "
         "No readable text, no logos, no UI screenshots. Leave clean center space for a talking person. "
         "Make it modern, high-energy, premium, and clearly connected to this spoken line: "
         f"{scene_text}. Business name: {suite.name}."
