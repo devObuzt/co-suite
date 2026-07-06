@@ -3,8 +3,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from html import escape
+import logging
+import os
 from pathlib import Path
 import re
+import subprocess
+import sys
+import tempfile
 from typing import Any
 
 import arabic_reshaper
@@ -19,6 +24,36 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, 
 
 from api.models.suite import Suite
 from api.services.marketing_plan_generator import infer_plan_language
+
+log = logging.getLogger(__name__)
+
+# System library dirs for the WeasyPrint subprocess fallback (nix python cannot
+# dlopen apt-installed pango/gobject without an explicit LD_LIBRARY_PATH).
+_SYSTEM_LIB_DIRS = "/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
+
+
+def _render_html_to_pdf(html: str) -> bytes:
+    try:
+        import weasyprint
+
+        return weasyprint.HTML(string=html).write_pdf()
+    except OSError as exc:
+        log.warning("WeasyPrint in-process load failed (%s); falling back to subprocess", exc)
+    with tempfile.TemporaryDirectory() as tmp:
+        html_path = Path(tmp) / "deck.html"
+        pdf_path = Path(tmp) / "deck.pdf"
+        html_path.write_text(html, encoding="utf-8")
+        env = dict(os.environ)
+        env["LD_LIBRARY_PATH"] = _SYSTEM_LIB_DIRS + ":" + env.get("LD_LIBRARY_PATH", "")
+        result = subprocess.run(
+            [sys.executable, "-m", "weasyprint", str(html_path), str(pdf_path)],
+            env=env,
+            capture_output=True,
+            timeout=180,
+        )
+        if result.returncode != 0 or not pdf_path.exists():
+            raise RuntimeError(f"weasyprint subprocess failed: {result.stderr.decode(errors='replace')[-400:]}")
+        return pdf_path.read_bytes()
 
 
 SLIDE_SIZE = (900, 507)
@@ -1328,8 +1363,6 @@ h2 {{ font-size: 40px; font-weight: 800; line-height: 1.25; margin-bottom: 6px; 
 
 
 def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
-    import weasyprint
-
     intelligence = _intelligence(suite)
     language = infer_plan_language(suite, intelligence.get("language") or intelligence.get("audience_language"))
     labels = _labels(language)
@@ -1535,5 +1568,5 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
         + "".join(sections)
         + "</body></html>"
     )
-    pdf_bytes = weasyprint.HTML(string=html).write_pdf()
+    pdf_bytes = _render_html_to_pdf(html)
     return pdf_bytes, _filename(suite)
