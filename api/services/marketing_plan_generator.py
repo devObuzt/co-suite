@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import logging
 import re
@@ -116,6 +116,8 @@ REAL_WORLD_PRODUCTION_MODES = {
     "talking_head": ["human_video"],
     "founder_video": ["human_video"],
     "ugc": ["human_video"],
+    "acted_scene": ["human_video"],
+    "conversation_video": ["human_video"],
     "store_video": ["location_video"],
     "office_video": ["location_video"],
     "location_video": ["location_video"],
@@ -123,6 +125,27 @@ REAL_WORLD_PRODUCTION_MODES = {
     "product_video": ["product_photos", "product_video"],
     "manual_upload": ["client_asset"],
 }
+
+PRODUCTION_MODE_LABELS_AR = {
+    "ai_image": "صورة بالذكاء الاصطناعي",
+    "ai_carousel": "كاروسيل بالذكاء الاصطناعي",
+    "ai_video": "فيديو بالذكاء الاصطناعي",
+    "talking_head": "شخص يتحدث للكاميرا",
+    "founder_video": "فيديو صاحب المصلحة",
+    "ugc": "فيديو من عميل (UGC)",
+    "acted_scene": "تمثيل مشهد",
+    "conversation_video": "تصوير محادثة",
+    "store_video": "تصوير المتجر/المحل",
+    "office_video": "تصوير المكتب",
+    "location_video": "تصوير الموقع",
+    "product_photo": "صور منتجات",
+    "product_video": "فيديو منتج",
+    "manual_upload": "رفع ملف جاهز",
+}
+
+AI_CAPABILITY_VALUES = {"ai", "user_recommended", "user_required"}
+
+SOCIAL_PLAN_TYPES = {"weekly": 7, "monthly": 30}
 
 
 def _extract_json_object(text: str) -> str | None:
@@ -356,6 +379,11 @@ def _normalize_production_mode(value: Any) -> str:
         "office_footage": "office_video",
         "real_product": "product_photo",
         "product": "product_photo",
+        "scene": "acted_scene",
+        "acted": "acted_scene",
+        "skit": "acted_scene",
+        "conversation": "conversation_video",
+        "dialogue": "conversation_video",
     }
     return aliases.get(text, text)
 
@@ -1521,7 +1549,7 @@ def build_social_content_plan_prompt(
 Provider batch: {provider}.
 Audience primary language: {context["audience_language"]}.
 Optional dialect/style: {context.get("dialect") or "use the audience's natural business tone"}.
-Monthly cadence chosen by user: {monthly_posts} posts/month.
+Cadence chosen by user: {monthly_posts} posts for a {_dict(payload.get("planning_inputs")).get("plan_type") or "monthly"} plan.
 
 Return STRICT JSON only. No markdown, no comments.
 Return this exact shape:
@@ -1535,10 +1563,19 @@ Return this exact shape:
       "idea": "the content idea",
       "script": "ready draft text/caption in the audience language",
       "cta": "soft call to action",
-      "rationale": "why this answers an audience need"
+      "rationale": "why this answers an audience need",
+      "production_mode": "ai_image|ai_carousel|ai_video|talking_head|store_video|product_photo|product_video|acted_scene|conversation_video|ugc",
+      "ai_capability": "ai|user_recommended|user_required",
+      "user_instructions": "empty string when ai_capability is ai; otherwise describe exactly what the business owner must film or photograph, in the audience language"
     }}
   ]
 }}
+
+Production rules:
+- production_mode: how the visual should actually be produced. Use ai_image/ai_carousel/ai_video only when AI can fully generate a convincing visual for the idea.
+- Use real-world modes (talking_head, store_video, product_photo, product_video, acted_scene, conversation_video, ugc) when the idea needs the real business: real products, the real location, or a real person.
+- ai_capability: "ai" when AI alone is enough; "user_recommended" when AI can do it but real footage would clearly perform better; "user_required" when it cannot work without the user's footage/photos.
+- Mix capabilities realistically: story/trust ideas often need a real person or place; generic tips and comparisons can be ai.
 
 Required count from this provider:
 {required_lines}
@@ -1634,6 +1671,31 @@ def _fallback_social_content_items(
     return items
 
 
+def _default_production_mode_for_format(format_value: str) -> str:
+    text = str(format_value or "").lower()
+    if "carousel" in text:
+        return "ai_carousel"
+    if "reel" in text or "video" in text or "story" in text:
+        return "ai_video"
+    return "ai_image"
+
+
+def _normalize_ai_capability(value: Any, production_mode: str) -> str:
+    text = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "ai_only": "ai",
+        "full_ai": "ai",
+        "recommended": "user_recommended",
+        "user": "user_required",
+        "required": "user_required",
+        "needs_user": "user_required",
+    }
+    text = aliases.get(text, text)
+    if text in AI_CAPABILITY_VALUES:
+        return text
+    return "user_required" if production_mode in REAL_WORLD_PRODUCTION_MODES else "ai"
+
+
 def _normalize_social_content_candidate(raw: Any, index: int, provider: str, kind_hint: str | None = None) -> dict[str, Any] | None:
     if isinstance(raw, str):
         raw = {"title": raw, "idea": raw}
@@ -1650,16 +1712,37 @@ def _normalize_social_content_candidate(raw: Any, index: int, provider: str, kin
     visible_text = " ".join([title, idea, script]).strip()
     if _looks_like_placeholder_social_idea(visible_text):
         return None
+    format_value = str(raw.get("format") or raw.get("placement") or "reel").strip()[:80]
+    production_mode = _normalize_production_mode(raw.get("production_mode") or raw.get("production"))
+    if production_mode not in PRODUCTION_MODE_LABELS_AR:
+        production_mode = _default_production_mode_for_format(format_value)
+    ai_capability = _normalize_ai_capability(raw.get("ai_capability") or raw.get("needs_user"), production_mode)
+    if ai_capability == "ai" and production_mode in REAL_WORLD_PRODUCTION_MODES:
+        ai_capability = "user_required"
+    user_instructions = str(raw.get("user_instructions") or raw.get("intervention_notes") or "").strip()
+    user_intervention = None
+    if ai_capability != "ai":
+        user_intervention = {
+            "type": production_mode,
+            "label": PRODUCTION_MODE_LABELS_AR.get(production_mode, production_mode),
+            "instructions": user_instructions or PRODUCTION_MODE_LABELS_AR.get(production_mode, ""),
+            "required_assets": REAL_WORLD_PRODUCTION_MODES.get(production_mode, ["client_asset"]),
+        }
+    existing_generation = raw.get("generation") if isinstance(raw.get("generation"), dict) else None
     return {
         "id": f"{provider}-{kind}-{index}",
         "type": kind,
         "title": title[:240],
-        "format": str(raw.get("format") or raw.get("placement") or "reel").strip()[:80],
+        "format": format_value,
         "hook_style": str(raw.get("hook_style") or raw.get("hook") or "").strip()[:120],
         "idea": idea,
         "script": script,
         "cta": str(raw.get("cta") or "").strip(),
         "rationale": str(raw.get("rationale") or raw.get("reason") or "").strip(),
+        "production_mode": production_mode,
+        "ai_capability": ai_capability,
+        "user_intervention": user_intervention,
+        "generation": existing_generation or {"status": "idle"},
         "provider": provider,
     }
 
@@ -1686,14 +1769,80 @@ def _social_candidate_matches_language(item: dict[str, Any], language: str) -> b
     return contains_script(text)
 
 
+def _weave_selected_ids_by_type(selected_ids: list[str], grouped: dict[str, list[dict[str, Any]]]) -> list[str]:
+    """Order selected ids so content types spread across the schedule instead of clustering."""
+    type_by_id = {
+        str(item.get("id")): kind
+        for kind, items in grouped.items()
+        if isinstance(items, list)
+        for item in items
+        if isinstance(item, dict)
+    }
+    queues: dict[str, list[str]] = {kind: [] for kind in SOCIAL_CONTENT_TYPE_KEYS}
+    for item_id in selected_ids:
+        queues.setdefault(type_by_id.get(item_id, "attraction"), []).append(item_id)
+    ordered: list[str] = []
+    while any(queues.values()):
+        kind = max(queues, key=lambda key: len(queues[key]))
+        ordered.append(queues[kind].pop(0))
+    return ordered
+
+
+def build_social_plan_schedule(plan: dict[str, Any]) -> dict[str, Any]:
+    """(Re)assign scheduled dates for the selected items, spreading them evenly over the window."""
+    plan_type = plan.get("plan_type") if plan.get("plan_type") in SOCIAL_PLAN_TYPES else "monthly"
+    window = SOCIAL_PLAN_TYPES[plan_type]
+    grouped = plan.get("candidates") or {}
+    existing = _dict(plan.get("schedule"))
+    start = date.today()
+    if existing.get("start_date"):
+        try:
+            start = date.fromisoformat(str(existing["start_date"]))
+        except ValueError:
+            pass
+    days = [
+        {"date": (start + timedelta(days=offset)).isoformat(), "item_ids": []}
+        for offset in range(window)
+    ]
+    ordered = _weave_selected_ids_by_type(list(plan.get("selected_ids") or []), grouped)
+    if ordered:
+        for index, item_id in enumerate(ordered):
+            offset = min(window - 1, int(index * window / len(ordered)))
+            days[offset]["item_ids"].append(item_id)
+    plan["plan_type"] = plan_type
+    plan["schedule"] = {
+        "plan_type": plan_type,
+        "start_date": days[0]["date"],
+        "end_date": days[-1]["date"],
+        "days": days,
+    }
+    date_by_id = {item_id: day["date"] for day in days for item_id in day["item_ids"]}
+    for items in grouped.values():
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    item["scheduled_date"] = date_by_id.get(str(item.get("id")))
+    return plan
+
+
+def social_plan_count_bounds(plan_type: str) -> tuple[int, int, int]:
+    """(default, min, max) posts for a plan type."""
+    if plan_type == "weekly":
+        return 4, 1, 14
+    return 15, 1, 31
+
+
 def normalize_social_content_plan(
     raw_items: list[dict[str, Any]],
     payload: dict[str, Any],
     language: str,
     monthly_posts: int,
     warnings: list[str] | None = None,
+    plan_type: str = "monthly",
 ) -> dict[str, Any]:
-    monthly_posts = _safe_int(monthly_posts, 15, minimum=1, maximum=31)
+    plan_type = plan_type if plan_type in SOCIAL_PLAN_TYPES else "monthly"
+    default_count, min_count, max_count = social_plan_count_bounds(plan_type)
+    monthly_posts = _safe_int(monthly_posts, default_count, minimum=min_count, maximum=max_count)
     required_counts = social_content_required_counts(monthly_posts)
     grouped: dict[str, list[dict[str, Any]]] = {"attraction": [], "trust": [], "sales": []}
     seen: set[str] = set()
@@ -1748,12 +1897,13 @@ def normalize_social_content_plan(
         for item in SOCIAL_CONTENT_TYPES
     ]
 
-    return {
-        "version": "social_content_work_plan_v1",
+    plan = {
+        "version": "social_content_work_plan_v2",
         "status": "ready" if selected_ids else "missing",
         "language": language,
         "dialect": _dict(payload.get("brand")).get("dialect") or "",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "plan_type": plan_type,
         "monthly_posts": monthly_posts,
         "cadence": {
             "recommended_monthly_posts": 15,
@@ -1764,6 +1914,7 @@ def normalize_social_content_plan(
         "selected_ids": selected_ids,
         "warnings": warnings or [],
     }
+    return build_social_plan_schedule(plan)
 
 
 async def _generate_social_content_provider_batch(
@@ -1810,10 +1961,15 @@ async def generate_social_content_work_plan(
     suite: Suite,
     language: str | None,
     monthly_posts: int = 15,
+    plan_type: str = "monthly",
 ) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
-    monthly_posts = _safe_int(monthly_posts, 15, minimum=1, maximum=31)
-    payload = suite_research_payload(suite, planning_inputs={"monthly_posts": monthly_posts})
+    plan_type = plan_type if plan_type in SOCIAL_PLAN_TYPES else "monthly"
+    default_count, min_count, max_count = social_plan_count_bounds(plan_type)
+    monthly_posts = _safe_int(monthly_posts, default_count, minimum=min_count, maximum=max_count)
+    payload = suite_research_payload(
+        suite, planning_inputs={"monthly_posts": monthly_posts, "plan_type": plan_type}
+    )
     batches = await asyncio.gather(
         *[
             _generate_social_content_provider_batch(payload, output_language, monthly_posts, provider, content_type)
@@ -1830,7 +1986,9 @@ async def generate_social_content_work_plan(
     if not all_items:
         all_items = _fallback_social_content_items(payload, output_language, monthly_posts)
     deduped_warnings = list(dict.fromkeys(warnings))
-    return normalize_social_content_plan(all_items, payload, output_language, monthly_posts, deduped_warnings)
+    return normalize_social_content_plan(
+        all_items, payload, output_language, monthly_posts, deduped_warnings, plan_type=plan_type
+    )
 
 
 DEFAULT_PAID_CONTENT_PLAN_PROMPTS = {

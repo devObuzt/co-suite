@@ -21,11 +21,13 @@ from ..core.security import get_current_user, hash_password, verify_password
 from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
 from ..models.user import User
-from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job
+from ..services.billing import enforce_generation_gate, estimate_content_generation_tokens
+from ..services.generation_jobs import ACTIVE_STATUSES, create_job, get_active_job, serialize_job
 from ..services.google_ads import build_keyword_planner_summary, fetch_keyword_planner_ideas
 from ..services.admin_audit import record_audit_log, record_provider_usage
 from ..services.provider_pricing import estimate_google_ads_keyword_planner_cost_usd, estimate_serpapi_cost_usd
 from ..services.marketing_plan_generator import (
+    build_social_plan_schedule,
     generate_paid_content_work_plan,
     generate_social_content_work_plan,
     generate_marketing_customer_personas_research,
@@ -60,6 +62,18 @@ class MarketingStageRequest(GenerateMarketingPlanRequest):
 class GenerateSocialContentPlanRequest(BaseModel):
     language: str | None = None
     monthly_posts: int = Field(default=15, ge=1, le=31)
+    plan_type: str = Field(default="monthly", pattern="^(weekly|monthly)$")
+
+
+class UpdateSocialContentItemRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=240)
+    idea: str | None = Field(default=None, max_length=2000)
+    script: str | None = Field(default=None, max_length=6000)
+    cta: str | None = Field(default=None, max_length=500)
+
+
+class GenerateSocialContentItemsRequest(BaseModel):
+    item_ids: list[str] = Field(default_factory=list, max_length=40)
 
 
 class SocialContentPlanSelectionRequest(BaseModel):
@@ -300,11 +314,131 @@ def _update_social_content_selection(suite: Suite, selected_ids: list[str]) -> d
             clean_ids.append(value)
             seen.add(value)
     plan["selected_ids"] = clean_ids
+    build_social_plan_schedule(plan)
     action_plan["social_content_plan"] = plan
     action_plan["status"] = "ready" if clean_ids else "draft"
     strategy["marketing_action_plan"] = action_plan
     suite.strategy = strategy
     return plan
+
+
+def _social_plan_for_update(suite: Suite) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    strategy = dict(_strategy(suite))
+    action_plan = dict(strategy.get("marketing_action_plan") or {})
+    plan = dict(action_plan.get("social_content_plan") or {})
+    if not plan:
+        raise HTTPException(status_code=404, detail="Generate the social content work plan first.")
+    return strategy, action_plan, plan
+
+
+def _store_social_plan(suite: Suite, strategy: dict[str, Any], action_plan: dict[str, Any], plan: dict[str, Any]) -> None:
+    action_plan["social_content_plan"] = plan
+    strategy["marketing_action_plan"] = action_plan
+    suite.strategy = strategy
+
+
+def _find_social_plan_item(plan: dict[str, Any], item_id: str) -> dict[str, Any] | None:
+    for group in (plan.get("candidates") or {}).values():
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if isinstance(item, dict) and str(item.get("id")) == item_id:
+                return item
+    return None
+
+
+def _social_item_content_type(item: dict[str, Any]) -> str:
+    text = str(item.get("format") or "").lower()
+    mode = str(item.get("production_mode") or "").lower()
+    if "carousel" in text or mode == "ai_carousel":
+        return "carousel"
+    if "reel" in text or "video" in text or "story" in text or mode == "ai_video":
+        return "video"
+    return "image"
+
+
+def _social_item_generation_prompt(suite: Suite, item: dict[str, Any], language: str) -> str:
+    brand = dict(suite.brand or {})
+    footer_bits = []
+    if brand.get("name"):
+        footer_bits.append(f"Business name: {brand['name']}")
+    for key, label in (("phone", "Phone"), ("whatsapp", "WhatsApp"), ("website", "Website"), ("working_hours", "Working hours")):
+        if brand.get(key):
+            footer_bits.append(f"{label}: {brand[key]}")
+    social_links = brand.get("social_links") or {}
+    if not brand.get("website") and social_links.get("instagram"):
+        footer_bits.append(f"Instagram: {social_links['instagram']}")
+    intelligence = _strategy(suite).get("marketing_intelligence") or {}
+    keywords = []
+    for keyword in (intelligence.get("keywords") or [])[:12]:
+        text = str(keyword.get("text") if isinstance(keyword, dict) else keyword or "").strip()
+        if text:
+            keywords.append(text)
+    return "\n".join(
+        [
+            "Execute this planned content idea EXACTLY as described — do not invent a different idea.",
+            f"Title / hook: {item.get('title') or ''}",
+            f"Idea: {item.get('idea') or ''}",
+            f"Script draft (use it as the base of the caption): {item.get('script') or ''}",
+            f"Call to action: {item.get('cta') or ''}",
+            "",
+            "Caption requirements:",
+            "- Follow the script's story and tone; polish it into a ready-to-publish caption.",
+            "- End the caption with a short business footer built ONLY from these details (skip anything missing): "
+            + ("; ".join(footer_bits) or "business name only"),
+            "- Close with a hashtags section inspired by the idea plus these strategy keywords: "
+            + (", ".join(keywords) or "the business services"),
+        ]
+    )
+
+
+async def _sync_social_plan_generation(db: AsyncSession, suite: Suite) -> None:
+    """Lazily reconcile plan items with their generation jobs (called on plan reads)."""
+    strategy = dict(_strategy(suite))
+    action_plan = dict(strategy.get("marketing_action_plan") or {})
+    plan = dict(action_plan.get("social_content_plan") or {})
+    if not plan:
+        return
+    pending: dict[str, dict[str, Any]] = {}
+    for group in (plan.get("candidates") or {}).values():
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            generation = item.get("generation") if isinstance(item, dict) else None
+            if not isinstance(generation, dict):
+                continue
+            if generation.get("status") in {"queued", "generating"} and generation.get("job_id"):
+                pending[str(generation["job_id"])] = item
+    if not pending:
+        return
+    result = await db.execute(select(GenerationJob).where(GenerationJob.id.in_(list(pending.keys()))))
+    changed = False
+    for job in result.scalars().all():
+        item = pending.get(job.id)
+        if not item:
+            continue
+        generation = dict(item.get("generation") or {})
+        status = str(job.status.value if hasattr(job.status, "value") else job.status)
+        if status == "completed":
+            post_ids = list((job.result or {}).get("post_ids") or [])
+            generation.update(
+                {
+                    "status": "ready",
+                    "post_id": post_ids[0] if post_ids else None,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            changed = True
+        elif status in {"failed", "cancelled"}:
+            generation.update({"status": "failed", "error": job.error or "Generation failed."})
+            changed = True
+        elif status == "running" and generation.get("status") != "generating":
+            generation["status"] = "generating"
+            changed = True
+        item["generation"] = generation
+    if changed:
+        _store_social_plan(suite, strategy, action_plan, plan)
+        await db.commit()
 
 
 def _update_paid_content_selection(suite: Suite, selected_ids: list[str]) -> dict[str, Any]:
@@ -1419,6 +1553,7 @@ async def get_marketing_plan(
     db: AsyncSession = Depends(get_db),
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
+    await _sync_social_plan_generation(db, suite)
     deck = _deck(suite)
     job = await _latest_marketing_plan_job(db, suite_id)
     if not deck:
@@ -2054,6 +2189,7 @@ async def generate_marketing_social_content_plan(
         suite,
         output_language,
         monthly_posts=request_data.monthly_posts,
+        plan_type=request_data.plan_type,
     )
     _save_social_content_plan(suite, plan)
     candidate_count = sum(
@@ -2116,6 +2252,186 @@ async def update_marketing_social_content_plan_selection(
     )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "action_plan_ready")
+
+
+@router.patch("/suites/{suite_id}/marketing-plan/social-content-plan/items/{item_id}")
+async def update_marketing_social_content_item(
+    suite_id: str,
+    item_id: str,
+    payload: UpdateSocialContentItemRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    strategy, action_plan, plan = _social_plan_for_update(suite)
+    item = _find_social_plan_item(plan, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Plan item not found")
+    edits = {}
+    for field in ("title", "idea", "script", "cta"):
+        value = getattr(payload, field)
+        if value is not None and value.strip():
+            item[field] = value.strip()
+            edits[field] = True
+    if edits:
+        item["edited_at"] = datetime.now(timezone.utc).isoformat()
+        item["edited_by_user"] = True
+    _store_social_plan(suite, strategy, action_plan, plan)
+    await record_audit_log(
+        db,
+        action="marketing.social_content_plan.item.update",
+        resource_type="marketing_action_plan",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"item_id": item_id, "fields": sorted(edits.keys())},
+    )
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, None, "action_plan_ready")
+
+
+async def _queue_social_item_generation(
+    db: AsyncSession,
+    suite: Suite,
+    item: dict[str, Any],
+    user: User,
+    language: str,
+) -> GenerationJob:
+    content_type = _social_item_content_type(item)
+    await enforce_generation_gate(
+        suite.id,
+        db,
+        required_tokens=estimate_content_generation_tokens(1, content_type),
+        requested_units=1,
+        allow_free_trial=content_type != "video",
+        event_type="social_plan_item_generation",
+        metadata={
+            "job_type": GenerationJobType.content_generation.value,
+            "content_type": content_type,
+            "plan_item_id": item.get("id"),
+        },
+    )
+    job = await create_job(
+        db,
+        suite.id,
+        GenerationJobType.content_generation,
+        user.id,
+        input_data={
+            "mode": "quick",
+            "content_type": content_type,
+            "count": 1,
+            "destination": "social",
+            "use_brand": True,
+            "language": language,
+            "prompt": _social_item_generation_prompt(suite, item, language),
+            "plan_item_id": item.get("id"),
+            "plan_kind": "social_content_plan",
+        },
+    )
+    item["generation"] = {
+        "status": "queued",
+        "job_id": job.id,
+        "queued_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return job
+
+
+@router.post("/suites/{suite_id}/marketing-plan/social-content-plan/items/{item_id}/generate", status_code=202)
+async def generate_marketing_social_content_item(
+    suite_id: str,
+    item_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    strategy, action_plan, plan = _social_plan_for_update(suite)
+    item = _find_social_plan_item(plan, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Plan item not found")
+    if item.get("ai_capability") == "user_required":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "user_assets_required",
+                "message": "هذه الفكرة بحاجة لتصوير/ملفات من عندك قبل التوليد.",
+                "user_intervention": item.get("user_intervention"),
+            },
+        )
+    generation = item.get("generation") if isinstance(item.get("generation"), dict) else {}
+    if generation.get("job_id") and generation.get("status") in {"queued", "generating"}:
+        result = await db.execute(select(GenerationJob).where(GenerationJob.id == generation["job_id"]))
+        existing = result.scalar_one_or_none()
+        if existing and existing.status in ACTIVE_STATUSES:
+            return serialize_job(existing, suite_id=suite_id)
+    language = infer_plan_language(suite, plan.get("language"))
+    job = await _queue_social_item_generation(db, suite, item, current_user, language)
+    _store_social_plan(suite, strategy, action_plan, plan)
+    await record_audit_log(
+        db,
+        action="marketing.social_content_plan.item.generate",
+        resource_type="marketing_action_plan",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"item_id": item_id, "job_id": job.id},
+    )
+    await db.commit()
+    return serialize_job(job, suite_id=suite_id)
+
+
+@router.post("/suites/{suite_id}/marketing-plan/social-content-plan/generate-items", status_code=202)
+async def generate_marketing_social_content_items(
+    suite_id: str,
+    payload: GenerateSocialContentItemsRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    strategy, action_plan, plan = _social_plan_for_update(suite)
+    request_data = payload or GenerateSocialContentItemsRequest()
+    target_ids = request_data.item_ids or list(plan.get("selected_ids") or [])
+    language = infer_plan_language(suite, plan.get("language"))
+    queued: list[str] = []
+    skipped: list[dict[str, str]] = []
+    blocked_reason: str | None = None
+    for item_id in target_ids:
+        item = _find_social_plan_item(plan, str(item_id))
+        if not item:
+            skipped.append({"item_id": str(item_id), "reason": "not_found"})
+            continue
+        if item.get("ai_capability") == "user_required":
+            skipped.append({"item_id": str(item_id), "reason": "user_assets_required"})
+            continue
+        generation = item.get("generation") if isinstance(item.get("generation"), dict) else {}
+        if generation.get("status") in {"queued", "generating", "ready"}:
+            skipped.append({"item_id": str(item_id), "reason": generation.get("status") or "active"})
+            continue
+        try:
+            job = await _queue_social_item_generation(db, suite, item, current_user, language)
+        except HTTPException as exc:
+            if exc.status_code == 402:
+                blocked_reason = "generation_tokens_exhausted"
+                skipped.append({"item_id": str(item_id), "reason": "payment_required"})
+                break
+            raise
+        queued.append(job.id)
+    _store_social_plan(suite, strategy, action_plan, plan)
+    await record_audit_log(
+        db,
+        action="marketing.social_content_plan.generate_items",
+        resource_type="marketing_action_plan",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"queued": len(queued), "skipped": len(skipped)},
+    )
+    await db.commit()
+    return {
+        "queued_job_ids": queued,
+        "skipped": skipped,
+        "payment_required": blocked_reason is not None,
+        **_marketing_plan_response(suite, suite_id, None, "action_plan_ready"),
+    }
 
 
 @router.post("/suites/{suite_id}/marketing-plan/social-plan/generate")
