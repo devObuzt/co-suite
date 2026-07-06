@@ -1099,224 +1099,441 @@ def _append_page(story: list[Any], content: list[Any]) -> None:
     story.extend(content)
 
 
+
+# ── HTML deck renderer (WeasyPrint) ───────────────────────────────────────────
+
+ENGINE_FONT_DIR = Path(__file__).resolve().parents[1] / "engine" / "assets" / "fonts"
+API_ROOT = Path(__file__).resolve().parents[1]
+
+DECK_FONT_FILES = {
+    ("Deck", 400): ENGINE_FONT_DIR / "Cairo-Regular.ttf",
+    ("Deck", 700): ENGINE_FONT_DIR / "Cairo-Bold.ttf",
+    ("Deck", 800): ENGINE_FONT_DIR / "Cairo-ExtraBold.ttf",
+    ("DeckHebrew", 400): FONT_DIR / "NotoSansHebrew-Regular.ttf",
+    ("DeckLatin", 400): FONT_DIR / "Inter-Regular.ttf",
+}
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _deck_accent(brand: dict[str, Any]) -> str:
+    colors_map = brand.get("colors") if isinstance(brand.get("colors"), dict) else {}
+    for candidate in (colors_map.get("primary"), colors_map.get("accent"), colors_map.get("secondary")):
+        value = str(candidate or "").strip()
+        if _HEX_COLOR_RE.match(value) and value.lower() not in ("#ffffff", "#000000"):
+            return value
+    return "#e14fd0"
+
+
+def _font_faces_css() -> str:
+    faces = []
+    for (family, weight), path in DECK_FONT_FILES.items():
+        if path.exists():
+            faces.append(
+                f"@font-face {{ font-family: '{family}'; src: url('{path.as_uri()}'); "
+                f"font-weight: {weight}; font-style: normal; }}"
+            )
+    return "\n".join(faces)
+
+
+def _asset_src(url: Any) -> str:
+    """Resolve a stored asset URL to something WeasyPrint can fetch."""
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    if value.startswith("http://") or value.startswith("https://"):
+        return escape(value, quote=True)
+    if value.startswith("/static/"):
+        path = API_ROOT / value.lstrip("/")
+        if path.exists():
+            return escape(path.as_uri(), quote=True)
+    return ""
+
+
+def _logo_src(brand: dict[str, Any]) -> str:
+    candidates = [brand.get("logo_url")]
+    for asset in brand.get("logo_assets") or []:
+        if isinstance(asset, dict):
+            candidates.append(asset.get("url"))
+    for logo in brand.get("brand_logos") or []:
+        if isinstance(logo, dict):
+            candidates.append(logo.get("url"))
+        elif isinstance(logo, str):
+            candidates.append(logo)
+    for candidate in candidates:
+        src = _asset_src(candidate)
+        if src:
+            return src
+    return ""
+
+
+def _deck_visual_urls(suite: Suite) -> dict[str, str]:
+    strategy = _strategy(suite)
+    deck = _safe_dict(strategy.get("marketing_plan_deck"))
+    visuals = {}
+    for item in [*_safe_list(strategy.get("marketing_plan_visuals")), *_safe_list(deck.get("visuals"))]:
+        if isinstance(item, dict) and item.get("url"):
+            visuals.setdefault(str(item.get("kind") or f"visual{len(visuals)}"), _asset_src(item["url"]))
+    return {kind: src for kind, src in visuals.items() if src}
+
+
+def _keyword_groups_full(intelligence: dict[str, Any], labels: dict[str, str]) -> list[tuple[str, str, list[str]]]:
+    """Same grouping as _keyword_groups but WITHOUT truncating the values."""
+    grouped = {
+        key: (title, helper, [])
+        for key, (title, helper, _values) in {
+            "direct": (_label(labels, "direct_intent", "Direct demand"), _label(labels, "direct_intent_help", ""), []),
+            "learning": (_label(labels, "learning_intent", "Questions and learning"), _label(labels, "learning_intent_help", ""), []),
+            "comparison": (_label(labels, "comparison_intent", "Comparison and choice"), _label(labels, "comparison_intent_help", ""), []),
+            "local": (_label(labels, "local_intent", "Local search"), _label(labels, "local_intent_help", ""), []),
+        }.items()
+    }
+    for item in _safe_list(intelligence.get("keywords")):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        marker = f"{item.get('intent') or ''} {text}".lower()
+        if any(word in marker for word in ("near", "local", "map", "قريب", "محلي", "אזור", "קרוב")):
+            key = "local"
+        elif any(word in marker for word in ("compare", "best", "vs", "مقارنة", "أفضل", "השוואה")):
+            key = "comparison"
+        elif any(word in marker for word in ("learn", "how", "course", "تعلم", "دورة", "איך", "קורס")):
+            key = "learning"
+        else:
+            key = "direct"
+        grouped[key][2].append(text)
+    return [(title, helper, values) for title, helper, values in grouped.values() if values]
+
+
+def _chip(text: Any) -> str:
+    return f'<span class="chip" dir="auto">{escape(str(text))}</span>'
+
+
+def _card(title: str, lines: list[str], extra_class: str = "") -> str:
+    body = "".join(f'<p dir="auto">{escape(str(line))}</p>' for line in lines if str(line or "").strip())
+    return (
+        f'<div class="card {extra_class}">'
+        f'<h3 dir="auto">{escape(str(title))}</h3>{body}'
+        "</div>"
+    )
+
+
+def _section_header(kicker: str, title: str, subtitle: str = "") -> str:
+    subtitle_html = f'<p class="section-sub" dir="auto">{escape(subtitle)}</p>' if subtitle else ""
+    return (
+        f'<p class="kicker" dir="auto">{escape(kicker)}</p>'
+        f'<h2 dir="auto">{escape(title)}</h2>{subtitle_html}'
+    )
+
+
+def _divider_section(image_src: str, kicker: str, title: str) -> str:
+    if not image_src:
+        return ""
+    return (
+        '<section class="divider">'
+        f'<img src="{image_src}" alt="" />'
+        '<div class="divider-overlay">'
+        f'<p class="kicker" dir="auto">{escape(kicker)}</p>'
+        f'<h2 dir="auto">{escape(title)}</h2>'
+        "</div></section>"
+    )
+
+
+def _deck_css(accent: str, rtl: bool) -> str:
+    direction = "rtl" if rtl else "ltr"
+    accent_border = "border-right" if rtl else "border-left"
+    return f"""
+{_font_faces_css()}
+@page {{ size: 1280px 720px; margin: 0; }}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+html {{ background: #17171d; }}
+body {{
+  font-family: 'Deck', 'DeckHebrew', 'DeckLatin', sans-serif;
+  color: #e9e9ef;
+  direction: {direction};
+  font-size: 15px;
+  line-height: 1.65;
+}}
+section {{ page-break-before: always; padding: 54px 68px; }}
+section.cover, section.divider {{ padding: 0; height: 720px; overflow: hidden; }}
+section:first-child {{ page-break-before: avoid; }}
+.kicker {{ color: {accent}; font-weight: 700; font-size: 15px; letter-spacing: 0.5px; margin-bottom: 4px; }}
+h2 {{ font-size: 40px; font-weight: 800; line-height: 1.25; margin-bottom: 6px; }}
+.section-sub {{ color: #b9b9c4; font-size: 16px; margin-bottom: 22px; }}
+.cards {{ margin-top: 18px; }}
+.card {{
+  display: inline-block; vertical-align: top; width: 358px;
+  background: #212129; border-radius: 16px; padding: 18px 20px;
+  margin: 0 0 14px 0; margin-inline-end: 14px;
+  {accent_border}: 4px solid {accent};
+  page-break-inside: avoid;
+}}
+.card.wide {{ width: 545px; }}
+.card h3 {{ font-size: 18px; font-weight: 700; margin-bottom: 6px; color: #ffffff; }}
+.card p {{ color: #c3c3ce; font-size: 14px; line-height: 1.7; }}
+.chip {{
+  display: inline-block; background: #23232b; color: #e9e9ef;
+  border: 1px solid {accent}55; border-radius: 999px;
+  padding: 5px 15px; margin: 0 0 9px 0; margin-inline-end: 9px;
+  font-size: 14px; page-break-inside: avoid;
+}}
+.metric {{
+  display: inline-block; vertical-align: top; width: 358px;
+  background: #212129; border-radius: 16px; padding: 22px;
+  margin-inline-end: 14px; text-align: center; page-break-inside: avoid;
+}}
+.metric .value {{ font-size: 42px; font-weight: 800; color: {accent}; line-height: 1.2; }}
+.metric .label {{ font-size: 15px; font-weight: 700; margin-top: 2px; }}
+.metric .hint {{ font-size: 12px; color: #9d9daa; }}
+.cover-flex {{ width: 100%; height: 720px; }}
+.cover-text {{
+  display: inline-block; vertical-align: top; width: 55%; height: 720px;
+  padding: 70px 68px; background: #17171d;
+}}
+.cover-text.full {{
+  width: 100%; text-align: center; padding-top: 150px;
+  background: linear-gradient(160deg, #17171d 55%, {accent}2e 130%);
+}}
+.cover-text.full .cover-sub {{ margin: 0 auto; }}
+.cover-rule {{
+  width: 72px; height: 5px; background: {accent}; border-radius: 3px;
+  margin: 22px auto 0 auto;
+}}
+.cover-img {{ display: inline-block; vertical-align: top; width: 44%; height: 720px; }}
+.cover-img img {{ width: 100%; height: 720px; object-fit: cover; }}
+.cover-logo {{ max-height: 84px; max-width: 220px; margin-bottom: 34px; }}
+.cover-name {{ font-size: 54px; font-weight: 800; line-height: 1.2; color: #ffffff; }}
+.cover-title {{ color: {accent}; font-size: 22px; font-weight: 700; margin: 8px 0 18px 0; }}
+.cover-sub {{ color: #c3c3ce; font-size: 17px; max-width: 480px; }}
+.cover-date {{
+  display: inline-block; margin-top: 26px; color: #b9b9c4; font-size: 13px;
+  border: 1px solid #3a3a44; border-radius: 10px; padding: 5px 14px;
+}}
+.divider {{ position: relative; }}
+.divider img {{ width: 1280px; height: 720px; object-fit: cover; }}
+.divider-overlay {{
+  position: absolute; top: 0; right: 0; left: 0; bottom: 0;
+  background: linear-gradient(to top, #17171dee, #17171d55);
+  padding: 250px 90px;
+}}
+.divider-overlay h2 {{ font-size: 52px; }}
+.competitor-link {{ color: {accent}; font-size: 12px; }}
+.persona-meta {{ color: {accent}; font-size: 13px; font-weight: 700; }}
+.closing {{ text-align: center; padding-top: 210px; }}
+.closing h2 {{ font-size: 46px; }}
+.footer-note {{ color: #77777f; font-size: 12px; margin-top: 26px; }}
+"""
+
+
 def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
+    import weasyprint
+
     intelligence = _intelligence(suite)
     language = infer_plan_language(suite, intelligence.get("language") or intelligence.get("audience_language"))
     labels = _labels(language)
-    fonts = _register_fonts()
-    default_font = fonts[FONT_BY_LANGUAGE.get(language, "Latin")]
-    styles = _styles(language, default_font)
-    buffer = __import__("io").BytesIO()
-    document = SimpleDocTemplate(
-        buffer,
-        pagesize=SLIDE_SIZE,
-        rightMargin=SLIDE_MARGIN,
-        leftMargin=SLIDE_MARGIN,
-        topMargin=36,
-        bottomMargin=32,
-        title=str(_brand(suite).get("name") or suite.name or labels["title"]),
-    )
-
+    rtl = _is_rtl(language)
+    brand = _brand(suite)
+    strategy = _strategy(suite)
     action_plan = _action_plan(suite)
-    demand_supply = _safe_dict(intelligence.get("demand_supply"))
-    summary = _safe_dict(demand_supply.get("summary"))
-    story: list[Any] = []
-    suite_name = _brand(suite).get("name") or suite.name or "Suite"
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    accent = _deck_accent(brand)
+    visuals = _deck_visual_urls(suite)
+    logo = _logo_src(brand)
+    suite_name = str(brand.get("name") or suite.name or "Suite")
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    sections: list[str] = []
 
     # 1. Cover
-    cover_cards = [
-        _metric_card(labels["services"], len(_services(suite)), _label(labels, "deck_metric_services", "offer areas"), language, styles, fonts, default_font, ACCENT_3),
-        _metric_card(labels["keywords"], len(_safe_list(intelligence.get("keywords"))), _label(labels, "deck_metric_keywords", "market terms"), language, styles, fonts, default_font, ACCENT),
-        _metric_card(labels["competitors"], len(_safe_list(intelligence.get("competitors"))), _label(labels, "deck_metric_competitors", "market signals"), language, styles, fonts, default_font, ACCENT_2),
-    ]
-    _append_page(story, [
-        Spacer(1, 0.95 * inch),
-        _para(f"{suite_name}", language, styles, "cover", fonts, default_font),
-        _para(labels["title"], language, styles, "title", fonts, default_font),
-        _para(labels["subtitle"], language, styles, "body", fonts, default_font),
-        Spacer(1, 0.22 * inch),
-    ])
-    _pitch_grid(story, cover_cards, columns=3, col_width=260, language=language)
-    story.append(Spacer(1, 0.12 * inch))
-    story.append(_para(f"{labels['generated']}: {generated_at}", language, styles, "small", fonts, default_font))
+    cover_image = visuals.get("cover") or visuals.get("services") or ""
+    logo_html = f'<img class="cover-logo" src="{logo}" alt="" />' if logo else ""
+    cover_img_html = f'<div class="cover-img"><img src="{cover_image}" alt="" /></div>' if cover_image else ""
+    cover_text_class = "cover-text" if cover_image else "cover-text full"
+    cover_rule = "" if cover_image else '<div class="cover-rule"></div>'
+    sections.append(
+        f'<section class="cover"><div class="cover-flex">'
+        f'<div class="{cover_text_class}">'
+        f"{logo_html}"
+        f'<div class="cover-name" dir="auto">{escape(suite_name)}</div>'
+        f'<div class="cover-title" dir="auto">{escape(labels["title"])}</div>'
+        f'<div class="cover-sub" dir="auto">{escape(labels["subtitle"])}</div>'
+        f"{cover_rule}"
+        f'<br/><span class="cover-date">{escape(labels["generated"])}: {generated_at}</span>'
+        "</div>"
+        f"{cover_img_html}"
+        "</div></section>"
+    )
 
     # 2. Business snapshot
-    snapshot_cards = [
-        _pitch_card(title, [value], language, styles, fonts, default_font, ACCENT, width=248, max_lines=2)
-        for title, value in _business_snapshot(suite, labels)
-    ]
-    _append_page(story, [])
-    _slide_title(story, _label(labels, "snapshot", "Business snapshot"), _label(labels, "snapshot_subtitle", "The strategic starting point before channel and content decisions."), language, styles, fonts, default_font, labels["overview"])
-    _pitch_grid(story, snapshot_cards, columns=3, col_width=260, language=language)
+    snapshot_cards = "".join(_card(title, [value]) for title, value in _business_snapshot(suite, labels))
+    sections.append(
+        "<section>"
+        + _section_header(labels["overview"], _label(labels, "snapshot", "Business snapshot"), _label(labels, "snapshot_subtitle", ""))
+        + f'<div class="cards">{snapshot_cards}</div></section>'
+    )
 
-    # 3. Audience profile
-    _append_page(story, [])
-    _slide_title(story, labels["audience"], _label(labels, "audience_pitch", "A clear audience profile keeps the marketing promise accurate."), language, styles, fonts, default_font, "02")
-    audience_cards = _audience_profile_cards(suite, labels, language, styles, fonts, default_font)
-    _pitch_grid(story, audience_cards[:3], columns=3, col_width=260, language=language)
-    story.append(Spacer(1, 0.12 * inch))
-    _pitch_grid(story, audience_cards[3:], columns=2, col_width=390, language=language)
+    # 3. Audience
+    audience_cards = "".join([
+        _card(labels["audience_geography"], [_audience_location_summary(brand, strategy, labels) or labels["audience_geography_default"]]),
+        _card(labels["audience_demographics_language"], [_audience_demographic_summary(brand, labels), _audience_language_summary(brand, strategy, labels)]),
+        _card(labels["audience_need"], [_audience_need_summary(brand, strategy, labels)]),
+    ])
+    interests = _clean_list(brand.get("audience_interests"), 24)
+    behaviors = _clean_list(brand.get("audience_behaviors"), 24)
+    interest_chips = "".join(_chip(item) for item in interests)
+    behavior_chips = "".join(_chip(item) for item in behaviors)
+    audience_extra = ""
+    if interest_chips:
+        audience_extra += f'<h3 class="kicker" dir="auto">{escape(labels["audience_interests"])}</h3><div>{interest_chips}</div>'
+    if behavior_chips:
+        audience_extra += f'<h3 class="kicker" dir="auto">{escape(labels["audience_behaviors"])}</h3><div>{behavior_chips}</div>'
+    sections.append(
+        "<section>"
+        + _section_header("02", labels["audience"], _label(labels, "audience_pitch", ""))
+        + f'<div class="cards">{audience_cards}</div>{audience_extra}</section>'
+    )
 
-    # 4. Services/products
-    for page_index, group in enumerate(_chunks(_text_or_empty(_services(suite), labels), 6)):
-        _append_page(story, [])
-        _slide_title(story, labels["services"], _label(labels, "services_pitch", "The offer system we will turn into demand and clear campaign messages."), language, styles, fonts, default_font, str(page_index + 1).zfill(2))
-        cards = [_pitch_card(str(item), [_label(labels, "service_card_copy", "A clear offer pillar for positioning, content, and campaign structure.")], language, styles, fonts, default_font, ACCENT_3, width=248, max_lines=2) for item in group]
-        _pitch_grid(story, cards, columns=3, col_width=260, language=language)
+    if visuals.get("audience"):
+        sections.append(_divider_section(visuals["audience"], labels["audience"], _audience_need_summary(brand, strategy, labels)[:120]))
+
+    # 4. Services — all of them
+    services = _services(suite)
+    service_chips = "".join(_chip(item) for item in services) or _chip(labels["empty"])
+    sections.append(
+        "<section>"
+        + _section_header("03", labels["services"], _label(labels, "services_pitch", ""))
+        + f"<div>{service_chips}</div></section>"
+    )
+
+    if visuals.get("services"):
+        sections.append(_divider_section(visuals["services"], labels["services"], suite_name))
 
     # 5. Market reading
-    _append_page(story, [])
-    _slide_title(story, _label(labels, "market_reading", "Market reading"), _label(labels, "market_reading_subtitle", "What the market is telling us before we turn strategy into execution."), language, styles, fonts, default_font, labels["overview"])
-    cards = [
-        _pitch_card(title, lines, language, styles, fonts, default_font, ACCENT, width=248)
-        for title, lines in _market_insights(suite, intelligence, labels)
-    ]
-    _pitch_grid(story, cards, columns=3, col_width=260, language=language)
+    market_cards = "".join(_card(title, lines) for title, lines in _market_insights(suite, intelligence, labels))
+    sections.append(
+        "<section>"
+        + _section_header(labels["overview"], _label(labels, "market_reading", "Market reading"), _label(labels, "market_reading_subtitle", ""))
+        + f'<div class="cards">{market_cards}</div></section>'
+    )
 
-    # 6. Keywords by intent
-    keyword_groups = _keyword_groups(intelligence, labels)
-    _append_page(story, [])
-    _slide_title(story, labels["keywords"], _label(labels, "keywords_pitch", "Search terms become intent groups, not just a flat list."), language, styles, fonts, default_font, "03")
-    keyword_cards = [
-        _pitch_card(title, [helper, *values], language, styles, fonts, default_font, ACCENT_2, width=366, max_lines=7)
-        for title, helper, values in keyword_groups
-    ]
-    if not keyword_cards:
-        keyword_cards = [
-            _pitch_card(labels["keywords"], [_label(labels, "keywords_missing", "Generate keywords to show search-intent groups here.")], language, styles, fonts, default_font, ACCENT_2, width=366, max_lines=2)
-        ]
-    _pitch_grid(story, keyword_cards, columns=2, col_width=390, language=language)
+    # 6. Keywords — all of them, grouped by intent
+    keyword_sections = ""
+    for title, helper, values in _keyword_groups_full(intelligence, labels):
+        chips = "".join(_chip(value) for value in values)
+        keyword_sections += (
+            f'<h3 class="kicker" dir="auto">{escape(title)} — {len(values)}</h3>'
+            f'<p class="section-sub" dir="auto">{escape(helper)}</p><div>{chips}</div>'
+        )
+    if not keyword_sections:
+        keyword_sections = f'<p class="section-sub" dir="auto">{escape(_label(labels, "keywords_missing", ""))}</p>'
+    sections.append(
+        "<section>"
+        + _section_header("04", labels["keywords"], _label(labels, "keywords_pitch", ""))
+        + keyword_sections
+        + "</section>"
+    )
 
-    # 7. Competitors by source
+    # 7. Competitors — all items per source
     grouped_competitors = _competitors_by_source(intelligence)
-    sources = ["google_organic", "maps", "instagram", "facebook", "tiktok"]
-    for source in sources:
-        items = grouped_competitors.get(source, [])
-        _append_page(story, [])
+    for source, items in grouped_competitors.items():
+        if not items:
+            continue
         source_title = source.replace("_", " ").title()
-        _slide_title(story, f"{labels['competitors']} - {source_title}", _label(labels, "competitors_pitch", "Competitors are market signals: offers, positioning, and channel pressure."), language, styles, fonts, default_font, "04")
-        cards = []
-        for item in (items[:4] or [{"title": labels["empty"], "url": "-", "snippet": _label(labels, "missing_source", "This source has not produced direct competitors yet.")}]):
-            cards.append(
-                _pitch_card(
-                    item.get("title") or item.get("name") or labels["empty"],
-                    [
-                        f"{labels['source']}: {source_title}",
-                        f"{labels['link']}: {_compact_url(item.get('url'))}",
-                        item.get("snippet") or item.get("description") or _label(labels, "market_signal", "Review this source for positioning clues."),
-                    ],
-                    language,
-                    styles,
-                    fonts,
-                    default_font,
-                    ACCENT,
-                    width=366,
-                    max_lines=3,
-                )
-            )
-        _pitch_grid(story, cards, columns=2, col_width=390, language=language)
-
-    # 8. Demand/supply
-    _append_page(story, [])
-    _slide_title(story, labels["demand"], _label(labels, "demand_pitch", "Demand, competition, and market pressure help decide how aggressive the plan should be."), language, styles, fonts, default_font, "05")
-    metrics_cards = [
-        _metric_card(labels["searches"], summary.get("average_monthly_searches", 0) if summary else 0, _label(labels, "monthly_searches", "monthly search demand"), language, styles, fonts, default_font, ACCENT_3),
-        _metric_card(labels["competition"], summary.get("competition_level", "UNKNOWN") if summary else "UNKNOWN", "Google Ads", language, styles, fonts, default_font, ACCENT),
-        _metric_card(labels["pressure"], f"{summary.get('market_pressure_score', 0) if summary else 0}/100", _label(labels, "pressure_copy", "combined demand and competition"), language, styles, fonts, default_font, ACCENT_2),
-    ]
-    _pitch_grid(story, metrics_cards, columns=3, col_width=260, language=language)
-    metrics = [item for item in _safe_list(demand_supply.get("keyword_metrics")) if isinstance(item, dict)]
-    if metrics:
-        story.append(Spacer(1, 0.12 * inch))
-        cards = [
-            _pitch_card(
-                item.get("keyword") or "-",
+        competitor_cards = "".join(
+            _card(
+                str(item.get("title") or item.get("name") or labels["empty"]),
                 [
-                    f"{labels['searches']}: {item.get('average_monthly_searches', 0)}",
-                    f"{labels['competition']}: {item.get('competition') or 'UNKNOWN'} {item.get('competition_index') or ''}",
+                    str(item.get("snippet") or item.get("description") or ""),
+                    f"{labels['link']}: {_compact_url(item.get('url'), 60)}",
                 ],
-                language,
-                styles,
-                fonts,
-                default_font,
-                ACCENT_3,
-                width=248,
-                max_lines=2,
+                extra_class="wide",
             )
-            for item in metrics[:3]
-        ]
-        _pitch_grid(story, cards, columns=3, col_width=260, language=language)
+            for item in items
+        )
+        sections.append(
+            "<section>"
+            + _section_header("05", f"{labels['competitors']} — {source_title}", _label(labels, "competitors_pitch", ""))
+            + f'<div class="cards">{competitor_cards}</div></section>'
+        )
 
-    # 9. Personas
+    # 8. Demand & supply
+    demand_supply = _safe_dict(intelligence.get("demand_supply"))
+    summary = _safe_dict(demand_supply.get("summary"))
+    metrics = "".join([
+        f'<div class="metric"><div class="value">{escape(str(summary.get("average_monthly_searches", 0) if summary else 0))}</div>'
+        f'<div class="label" dir="auto">{escape(labels["searches"])}</div>'
+        f'<div class="hint" dir="auto">{escape(_label(labels, "monthly_searches", ""))}</div></div>',
+        f'<div class="metric"><div class="value">{escape(str(summary.get("competition_level", "-") if summary else "-"))}</div>'
+        f'<div class="label" dir="auto">{escape(labels["competition"])}</div>'
+        f'<div class="hint">Google Ads</div></div>',
+        f'<div class="metric"><div class="value">{escape(str(summary.get("market_pressure_score", 0) if summary else 0))}/100</div>'
+        f'<div class="label" dir="auto">{escape(labels["pressure"])}</div>'
+        f'<div class="hint" dir="auto">{escape(_label(labels, "pressure_copy", ""))}</div></div>',
+    ])
+    sections.append(
+        "<section>"
+        + _section_header("06", labels["demand"], _label(labels, "demand_pitch", ""))
+        + f'<div class="cards">{metrics}</div></section>'
+    )
+
+    # 9. Personas — all of them
     personas = [item for item in _safe_list(intelligence.get("personas")) if isinstance(item, dict)]
-    persona_items = personas or [{"name": labels["empty"]}]
-    for page_index, group in enumerate(_chunks(persona_items[:10], 3)):
-        _append_page(story, [])
-        _slide_title(story, labels["personas"], _label(labels, "personas_pitch", "Each persona connects a real need to a focused marketing promise."), language, styles, fonts, default_font, f"06.{page_index + 1}")
-        cards = []
-        for persona in group:
-            meta = " / ".join(
-                str(value)
-                for value in [
-                    f"{labels['age']}: {persona.get('age')}" if persona.get("age") else "",
-                    persona.get("gender") or "",
-                    persona.get("profession") or "",
-                    persona.get("economic_status") or "",
-                ]
-                if value
+    if personas:
+        persona_cards = ""
+        for persona in personas:
+            meta_bits = [str(persona.get("age") or "").strip(), str(persona.get("profession") or "").strip()]
+            meta = " · ".join(bit for bit in meta_bits if bit)
+            lines = [
+                str(persona.get("needs") or persona.get("need") or "").strip(),
+                str(persona.get("challenges") or persona.get("challenge") or "").strip(),
+            ]
+            body = "".join(f'<p dir="auto">{escape(line)}</p>' for line in lines if line)
+            persona_cards += (
+                '<div class="card">'
+                f'<h3 dir="auto">{escape(str(persona.get("name") or labels["empty"]))}</h3>'
+                + (f'<p class="persona-meta" dir="auto">{escape(meta)}</p>' if meta else "")
+                + body
+                + "</div>"
             )
-            cards.append(
-                _pitch_card(
-                    persona.get("name") or labels["empty"],
-                    [
-                        meta,
-                        f"{labels['challenge']}: {persona.get('challenge')}" if persona.get("challenge") else "",
-                        f"{labels['motivation']}: {persona.get('motivation')}" if persona.get("motivation") else "",
-                        f"{labels['solution']}: {persona.get('solution')}" if persona.get("solution") else "",
-                    ],
-                    language,
-                    styles,
-                    fonts,
-                    default_font,
-                    ACCENT_2,
-                    width=248,
-                    max_lines=4,
-                )
-            )
-        _pitch_grid(story, cards, columns=3, col_width=260, language=language)
+        sections.append(
+            "<section>"
+            + _section_header("07", labels["personas"], _label(labels, "personas_pitch", ""))
+            + f'<div class="cards">{persona_cards}</div></section>'
+        )
 
     # 10. Strategic direction
-    _append_page(story, [])
-    _slide_title(story, _label(labels, "strategic_direction", "Strategic direction"), _label(labels, "strategy_pitch", "The marketing story that turns market signals into client-facing decisions."), language, styles, fonts, default_font, "07")
-    strategy_cards = [
-        _pitch_card(title, lines, language, styles, fonts, default_font, ACCENT, width=366, max_lines=3)
-        for title, lines in _strategic_direction(suite, intelligence, labels)
-    ]
-    _pitch_grid(story, strategy_cards, columns=2, col_width=390, language=language)
+    strategy_cards = "".join(_card(title, lines, extra_class="wide") for title, lines in _strategic_direction(suite, intelligence, labels))
+    sections.append(
+        "<section>"
+        + _section_header("08", _label(labels, "strategic_direction", "Strategic direction"), _label(labels, "strategy_pitch", ""))
+        + f'<div class="cards">{strategy_cards}</div></section>'
+    )
 
     # 11. 30/60/90 execution
-    _append_page(story, [])
-    _slide_title(story, _label(labels, "execution", "30 / 60 / 90 day execution"), _label(labels, "execution_pitch", "A simple path from strategy to action."), language, styles, fonts, default_font, "08")
-    execution_cards = [
-        _pitch_card(title, lines, language, styles, fonts, default_font, ACCENT_3, width=248, max_lines=4)
-        for title, lines in _execution_steps(action_plan, labels)
-    ]
-    _pitch_grid(story, execution_cards, columns=3, col_width=260, language=language)
+    execution_cards = "".join(_card(title, lines) for title, lines in _execution_steps(action_plan, labels))
+    sections.append(
+        "<section>"
+        + _section_header("09", _label(labels, "execution", "30 / 60 / 90"), _label(labels, "execution_pitch", ""))
+        + f'<div class="cards">{execution_cards}</div></section>'
+    )
 
     # 12. Closing
-    _append_page(story, [])
-    _section_break(
-        story,
-        _label(labels, "closing", "The full marketing picture is ready."),
-        _label(labels, "closing_copy", "This deck connects the offer, market demand, competitors, customer personas, and execution priorities into one practical plan."),
-        language,
-        styles,
-        fonts,
-        default_font,
+    sections.append(
+        '<section class="closing">'
+        f'<p class="kicker" dir="auto">{escape(suite_name)}</p>'
+        f'<h2 dir="auto">{escape(_label(labels, "closing", ""))}</h2>'
+        f'<p class="section-sub" dir="auto">{escape(_label(labels, "closing_copy", ""))}</p>'
+        f'<p class="footer-note" dir="auto">{escape(labels["generated_by"])}</p>'
+        "</section>"
     )
-    story.append(Spacer(1, 0.2 * inch))
-    story.append(_para(labels["generated_by"], language, styles, "small", fonts, default_font))
 
-    document.build(story, onFirstPage=_draw_deck_page, onLaterPages=_draw_deck_page)
-    return buffer.getvalue(), _filename(suite)
+    html = (
+        f'<html dir="{"rtl" if rtl else "ltr"}" lang="{escape(language)}"><head><meta charset="utf-8">'
+        f"<title>{escape(suite_name)}</title>"
+        f"<style>{_deck_css(accent, rtl)}</style></head><body>"
+        + "".join(sections)
+        + "</body></html>"
+    )
+    pdf_bytes = weasyprint.HTML(string=html).write_pdf()
+    return pdf_bytes, _filename(suite)

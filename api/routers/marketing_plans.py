@@ -1,12 +1,15 @@
 """Marketing plan deck API."""
 from __future__ import annotations
 
+import logging
 import random
 import secrets
 from datetime import datetime, timezone
 import json
 import re
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -37,6 +40,7 @@ from ..services.marketing_plan_generator import (
     suite_research_payload,
 )
 from ..services.marketing_plan_pdf import build_marketing_plan_pdf
+from ..services.marketing_plan_visuals import ensure_marketing_plan_visuals
 
 router = APIRouter(tags=["marketing-plans"])
 
@@ -753,7 +757,24 @@ def _keyword_candidates(suite: Suite, language: str, existing: list[str] | None 
             })
             existing_markers.add(marker)
             if len(keywords) >= 18:
-                return keywords
+                break
+        if len(keywords) >= 18:
+            break
+    if _needs_hebrew_market_terms(suite, language):
+        for term in _hebrew_market_terms(base_terms, 6):
+            marker = term.casefold()
+            if not term or marker in existing_markers:
+                continue
+            keywords.append({
+                "id": f"kw-{len(keywords) + 1}",
+                "text": term,
+                "intent": "core",
+                "source": "fallback_hebrew",
+                "confidence": "starter",
+            })
+            existing_markers.add(marker)
+            if len(keywords) >= 24:
+                break
     return keywords
 
 
@@ -763,10 +784,26 @@ async def _generate_keywords(suite: Suite, language: str, existing: list[str] | 
     services = _suite_services(suite)
     if not services and not brand:
         return fallback
+    needs_hebrew = _needs_hebrew_market_terms(suite, language)
+    instructions = (
+        "Return JSON only: {\"keywords\":[{\"text\":\"...\",\"intent\":\"core|commercial|local|problem|comparison\",\"confidence\":\"medium\"}]}. "
+        "Write every keyword in the target audience's native country language and selected audience language. "
+        "Each keyword must be a short generic business-search term of 1 to 3 words. It should be useful as part of a search for a business like this Suite. "
+        "Use the Suite name only as context to understand the business; do not return the brand/business name, partial brand-name keywords, or modifier phrases combined with the business name. "
+        "Base keywords on the business category, services, products, audience needs, and location. "
+        "Do not return English keywords unless English is one of the audience languages."
+    )
+    if needs_hebrew:
+        instructions += (
+            " IMPORTANT: this business operates in Israel, where customers search Google in BOTH Arabic and Hebrew. "
+            "Return each search concept twice — once in Arabic and once as the natural Hebrew term Israelis actually type "
+            "(not a literal translation when a different Hebrew term is more common). At least 40% of the keywords must be Hebrew."
+        )
     try:
         prompt = {
             "language": language,
             "audience_keyword_languages": _audience_keyword_languages(suite, language),
+            "hebrew_market": needs_hebrew,
             "business": {
                 "name": brand.get("name") or suite.name,
                 "category": brand.get("industry") or brand.get("category") or brand.get("niche"),
@@ -776,7 +813,7 @@ async def _generate_keywords(suite: Suite, language: str, existing: list[str] | 
             },
             "existing_keywords": existing or [],
             "mode": "generate_more" if more else "generate",
-            "instructions": "Return JSON only: {\"keywords\":[{\"text\":\"...\",\"intent\":\"core|commercial|local|problem|comparison\",\"confidence\":\"medium\"}]}. Write every keyword in the target audience's native country language and selected audience language. Each keyword must be a short generic business-search term of 1 to 3 words. It should be useful as part of a search for a business like this Suite. Use the Suite name only as context to understand the business; do not return the brand/business name, partial brand-name keywords, or modifier phrases combined with the business name. Base keywords on the business category, services, products, audience needs, and location. Do not return English keywords unless English is one of the audience languages.",
+            "instructions": instructions,
         }
         raw = await call_text_ai(
             max_tokens=1200,
@@ -811,6 +848,21 @@ async def _generate_keywords(suite: Suite, language: str, existing: list[str] | 
             existing_markers.add(text.casefold())
             if len(generated) >= 24:
                 break
+        if generated and needs_hebrew:
+            hebrew_count = sum(1 for item in generated if _contains_hebrew(item["text"]))
+            if hebrew_count < max(4, len(generated) // 3):
+                arabic_texts = [item["text"] for item in generated if not _contains_hebrew(item["text"])]
+                for text in await _hebrew_planner_terms(arabic_texts, 8):
+                    if text.casefold() in existing_markers:
+                        continue
+                    generated.append({
+                        "id": f"kw-{len(generated) + 1}",
+                        "text": text,
+                        "intent": "core",
+                        "source": "ai_hebrew",
+                        "confidence": "medium",
+                    })
+                    existing_markers.add(text.casefold())
         return generated or fallback
     except Exception:
         return fallback
@@ -1568,6 +1620,12 @@ async def download_marketing_plan_pdf(
     db: AsyncSession = Depends(get_db),
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
+    try:
+        visuals = await ensure_marketing_plan_visuals(suite)
+        if visuals:
+            await db.commit()
+    except Exception:
+        log.warning("Marketing plan visuals generation failed; exporting PDF without images", exc_info=True)
     pdf_bytes, filename = build_marketing_plan_pdf(suite)
     await record_audit_log(
         db,
