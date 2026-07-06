@@ -114,6 +114,15 @@ async def get_video_montage_job(
     return serialize_job(job, suite_id=suite_id)
 
 
+def parse_zoom(raw: str) -> float:
+    """Clamp the requested subject zoom to 1.0-3.0 in 0.25 steps."""
+    try:
+        value = float(str(raw).strip() or "1")
+    except ValueError:
+        value = 1.0
+    return max(1.0, min(3.0, round(value * 4) / 4))
+
+
 @router.post("/jobs")
 async def create_video_montage_job(
     suite_id: str,
@@ -123,6 +132,7 @@ async def create_video_montage_job(
     caption_overrides_json: str = Form("[]"),
     title_overrides_json: str = Form("[]"),
     notes: str = Form(""),
+    zoom: str = Form("1"),
     source_file: UploadFile | None = File(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -142,6 +152,7 @@ async def create_video_montage_job(
         "caption_overrides": caption_overrides,
         "title_overrides": title_overrides,
         "notes": notes.strip()[:3000],
+        "zoom": parse_zoom(zoom),
     }
     job = await create_job(
         db,

@@ -533,3 +533,40 @@ def test_render_v1_video_applies_rtl_overlays_and_green_screen_removal(tmp_path,
     assert "person_camera_motion" in result["capabilities_applied"]
     assert "sound_effect_transitions" in result["capabilities_applied"]
     assert "visual_transitions" in result["capabilities_applied"]
+
+
+def test_caption_chunks_use_word_timestamps_and_group_words():
+    words = [
+        {"text": "هيك", "start": 10.2, "end": 10.5},
+        {"text": "فيك", "start": 10.6, "end": 10.9},
+        {"text": "تجيب", "start": 11.0, "end": 11.4},
+        {"text": "ليدز", "start": 11.5, "end": 11.9},
+        {"text": "جداد", "start": 12.0, "end": 12.4},
+        {"text": "بسرعة", "start": 12.5, "end": 12.9},
+    ]
+    chunks = video_montage.build_caption_chunks("هيك فيك تجيب ليدز جداد بسرعة", 10.0, 14.0, words)
+
+    assert len(chunks) == 2
+    assert [w["text"] for w in chunks[0]["words"]] == ["هيك", "فيك", "تجيب", "ليدز"]
+    assert chunks[0]["start"] == 0.0
+    assert chunks[0]["words"][0]["start"] == pytest.approx(0.2, abs=0.01)
+    assert chunks[1]["start"] == pytest.approx(2.0, abs=0.01)
+    assert chunks[1]["end"] == 4.0
+
+
+def test_caption_chunks_distribute_evenly_without_word_timestamps():
+    chunks = video_montage.build_caption_chunks("كابشن معدل يدويا من المالك مباشرة الان تمام", 0.0, 8.0, None)
+
+    assert len(chunks) == 2
+    assert all(len(chunk["words"]) == 4 for chunk in chunks)
+    assert chunks[0]["start"] == 0.0
+    assert chunks[1]["words"][0]["start"] == pytest.approx(4.0, abs=0.01)
+
+
+def test_parse_zoom_clamps_to_quarter_steps():
+    from api.routers.video_montage import parse_zoom
+
+    assert parse_zoom("1.3") == 1.25
+    assert parse_zoom("5") == 3.0
+    assert parse_zoom("0.2") == 1.0
+    assert parse_zoom("garbage") == 1.0

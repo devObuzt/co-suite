@@ -705,6 +705,7 @@ def transcribe_video_segments(video_path: Path, output_dir: Path) -> tuple[list[
                 ("model", "whisper-1"),
                 ("response_format", "verbose_json"),
                 ("timestamp_granularities[]", "segment"),
+                ("timestamp_granularities[]", "word"),
                 ("prompt", "The video is likely spoken in Arabic or Hebrew. Preserve the spoken language."),
             ]
             response = requests.post(
@@ -726,9 +727,61 @@ def transcribe_video_segments(video_path: Path, output_dir: Path) -> tuple[list[
         end = segment.get("end")
         if text and isinstance(start, (int, float)) and isinstance(end, (int, float)):
             segments.append({"start": float(start), "end": float(end), "text": text})
+    words: list[dict[str, Any]] = []
+    for word in data.get("words") or []:
+        text = str(word.get("word") or "").strip()
+        start = word.get("start")
+        end = word.get("end")
+        if text and isinstance(start, (int, float)) and isinstance(end, (int, float)):
+            words.append({"text": text, "start": float(start), "end": float(end)})
+    for segment in segments:
+        segment["words"] = [
+            w for w in words if segment["start"] - 0.05 <= w["start"] < segment["end"]
+        ]
     transcript_path = output_dir / "transcript.json"
     transcript_path.write_text(json.dumps({"segments": segments}, ensure_ascii=False, indent=2), encoding="utf-8")
     return segments[:18], None
+
+
+def build_caption_chunks(
+    caption: str,
+    scene_start: float,
+    scene_end: float,
+    segment_words: list[dict[str, Any]] | None,
+    chunk_size: int = 4,
+) -> list[dict[str, Any]]:
+    """Split a scene caption into 3-4 word chunks timed to the spoken words.
+
+    Times are relative to the scene start. Falls back to an even distribution
+    when no word-level timestamps are available (overrides, notes fallback).
+    """
+    scene_duration = max(0.4, scene_end - scene_start)
+    timed_words: list[dict[str, Any]] = []
+    for word in segment_words or []:
+        text = str(word.get("text") or "").strip()
+        start = word.get("start")
+        if not text or not isinstance(start, (int, float)):
+            continue
+        rel = min(max(0.0, float(start) - scene_start), scene_duration)
+        timed_words.append({"text": text, "start": round(rel, 3)})
+    if not timed_words:
+        plain = [w for w in re.sub(r"\s+", " ", str(caption or "")).strip().split(" ") if w]
+        if not plain:
+            return []
+        per_word = scene_duration / len(plain)
+        timed_words = [{"text": w, "start": round(i * per_word, 3)} for i, w in enumerate(plain)]
+    chunks: list[dict[str, Any]] = []
+    for i in range(0, len(timed_words), chunk_size):
+        group = timed_words[i:i + chunk_size]
+        next_start = timed_words[i + chunk_size]["start"] if i + chunk_size < len(timed_words) else scene_duration
+        chunks.append(
+            {
+                "start": 0.0 if i == 0 else group[0]["start"],
+                "end": round(max(group[0]["start"] + 0.35, next_start), 3),
+                "words": group,
+            }
+        )
+    return chunks
 
 
 def title_from_caption(text: str, fallback: str) -> str:
@@ -1109,6 +1162,12 @@ async def build_remotion_scene_manifest(
                 "sourceStart": round(start, 3),
                 "sourceEnd": round(end, 3),
                 "caption": caption,
+                "captionChunks": build_caption_chunks(
+                    caption,
+                    start,
+                    end,
+                    segment.get("words") if caption == generated_caption else None,
+                ),
                 "behindText": behind_text,
                 "generatedCaption": generated_caption,
                 "generatedBehindText": generated_title,
@@ -1169,7 +1228,7 @@ async def build_remotion_scene_manifest(
                         "publicPath": public_path,
                         "at": round(start, 3),
                         "duration": min(1.2, max(0.35, float(visual_asset.duration_seconds or 0.7))),
-                        "volume": 0.5,
+                        "volume": 0.35,
                         "assetId": visual_asset.id,
                         "kind": "transition_video",
                     }
@@ -1182,9 +1241,9 @@ async def build_remotion_scene_manifest(
             public_path = remotion_public_asset_path(asset.storage_url, work_dir, asset.id)
             if public_path:
                 selected_asset_ids.append(asset.id)
-                sound_effects.append({"publicPath": public_path, "at": round(start, 3), "volume": 0.5, "assetId": asset.id, "kind": "transition"})
+                sound_effects.append({"publicPath": public_path, "at": round(start, 3), "volume": 0.3, "assetId": asset.id, "kind": "transition"})
         elif whoosh_path.exists():
-            sound_effects.append({"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.58, "kind": "transition"})
+            sound_effects.append({"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.3, "kind": "transition"})
 
     beat_cursor = 0.0
     for scene_index, scene in enumerate(scenes):
@@ -1201,7 +1260,7 @@ async def build_remotion_scene_manifest(
                     {
                         "publicPath": public_path,
                         "at": round(beat_cursor + min(duration_for_scene - 0.2, 0.7 + beat_index * 2.8), 3),
-                        "volume": 0.34,
+                        "volume": 0.2,
                         "assetId": asset.id,
                         "kind": "sfx",
                     }
@@ -1215,12 +1274,12 @@ async def build_remotion_scene_manifest(
         ]
         beat_cursor += duration_for_scene
 
-    background_music = {"publicPath": "/remotion/sound/marketing-upbeat-bed.wav", "volume": 0.32} if music_path.exists() else None
+    background_music = {"publicPath": "/remotion/sound/marketing-upbeat-bed.wav", "volume": 0.14} if music_path.exists() else None
     if music_asset:
         public_path = remotion_public_asset_path(music_asset.storage_url, work_dir, music_asset.id)
         if public_path:
             selected_asset_ids.append(music_asset.id)
-            background_music = {"publicPath": public_path, "volume": 0.3, "assetId": music_asset.id}
+            background_music = {"publicPath": public_path, "volume": 0.14, "assetId": music_asset.id}
 
     serialized_creative_assets = [serialize_creative_asset(asset) for asset in active_assets]
 
@@ -1250,7 +1309,11 @@ async def build_remotion_scene_manifest(
         "visualTransitions": visual_transitions,
         "creativeAssets": serialized_creative_assets,
         "selectedCreativeAssetIds": sorted(set(selected_asset_ids)),
-        "style": {"fontFamily": "ConnecAssistant", "arabicFontFamily": "ConnecCairo"},
+        "style": {
+            "fontFamily": "ConnecAssistant",
+            "arabicFontFamily": "ConnecCairo",
+            "subjectZoom": max(1.0, min(3.0, float(input_data.get("zoom") or 1.0))),
+        },
         "scenes": scenes,
         "durationSeconds": round(edited_duration, 3),
         "diagnostics": {
