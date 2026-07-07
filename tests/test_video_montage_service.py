@@ -570,3 +570,11 @@ def test_parse_zoom_clamps_to_quarter_steps():
     assert parse_zoom("5") == 3.0
     assert parse_zoom("0.2") == 1.0
     assert parse_zoom("garbage") == 1.0
+
+
+def test_parse_offset_clamps_range():
+    from api.routers.video_montage import parse_offset
+
+    assert parse_offset("12.34") == 12.3
+    assert parse_offset("-80") == -40.0
+    assert parse_offset("junk") == 0.0

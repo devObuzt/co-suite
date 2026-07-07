@@ -114,6 +114,15 @@ async def get_video_montage_job(
     return serialize_job(job, suite_id=suite_id)
 
 
+def parse_offset(raw: str) -> float:
+    """Clamp a subject position offset to -40..40 percent of the canvas."""
+    try:
+        value = float(str(raw).strip() or "0")
+    except ValueError:
+        value = 0.0
+    return max(-40.0, min(40.0, round(value, 1)))
+
+
 def parse_zoom(raw: str) -> float:
     """Clamp the requested subject zoom to 1.0-3.0 in 0.25 steps."""
     try:
@@ -133,6 +142,8 @@ async def create_video_montage_job(
     title_overrides_json: str = Form("[]"),
     notes: str = Form(""),
     zoom: str = Form("1"),
+    subject_offset_x: str = Form("0"),
+    subject_offset_y: str = Form("0"),
     source_file: UploadFile | None = File(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -153,6 +164,8 @@ async def create_video_montage_job(
         "title_overrides": title_overrides,
         "notes": notes.strip()[:3000],
         "zoom": parse_zoom(zoom),
+        "subject_offset_x": parse_offset(subject_offset_x),
+        "subject_offset_y": parse_offset(subject_offset_y),
     }
     job = await create_job(
         db,
