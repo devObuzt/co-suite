@@ -73,8 +73,11 @@ def _render_html_to_pdf(html: str) -> bytes:
         pdf_path = tmp_path / "deck.pdf"
         html_path.write_text(html, encoding="utf-8")
         env = dict(os.environ)
-        libdir = _prepare_weasyprint_lib_dir(tmp_path)
-        env["LD_LIBRARY_PATH"] = libdir + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+        if sys.platform == "darwin":
+            env["DYLD_FALLBACK_LIBRARY_PATH"] = "/opt/homebrew/lib:" + env.get("DYLD_FALLBACK_LIBRARY_PATH", "")
+        else:
+            libdir = _prepare_weasyprint_lib_dir(tmp_path)
+            env["LD_LIBRARY_PATH"] = libdir + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
         result = subprocess.run(
             [sys.executable, "-m", "weasyprint", str(html_path), str(pdf_path)],
             env=env,

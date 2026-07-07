@@ -1241,6 +1241,220 @@ async def _fetch_serpapi_source(
     return unique
 
 
+_PLACEHOLDER_NAME_MARKERS = ("افتراض", "hypothetical", "generic", "عام (", "(عامة", "example", "מדומה")
+
+
+def _known_competitor_names(suite: Suite, limit: int = 5) -> list[str]:
+    """Competitor names the user/AI already identified (onboarding + brand).
+
+    Placeholder/hypothetical names from onboarding are skipped — searching them
+    only surfaces junk matches.
+    """
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    strategy = _strategy(suite)
+    names: list[str] = []
+    for raw in brand.get("competitors") or []:
+        if isinstance(raw, str):
+            names.append(raw)
+        elif isinstance(raw, dict):
+            names.append(str(raw.get("name") or ""))
+    for raw in (strategy.get("marketing_plan") or {}).get("competitors") or []:
+        if isinstance(raw, dict):
+            names.append(str(raw.get("name") or ""))
+        elif isinstance(raw, str):
+            names.append(raw)
+    cleaned = []
+    for name in names:
+        fragment = _clean_search_fragment(name)
+        if not fragment or any(marker in fragment.casefold() for marker in _PLACEHOLDER_NAME_MARKERS):
+            continue
+        cleaned.append(fragment)
+    return _unique_strings(cleaned, limit)
+
+
+def _platform_from_url(url: str) -> str:
+    lowered = str(url or "").casefold()
+    if "instagram.com" in lowered:
+        return "instagram"
+    if "tiktok.com" in lowered:
+        return "tiktok"
+    if "facebook.com" in lowered or "fb.com" in lowered:
+        return "facebook"
+    if "google.com/maps" in lowered:
+        return "maps"
+    return "google"
+
+
+async def _fetch_known_competitors(
+    client: httpx.AsyncClient,
+    suite: Suite,
+    language: str,
+    existing_urls: set[str],
+) -> list[dict[str, Any]]:
+    """Search the already-identified competitors by NAME — the anchor for relevance."""
+    api_key = settings.serpapi_api_key.strip()
+    names = _known_competitor_names(suite)
+    if not api_key or not names:
+        return []
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    location = _clean_search_fragment(brand.get("location") or brand.get("audience_location") or brand.get("audience_country") or "")
+    country_code = _serpapi_country_code(location)
+    items: list[dict[str, Any]] = []
+    for name in names:
+        params: dict[str, Any] = {
+            "api_key": api_key,
+            "engine": "google",
+            "q": " ".join(part for part in [name, location] if part),
+            "hl": "ar" if str(language).startswith("ar") else "he" if str(language).startswith("he") else "en",
+            "num": 6,
+        }
+        if country_code:
+            params["gl"] = country_code
+        try:
+            response = await client.get("https://serpapi.com/search.json", params=params)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            continue
+        name_tokens = {token for token in name.casefold().split() if len(token) >= 3}
+        for raw in (payload.get("organic_results") or [])[:6]:
+            if not isinstance(raw, dict):
+                continue
+            title = str(raw.get("title") or "").strip()
+            url = str(raw.get("link") or "").strip()
+            haystack = f"{title} {url}".casefold()
+            if not title or not url or not any(token in haystack for token in name_tokens):
+                continue
+            marker = url or title.casefold()
+            if marker in existing_urls:
+                continue
+            existing_urls.add(marker)
+            platform = _platform_from_url(url)
+            items.append({
+                "id": f"known-{_stable_slug(name, str(len(items) + 1))}-{len(items) + 1}",
+                "name": title,
+                "title": title,
+                "platform": platform,
+                "result_type": platform if platform in {"instagram", "facebook", "tiktok", "maps"} else "google_organic",
+                "url": url,
+                "reason": str(raw.get("snippet") or "").strip(),
+                "offer": str(raw.get("displayed_link") or "").strip(),
+                "evidence": name,
+                "snippet": str(raw.get("snippet") or "").strip(),
+                "opportunity": "",
+                "confidence": "known_competitor",
+                "relevance": "nearby",
+                "classification_tags": ["known"],
+                "research_lead": False,
+            })
+            if sum(1 for item in items if item["evidence"] == name) >= 2:
+                break
+    return items
+
+
+_COMPETITOR_CLASSIFY_PROMPT = """You judge search results for a business's competitor research.
+
+Business:
+{business}
+
+For each candidate below, decide:
+- "nearby": a REAL competing business serving the same audience in or near the same city/area.
+- "real": a real competing business, but not local/nearby.
+- "irrelevant": not a competitor — articles, directories, marketplaces, news, job boards, tool/software pages, dictionaries, or businesses in a different field.
+
+Candidates:
+{candidates}
+
+Return STRICT JSON only: {{"verdicts": [{{"id": "...", "verdict": "nearby|real|irrelevant"}}]}}
+Include every candidate id exactly once."""
+
+
+async def _classify_competitor_candidates(
+    suite: Suite,
+    language: str,
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """AI relevance pass: keep nearby + real competitors, drop everything else.
+
+    Known-competitor and research-lead items skip classification. On AI failure
+    the items pass through unchanged so the flow never hard-fails.
+    """
+    to_classify = [
+        item for item in items
+        if isinstance(item, dict)
+        and not item.get("research_lead")
+        and item.get("confidence") not in {"mock", "starter"}
+    ]
+    if not to_classify:
+        return items
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    business = json.dumps(
+        {
+            "name": brand.get("name") or suite.name,
+            "field": brand.get("industry") or brand.get("category") or brand.get("niche"),
+            "services": _suite_services(suite)[:8],
+            "location": brand.get("location") or brand.get("audience_location"),
+        },
+        ensure_ascii=False,
+        default=str,
+    )
+    candidates = json.dumps(
+        [
+            {
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "snippet": (str(item.get("snippet") or ""))[:200],
+                "url": item.get("url"),
+            }
+            for item in to_classify[:40]
+        ],
+        ensure_ascii=False,
+    )
+    verdicts: dict[str, str] = {}
+    try:
+        raw = await call_text_ai(
+            provider="anthropic",
+            model=settings.anthropic_fast_model,
+            max_tokens=1500,
+            messages=[{"role": "user", "content": _COMPETITOR_CLASSIFY_PROMPT.format(business=business, candidates=candidates)}],
+            system="You classify competitor search results. Return strict JSON only.",
+            timeout=45,
+        )
+        text = raw.strip()
+        if "```" in text:
+            text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+            text = re.sub(r"\n?```\s*$", "", text).strip()
+        parsed = json.loads(text)
+        for entry in parsed.get("verdicts") or []:
+            if isinstance(entry, dict) and entry.get("id"):
+                verdicts[str(entry["id"])] = str(entry.get("verdict") or "").strip().lower()
+    except Exception as exc:
+        log.warning("Competitor relevance classification failed: %s", exc)
+        return items
+
+    kept: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        verdict = verdicts.get(str(item.get("id") or ""))
+        if verdict is None:
+            kept.append(item)
+            continue
+        if verdict == "irrelevant":
+            continue
+        item["relevance"] = "nearby" if verdict == "nearby" else "real"
+        kept.append(item)
+
+    order = {"nearby": 0, "real": 1}
+    kept.sort(
+        key=lambda item: (
+            0 if item.get("confidence") == "known_competitor" else 1,
+            order.get(str(item.get("relevance") or ""), 2),
+        )
+    )
+    return kept
+
+
 async def _serpapi_competitors(suite: Suite, language: str, existing_urls: list[str] | None = None, offset: int = 0) -> tuple[list[dict[str, Any]], list[str]]:
     if not settings.serpapi_api_key.strip():
         return [], ["SERPAPI_API_KEY is not configured on the API service."]
@@ -1248,6 +1462,10 @@ async def _serpapi_competitors(suite: Suite, language: str, existing_urls: list[
     competitors: list[dict[str, Any]] = []
     warnings: list[str] = []
     async with httpx.AsyncClient(timeout=18) as client:
+        try:
+            competitors.extend(await _fetch_known_competitors(client, suite, language, existing))
+        except Exception as exc:
+            warnings.append(_serpapi_error_message("known competitors", exc))
         for source_index, spec in enumerate(SERPAPI_SOURCE_SPECS):
             try:
                 source_items = await _fetch_serpapi_source(client, suite, language, spec, existing, offset + source_index)
@@ -1257,6 +1475,7 @@ async def _serpapi_competitors(suite: Suite, language: str, existing_urls: list[
             except Exception as exc:
                 warnings.append(_serpapi_error_message(spec["label"], exc))
                 continue
+    competitors = await _classify_competitor_candidates(suite, language, competitors)
     return competitors, warnings
 
 
