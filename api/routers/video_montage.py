@@ -19,6 +19,7 @@ from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
 from ..models.user import User
 from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job, update_job
+from ..services.media_storage import r2_configured, upload_bytes
 from ..services.video_montage import (
     download_source,
     job_dir,
@@ -228,13 +229,23 @@ async def create_video_montage_job(
         data = await source_file.read()
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="Video file is too large. Maximum is 500 MB.")
-        output_dir = job_dir(job.id)
         filename = safe_filename(source_file.filename, "source.mp4")
-        source_path = output_dir / filename
-        source_path.write_bytes(data)
-        input_data["source_file_path"] = str(source_path)
+        content_type = source_file.content_type or "video/mp4"
+        # The worker runs in a separate container, so a local path on the API
+        # container is invisible to it — uploads must go through R2.
+        if r2_configured():
+            stored = await asyncio.to_thread(
+                upload_bytes, f"video_montage/{job.id}/upload-{filename}", data, content_type
+            )
+            input_data["source_url"] = stored.url
+            input_data.pop("source_file_path", None)
+        else:
+            output_dir = job_dir(job.id)
+            source_path = output_dir / filename
+            source_path.write_bytes(data)
+            input_data["source_file_path"] = str(source_path)
         input_data["source_file_name"] = filename
-        input_data["source_content_type"] = source_file.content_type
+        input_data["source_content_type"] = content_type
         job = await update_job(db, job.id, input=input_data) or job
 
     return serialize_job(job, suite_id=suite_id)

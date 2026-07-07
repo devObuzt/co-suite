@@ -1996,12 +1996,13 @@ async def generate_video_montage_for_suite(
             normalized_path = normalize_montage_source(source_path, output_dir)
             if normalized_path:
                 veed_source_url = publish_veed_source(job_id, normalized_path)
-        if not veed_source_url and source_url:
+        if not veed_source_url and source_url and not uploaded_path and not r2_configured():
+            # Self-hosted/dev without R2: trust the user's URL as-is.
             veed_source_url = source_url
-            note_fallback("Could not stage a normalized montage source on R2; sending the original URL to VEED/fal.")
+            note_fallback("R2 staging is unavailable; sending the original URL to VEED/fal.")
         if not veed_source_url:
             source_warning = note_fallback(
-                "VEED/fal needs a public source URL and R2 staging is unavailable; falling back to local chromakey preview."
+                "Could not stage a normalized source for VEED/fal; falling back to local chromakey preview."
             )
     elif "background" in options and not settings.fal_key:
         source_warning = note_fallback("FAL_KEY is missing; falling back to local FFmpeg chromakey preview.")
