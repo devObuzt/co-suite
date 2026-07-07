@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
+import uuid
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
@@ -14,7 +19,13 @@ from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
 from ..models.user import User
 from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job, update_job
-from ..services.video_montage import job_dir, safe_filename
+from ..services.video_montage import (
+    download_source,
+    job_dir,
+    normalize_montage_source,
+    publish_veed_source,
+    safe_filename,
+)
 
 router = APIRouter(prefix="/suites/{suite_id}/video-montage", tags=["video-montage"])
 
@@ -112,6 +123,44 @@ async def get_video_montage_job(
     if not job:
         raise HTTPException(status_code=404, detail="Video montage job not found")
     return serialize_job(job, suite_id=suite_id)
+
+
+class StageSourceRequest(BaseModel):
+    source_url: str
+
+
+@router.post("/stage-source")
+async def stage_video_montage_source(
+    suite_id: str,
+    payload: StageSourceRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download + normalize a remote source and publish it to R2.
+
+    Gives the UI a directly playable preview URL (Drive links only serve
+    HTML to browsers) and lets the render reuse the staged file.
+    """
+    await get_owned_suite(db, suite_id, current_user)
+    source_url = str(payload.source_url or "").strip()[:1500]
+    if not source_url.startswith("http"):
+        raise HTTPException(status_code=400, detail="A valid source URL is required.")
+
+    staging_id = f"staging-{uuid.uuid4().hex[:10]}"
+    output_dir = job_dir(staging_id)
+    try:
+        source_path, warning = await download_source(source_url, output_dir / "source_from_url.mp4")
+        if not source_path:
+            raise HTTPException(status_code=400, detail=warning or "Could not download the source video.")
+        normalized = await asyncio.to_thread(normalize_montage_source, source_path, output_dir)
+        if not normalized:
+            raise HTTPException(status_code=500, detail="Could not prepare the source video.")
+        staged_url = await asyncio.to_thread(publish_veed_source, staging_id, normalized)
+        if not staged_url or not staged_url.startswith("https://"):
+            raise HTTPException(status_code=500, detail="Cloud storage is not available for staging.")
+        return {"staged_url": staged_url}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
 
 
 def parse_offset(raw: str) -> float:

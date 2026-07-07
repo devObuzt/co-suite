@@ -795,6 +795,26 @@ def transcribe_video_segments(video_path: Path, output_dir: Path) -> tuple[list[
     return segments[:18], None
 
 
+def detect_subject_top_rel(frames_dir: Path) -> float | None:
+    """Top edge of the transparent subject (0..1 of frame height) from alpha."""
+    frames = sorted(frames_dir.glob("frame_*.png"))
+    if not frames:
+        return None
+    sample = frames[min(len(frames) - 1, len(frames) // 4)]
+    try:
+        with Image.open(sample) as img:
+            alpha = img.convert("RGBA").getchannel("A")
+            width, height = alpha.size
+            pixels = alpha.load()
+            for y in range(0, height, 3):
+                for x in range(0, width, 6):
+                    if pixels[x, y] > 24:
+                        return round(y / height, 4)
+    except Exception:
+        log.exception("Failed to detect subject top from %s", sample)
+    return None
+
+
 def build_caption_chunks(
     caption: str,
     scene_start: float,
@@ -1363,6 +1383,7 @@ async def build_remotion_scene_manifest(
             "hasAlpha": True,
             "framesPublicPath": f"/remotion/inputs/{frames_dir.name}",
             "framePattern": "frame_%05d.png",
+            "subjectTopRel": detect_subject_top_rel(frames_dir),
         },
         "audio": {
             "sourcePublicPath": f"/remotion/inputs/{audio_path.name}",
