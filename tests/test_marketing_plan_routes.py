@@ -267,7 +267,7 @@ def test_competitor_search_terms_clean_structured_location():
     assert any("קורס" in term or "מסחר" in term for term in terms)
 
 
-def test_competitor_source_coverage_fills_three_cards_per_source():
+def test_competitor_source_coverage_adds_one_lead_only_for_empty_sources():
     suite = Suite(
         id="suite-1",
         owner_id="user-1",
@@ -288,12 +288,20 @@ def test_competitor_source_coverage_fills_three_cards_per_source():
 
     filled = marketing_plans._ensure_competitor_source_coverage(suite, "ar", competitors)
     counts: dict[str, int] = {}
+    leads: dict[str, int] = {}
     for item in filled:
         source = item["result_type"]
         counts[source] = counts.get(source, 0) + 1
+        if item.get("research_lead"):
+            leads[source] = leads.get(source, 0) + 1
 
-    for source in ["google_organic", "maps", "instagram", "facebook", "tiktok"]:
-        assert counts[source] >= 3
+    # A source that already has a real result gets NO lead cards.
+    assert leads.get("google_organic", 0) == 0
+    assert counts["google_organic"] == 1
+    # Empty sources get exactly one manual-review lead.
+    for source in ["maps", "instagram", "facebook", "tiktok"]:
+        assert counts[source] == 1
+        assert leads[source] == 1
 
 
 def test_normalize_can_suppress_starter_warning_after_real_search():

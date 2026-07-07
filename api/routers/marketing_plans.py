@@ -1,6 +1,7 @@
 """Marketing plan deck API."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import secrets
@@ -41,6 +42,7 @@ from ..services.marketing_plan_generator import (
 )
 from ..services.marketing_plan_pdf import build_marketing_plan_pdf
 from ..services.marketing_plan_visuals import ensure_marketing_plan_visuals
+from ..services.multi_scraper import search_web
 
 router = APIRouter(tags=["marketing-plans"])
 
@@ -953,7 +955,8 @@ def _serpapi_error_message(label: str, exc: Exception) -> str:
             detail = (getattr(response, "text", "") or str(exc)).split("api_key=")[0][:180]
         status_code = getattr(response, "status_code", "")
         return f"SerpAPI {label} failed{f' ({status_code})' if status_code else ''}: {detail}"
-    return f"SerpAPI {label} failed: {str(exc).split('api_key=')[0][:180]}"
+    detail = str(exc).split("api_key=")[0][:180] or type(exc).__name__
+    return f"SerpAPI {label} failed: {detail}"
 
 
 def _competitor_search_terms(suite: Suite, language: str, offset: int = 0) -> list[str]:
@@ -1162,7 +1165,9 @@ def _ensure_competitor_source_coverage(
     existing_urls: list[str] | None = None,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    minimum_per_source = 3
+    # A search-lead card is a manual-review pointer, not a competitor: add at
+    # most ONE per source, and only when that source produced nothing real.
+    minimum_per_source = 1
     counts: dict[str, int] = {}
     for item in competitors:
         if not isinstance(item, dict):
@@ -1179,7 +1184,7 @@ def _ensure_competitor_source_coverage(
     for index, source in enumerate(["google_organic", "maps", "instagram", "facebook", "tiktok"]):
         source_count = counts.get(source, 0)
         attempts = 0
-        while source_count < minimum_per_source and attempts < 8:
+        while source_count < minimum_per_source and attempts < 4:
             fallback = _fallback_competitor_for_source(suite, language, source, markers, offset + index + attempts)
             attempts += 1
             if not fallback:
@@ -1209,6 +1214,7 @@ async def _fetch_serpapi_source(
     search_terms = terms[:5]
     if spec["engine"] == "google_maps":
         search_terms = [term for term in terms if location and location in term][:3] or terms[:3]
+    last_error: Exception | None = None
     for term in search_terms:
         query = term
         if spec.get("site"):
@@ -1224,9 +1230,14 @@ async def _fetch_serpapi_source(
             params["gl"] = country_code
         if spec["engine"] == "google_maps":
             params["type"] = "search"
-        response = await client.get("https://serpapi.com/search.json", params=params)
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            response = await client.get("https://serpapi.com/search.json", params=params)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            # One failing term must not sink the whole source — try the next term.
+            last_error = exc
+            continue
         candidates = _serpapi_competitors_from_payload(payload, str(spec["result_type"]), 8)
         candidates = _filter_relevant_competitors(suite, language, str(spec["result_type"]), candidates)
         for item in candidates:
@@ -1238,6 +1249,8 @@ async def _fetch_serpapi_source(
             unique.append(item)
             if len(unique) >= target_count:
                 return unique
+    if not unique and last_error is not None:
+        raise last_error
     return unique
 
 
@@ -1285,15 +1298,67 @@ def _platform_from_url(url: str) -> str:
     return "google"
 
 
+_SUGGEST_COMPETITOR_NAMES_PROMPT = """Suggest real competitors for this business:
+{business}
+
+Rules:
+- Only ACTUAL existing businesses you are reasonably confident about, serving the same audience — ideally in or near the same city/area.
+- No generic placeholders, no made-up names, no global brands unless they truly compete locally.
+- 3 to 5 names, each as people would search it (brand name, optionally + city).
+- If you cannot name any real local competitor, return the closest real competitors in the same country.
+
+Return STRICT JSON only: {{"names": ["...", "..."]}}"""
+
+
+async def _suggest_competitor_names(suite: Suite, language: str) -> list[str]:
+    """Ask the fast model for likely real competitor names when none are saved."""
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    business = json.dumps(
+        {
+            "name": brand.get("name") or suite.name,
+            "field": brand.get("industry") or brand.get("category") or brand.get("niche"),
+            "services": _suite_services(suite)[:8],
+            "location": _suite_location(suite),
+        },
+        ensure_ascii=False,
+        default=str,
+    )
+    try:
+        raw = await call_text_ai(
+            provider="anthropic",
+            model=settings.anthropic_fast_model,
+            max_tokens=400,
+            messages=[{"role": "user", "content": _SUGGEST_COMPETITOR_NAMES_PROMPT.format(business=business)}],
+            system="You know local business markets. Return strict JSON only.",
+            timeout=30,
+        )
+        text = raw.strip()
+        if "```" in text:
+            text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+            text = re.sub(r"\n?```\s*$", "", text).strip()
+        parsed = json.loads(text)
+        names = [
+            _clean_search_fragment(name)
+            for name in (parsed.get("names") or [])
+            if isinstance(name, str) and name.strip()
+        ]
+        return _unique_strings(names, 5)
+    except Exception as exc:
+        log.warning("Competitor name suggestion failed: %s", exc)
+        return []
+
+
 async def _fetch_known_competitors(
     client: httpx.AsyncClient,
     suite: Suite,
     language: str,
     existing_urls: set[str],
+    names: list[str] | None = None,
+    confidence: str = "known_competitor",
 ) -> list[dict[str, Any]]:
     """Search the already-identified competitors by NAME — the anchor for relevance."""
     api_key = settings.serpapi_api_key.strip()
-    names = _known_competitor_names(suite)
+    names = names if names is not None else _known_competitor_names(suite)
     if not api_key or not names:
         return []
     brand = suite.brand if isinstance(suite.brand, dict) else {}
@@ -1342,9 +1407,9 @@ async def _fetch_known_competitors(
                 "evidence": name,
                 "snippet": str(raw.get("snippet") or "").strip(),
                 "opportunity": "",
-                "confidence": "known_competitor",
+                "confidence": confidence,
                 "relevance": "nearby",
-                "classification_tags": ["known"],
+                "classification_tags": ["known"] if confidence == "known_competitor" else ["suggested"],
                 "research_lead": False,
             })
             if sum(1 for item in items if item["evidence"] == name) >= 2:
@@ -1455,26 +1520,104 @@ async def _classify_competitor_candidates(
     return kept
 
 
+_WEB_SEARCH_COMPETITOR_QUERIES = (
+    ("instagram", "site:instagram.com"),
+    ("facebook", "site:facebook.com"),
+    ("tiktok", "site:tiktok.com"),
+    ("google_organic", ""),
+)
+
+
+async def _web_search_competitors(
+    suite: Suite,
+    language: str,
+    existing_urls: set[str],
+) -> list[dict[str, Any]]:
+    """Free DDG/Google HTML search — the engine that powers the dashboard
+    market-research section, added here as a parallel competitor source."""
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    niche = _clean_search_fragment(
+        brand.get("niche") or brand.get("industry") or brand.get("category") or (_suite_services(suite) or [""])[0]
+    )
+    location = _suite_location(suite)
+    if not niche:
+        return []
+    queries = [
+        (result_type, " ".join(part for part in [site, niche, location] if part))
+        for result_type, site in _WEB_SEARCH_COMPETITOR_QUERIES
+    ]
+    batches = await asyncio.gather(
+        *[search_web(query, 6) for _result_type, query in queries],
+        return_exceptions=True,
+    )
+    items: list[dict[str, Any]] = []
+    for (result_type, _query), batch in zip(queries, batches):
+        if not isinstance(batch, list):
+            continue
+        for raw in batch:
+            url = str(raw.get("url") or "").strip()
+            title = str(raw.get("title") or "").strip()
+            marker = url or title.casefold()
+            if not title or not url or marker in existing_urls:
+                continue
+            existing_urls.add(marker)
+            platform = str(raw.get("platform") or "web")
+            items.append({
+                "id": f"web-{result_type}-{_stable_slug(title, str(len(items) + 1))}",
+                "name": title,
+                "title": title,
+                "platform": platform if platform != "web" else "google",
+                "result_type": result_type if result_type != "google_organic" else (
+                    platform if platform in {"instagram", "facebook", "tiktok"} else "google_organic"
+                ),
+                "url": url,
+                "reason": str(raw.get("snippet") or "").strip(),
+                "offer": "",
+                "evidence": niche,
+                "snippet": str(raw.get("snippet") or "").strip(),
+                "opportunity": "",
+                "confidence": "web_search",
+                "classification_tags": [],
+                "research_lead": False,
+            })
+    return items
+
+
 async def _serpapi_competitors(suite: Suite, language: str, existing_urls: list[str] | None = None, offset: int = 0) -> tuple[list[dict[str, Any]], list[str]]:
-    if not settings.serpapi_api_key.strip():
-        return [], ["SERPAPI_API_KEY is not configured on the API service."]
     existing = {url for url in (existing_urls or []) if url}
     competitors: list[dict[str, Any]] = []
     warnings: list[str] = []
-    async with httpx.AsyncClient(timeout=18) as client:
-        try:
-            competitors.extend(await _fetch_known_competitors(client, suite, language, existing))
-        except Exception as exc:
-            warnings.append(_serpapi_error_message("known competitors", exc))
-        for source_index, spec in enumerate(SERPAPI_SOURCE_SPECS):
-            try:
-                source_items = await _fetch_serpapi_source(client, suite, language, spec, existing, offset + source_index)
-                competitors.extend(source_items[:5])
-                if not source_items:
-                    warnings.append(f"SerpAPI returned no usable {spec['label']} results.")
-            except Exception as exc:
-                warnings.append(_serpapi_error_message(spec["label"], exc))
-                continue
+    has_serpapi = bool(settings.serpapi_api_key.strip())
+    if not has_serpapi:
+        warnings.append("SERPAPI_API_KEY is not configured on the API service.")
+
+    names = _known_competitor_names(suite)
+    names_confidence = "known_competitor"
+    if not names:
+        names = await _suggest_competitor_names(suite, language)
+        names_confidence = "ai_suggested"
+
+    async with httpx.AsyncClient(timeout=25) as client:
+        tasks: list[tuple[str, Any]] = [
+            ("web search", _web_search_competitors(suite, language, existing)),
+        ]
+        if has_serpapi:
+            tasks.append(
+                ("known competitors", _fetch_known_competitors(client, suite, language, existing, names, names_confidence))
+            )
+            tasks.extend(
+                (spec["label"], _fetch_serpapi_source(client, suite, language, spec, existing, offset + index))
+                for index, spec in enumerate(SERPAPI_SOURCE_SPECS)
+            )
+        results = await asyncio.gather(*[task for _label, task in tasks], return_exceptions=True)
+    for (label, _task), result in zip(tasks, results):
+        if isinstance(result, Exception):
+            warnings.append(_serpapi_error_message(label, result))
+            continue
+        items = result if isinstance(result, list) else []
+        competitors.extend(items[:8])
+        if not items and label not in ("web search", "known competitors"):
+            warnings.append(f"SerpAPI returned no usable {label} results.")
     competitors = await _classify_competitor_candidates(suite, language, competitors)
     return competitors, warnings
 

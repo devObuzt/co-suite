@@ -505,81 +505,89 @@ async def search_business(business_name: str, location: str = "") -> str:
     return "\n".join(snippets[:6])
 
 
+def classify_platform(url: str) -> str:
+    u = str(url or "").lower()
+    if "instagram.com" in u:
+        return "instagram"
+    if "tiktok.com" in u:
+        return "tiktok"
+    if "facebook.com" in u or "fb.com" in u:
+        return "facebook"
+    return "web"
+
+
+async def search_web(query: str, limit: int = 6) -> list[dict]:
+    """Free web search (DuckDuckGo HTML with Google HTML fallback).
+
+    Returns [{title, url, snippet, platform}] — the engine behind the dashboard
+    market-research section, reused by marketing-plan competitor research.
+    """
+    items: list[dict] = []
+    try:
+        search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+        async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12) as client:
+            resp = await client.get(search_url)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # DDG HTML structure: results are .result, title link is .result__a,
+        # snippet is .result__snippet. The href may be a DDG redirect — extract
+        # the real URL from the uddg param when present.
+        for el in soup.select(".result")[:limit]:
+            title_el = el.select_one("a.result__a")
+            snippet_el = el.select_one(".result__snippet")
+            if not title_el:
+                continue
+            raw_href = title_el.get("href", "") or ""
+            # Extract real URL from DDG redirect (e.g. /l/?uddg=https%3A%2F%2F...)
+            if "uddg=" in raw_href:
+                from urllib.parse import parse_qs, urlparse, unquote
+                qs = parse_qs(urlparse(raw_href).query)
+                url = unquote(qs.get("uddg", [""])[0])
+            else:
+                url = raw_href
+            title = title_el.get_text(strip=True)
+            snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+            if url and title and url.startswith("http"):
+                items.append({
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet,
+                    "platform": classify_platform(url),
+                })
+    except Exception as e:
+        log.warning("Market search failed for '%s': %s", query, e)
+    # Fallback to Google if DDG returned nothing
+    if not items:
+        try:
+            g_url = f"https://www.google.com/search?q={quote_plus(query)}&hl=en&num={limit}"
+            async with httpx.AsyncClient(headers={**BROWSER_HEADERS, "Accept-Language": "en-US"}, timeout=12) as client:
+                resp = await client.get(g_url)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for a in soup.select("a[href]")[:20]:
+                href = a.get("href", "")
+                if href.startswith("/url?q="):
+                    real = href[7:].split("&")[0]
+                    from urllib.parse import unquote as _uq
+                    real = _uq(real)
+                    if real.startswith("http") and "google.com" not in real:
+                        title = a.get_text(strip=True)
+                        if title and len(title) > 5:
+                            items.append({
+                                "title": title,
+                                "url": real,
+                                "snippet": "",
+                                "platform": classify_platform(real),
+                            })
+                    if len(items) >= limit - 1:
+                        break
+        except Exception as e2:
+            log.warning("Google fallback failed for '%s': %s", query, e2)
+    return items
+
+
 async def search_market_content(keyword: str, location: str, strategy: dict) -> list[dict]:
     """Search for competitor content and trending social posts in the market."""
     results = []
-
-    def _classify(url: str) -> str:
-        u = url.lower()
-        if "instagram.com" in u:
-            return "instagram"
-        if "tiktok.com" in u:
-            return "tiktok"
-        if "facebook.com" in u or "fb.com" in u:
-            return "facebook"
-        return "web"
-
-    async def _search(query: str) -> list[dict]:
-        items = []
-        try:
-            search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
-            async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12) as client:
-                resp = await client.get(search_url)
-            soup = BeautifulSoup(resp.text, "html.parser")
-            # DDG HTML structure: results are .result, title link is .result__a,
-            # snippet is .result__snippet. The href may be a DDG redirect — extract
-            # the real URL from the uddg param when present.
-            for el in soup.select(".result")[:6]:
-                title_el = el.select_one("a.result__a")
-                snippet_el = el.select_one(".result__snippet")
-                if not title_el:
-                    continue
-                raw_href = title_el.get("href", "") or ""
-                # Extract real URL from DDG redirect (e.g. /l/?uddg=https%3A%2F%2F...)
-                if "uddg=" in raw_href:
-                    from urllib.parse import parse_qs, urlparse, unquote
-                    qs = parse_qs(urlparse(raw_href).query)
-                    url = unquote(qs.get("uddg", [""])[0])
-                else:
-                    url = raw_href
-                title = title_el.get_text(strip=True)
-                snippet = snippet_el.get_text(strip=True) if snippet_el else ""
-                if url and title and url.startswith("http"):
-                    items.append({
-                        "title": title,
-                        "url": url,
-                        "snippet": snippet,
-                        "platform": _classify(url),
-                    })
-        except Exception as e:
-            log.warning("Market search failed for '%s': %s", query, e)
-        # Fallback to Google if DDG returned nothing
-        if not items:
-            try:
-                g_url = f"https://www.google.com/search?q={quote_plus(query)}&hl=en&num=6"
-                async with httpx.AsyncClient(headers={**BROWSER_HEADERS, "Accept-Language": "en-US"}, timeout=12) as client:
-                    resp = await client.get(g_url)
-                soup = BeautifulSoup(resp.text, "html.parser")
-                for a in soup.select("a[href]")[:20]:
-                    href = a.get("href", "")
-                    if href.startswith("/url?q="):
-                        real = href[7:].split("&")[0]
-                        from urllib.parse import unquote as _uq
-                        real = _uq(real)
-                        if real.startswith("http") and "google.com" not in real:
-                            title = a.get_text(strip=True)
-                            if title and len(title) > 5:
-                                items.append({
-                                    "title": title,
-                                    "url": real,
-                                    "snippet": "",
-                                    "platform": _classify(real),
-                                })
-                        if len(items) >= 5:
-                            break
-            except Exception as e2:
-                log.warning("Google fallback failed for '%s': %s", query, e2)
-        return items
+    _search = search_web
 
     # Search for Instagram content in the niche + location
     if keyword:
