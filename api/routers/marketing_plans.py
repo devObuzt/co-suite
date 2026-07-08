@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import settings
 from ..core.database import get_db
+from ..core.external_calls import external_call
 from ..core.llm_client import call_text_ai
 from ..core.security import get_current_user, hash_password, verify_password
 from ..models.generation_job import GenerationJob, GenerationJobType
@@ -657,7 +658,9 @@ async def _english_planner_terms(keywords: list[str], limit: int = 10) -> list[s
             "instructions": "Translate every keyword into the English search term people would actually type into Google for the same intent (1-3 words each). Return JSON only: {\"keywords\":[\"...\"]}.",
         }
         raw = await call_text_ai(
-            max_tokens=800,
+            provider="anthropic",
+            model=settings.anthropic_fast_model,
+            max_tokens=1200,
             messages=[{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
             system="You translate marketing search keywords into natural English search terms. Return strict JSON only.",
             timeout=40,
@@ -686,7 +689,9 @@ async def _hebrew_planner_terms(keywords: list[str], limit: int = 10) -> list[st
             "instructions": "Translate every keyword into the Hebrew search term Israelis would actually type into Google for the same intent (1-3 words each). Return JSON only: {\"keywords\":[\"...\"]}.",
         }
         raw = await call_text_ai(
-            max_tokens=800,
+            provider="anthropic",
+            model=settings.anthropic_fast_model,
+            max_tokens=1200,
             messages=[{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
             system="You translate marketing search keywords into natural Hebrew search terms. Return strict JSON only.",
             timeout=40,
@@ -868,10 +873,10 @@ async def _generate_keywords(suite: Suite, language: str, existing: list[str] | 
             "instructions": instructions,
         }
         raw = await call_text_ai(
-            max_tokens=1200,
+            max_tokens=4000,
             messages=[{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
             system="You generate practical marketing keywords. Return strict JSON only.",
-            timeout=50,
+            timeout=90,
         )
         parsed = json.loads(raw)
         incoming = parsed.get("keywords") if isinstance(parsed, dict) else []
@@ -1281,8 +1286,10 @@ async def _fetch_serpapi_source(
         if spec["engine"] == "google_maps":
             params["type"] = "search"
         try:
-            response = await client.get("https://serpapi.com/search.json", params=params)
-            response.raise_for_status()
+            async with external_call("serpapi", "search", query_type=spec["engine"], country=country_code or None) as call:
+                response = await client.get("https://serpapi.com/search.json", params=params)
+                call.note(status_code=response.status_code)
+                response.raise_for_status()
             payload = response.json()
         except Exception as exc:
             # One failing term must not sink the whole source — try the next term.
@@ -1426,8 +1433,10 @@ async def _fetch_known_competitors(
         if country_code:
             params["gl"] = country_code
         try:
-            response = await client.get("https://serpapi.com/search.json", params=params)
-            response.raise_for_status()
+            async with external_call("serpapi", "search", query_type="google", country=country_code or None) as call:
+                response = await client.get("https://serpapi.com/search.json", params=params)
+                call.note(status_code=response.status_code)
+                response.raise_for_status()
             payload = response.json()
         except Exception:
             continue
@@ -1896,6 +1905,28 @@ def _merge_keyword_planner_results(results: list[dict[str, Any]]) -> dict[str, A
     }
 
 
+async def _fetch_keyword_planner_ideas_logged(
+    customer_id: Any,
+    refresh_token: Any,
+    seed_terms: list[str],
+    language: str,
+    location: Any,
+    website: Any,
+) -> dict[str, Any]:
+    """fetch_keyword_planner_ideas with one external-call log line per request."""
+    async with external_call(
+        "google-ads",
+        "keyword_ideas",
+        language=language,
+        location=str(location or "") or None,
+        seed_count=len(seed_terms or []),
+    ) as call:
+        result = await fetch_keyword_planner_ideas(customer_id, refresh_token, seed_terms, language, location, website)
+        if isinstance(result, dict) and result.get("warning") and not result.get("keyword_metrics"):
+            call.fail(result["warning"])
+        return result
+
+
 async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None = None, more: bool = False) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
     existing = _strategy(suite).get("marketing_intelligence")
@@ -1936,7 +1967,7 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         website = _suite_website_url(suite)
         raw_results = await asyncio.gather(
             *[
-                fetch_keyword_planner_ideas(customer_id, refresh_token, seed_terms, "en", market, website)
+                _fetch_keyword_planner_ideas_logged(customer_id, refresh_token, seed_terms, "en", market, website)
                 for market in GLOBAL_PLANNER_MARKETS
             ],
             return_exceptions=True,
@@ -1960,7 +1991,7 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         needs_hebrew = _needs_hebrew_market_terms(suite, output_language)
         primary_keywords = [keyword for keyword in planner_keywords if not _contains_hebrew(keyword)] or planner_keywords
         planner_results = [
-            await fetch_keyword_planner_ideas(
+            await _fetch_keyword_planner_ideas_logged(
                 customer_id,
                 refresh_token,
                 primary_keywords,
@@ -1972,7 +2003,7 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         hebrew_terms = await _hebrew_planner_terms(planner_keywords, 10) if needs_hebrew else []
         if needs_hebrew and (hebrew_terms or _suite_website_url(suite)):
             planner_results.append(
-                await fetch_keyword_planner_ideas(
+                await _fetch_keyword_planner_ideas_logged(
                     customer_id,
                     refresh_token,
                     hebrew_terms,
