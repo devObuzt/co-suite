@@ -1709,17 +1709,22 @@ async def _save_competitor_scratch_from_search(suite: Suite, language: str | Non
     )
     competitors, serpapi_warnings = await _serpapi_competitors(suite, output_language)
     competitors = _ensure_competitor_source_coverage(suite, output_language, competitors)
+    if serpapi_warnings:
+        # Source-level failures are platform concerns, not user errors: log for
+        # the admin and keep them out of the visible response.
+        log.error("Competitor source warnings for suite %s: %s", suite.id, " | ".join(serpapi_warnings[:6]))
     if competitors:
         intelligence["competitors"] = competitors
         intelligence["warnings"] = []
         intelligence["suppress_starter_warnings"] = True
-        intelligence["source_warnings"] = serpapi_warnings[:5]
+        intelligence["source_warnings"] = []
     else:
         intelligence["competitors"] = []
         intelligence["warnings"] = [
             "SerpAPI did not return usable direct competitor results.",
         ]
-        intelligence["source_warnings"] = serpapi_warnings[:5]
+        intelligence["source_warnings"] = []
+    intelligence["internal_source_warnings"] = serpapi_warnings[:6]
     intelligence["status"] = "competitors_ready"
     return _save_marketing_intelligence(suite, intelligence)
 
@@ -1744,6 +1749,8 @@ async def _append_competitor_scratch_from_search(suite: Suite, language: str | N
     existing_urls = [str(item.get("url") or item.get("title") or "") for item in current if isinstance(item, dict)]
     more, serpapi_warnings = await _serpapi_competitors(suite, output_language, existing_urls, offset=len(current))
     more = _ensure_competitor_source_coverage(suite, output_language, more, existing_urls, offset=len(current))
+    if serpapi_warnings:
+        log.error("Competitor source warnings for suite %s: %s", suite.id, " | ".join(serpapi_warnings[:6]))
     if not more:
         more = []
         base["warnings"] = [
@@ -1752,7 +1759,8 @@ async def _append_competitor_scratch_from_search(suite: Suite, language: str | N
     else:
         base["warnings"] = []
     base["suppress_starter_warnings"] = True
-    base["source_warnings"] = serpapi_warnings[:5]
+    base["source_warnings"] = []
+    base["internal_source_warnings"] = serpapi_warnings[:6]
     current.extend(more)
     base["competitors"] = current[:60]
     base["status"] = "competitors_ready"

@@ -114,7 +114,47 @@ async def extract_brand(
             raise HTTPException(status_code=503, detail="The AI service is temporarily busy. Please try again in a few seconds.")
         raise HTTPException(status_code=500, detail="Brand research failed. Please try again.")
 
+    brand = _merge_submitted_links(dict(brand or {}), urls)
     return {"brand": brand, "research_debug": (brand or {}).get("research_debug")}
+
+
+def _link_platform(url: str) -> str:
+    lowered = url.casefold()
+    if "instagram.com" in lowered:
+        return "instagram"
+    if "facebook.com" in lowered or "fb.com" in lowered:
+        return "facebook"
+    if "tiktok.com" in lowered:
+        return "tiktok"
+    if "linkedin.com" in lowered:
+        return "linkedin"
+    return "website"
+
+
+def _merge_submitted_links(brand: dict, urls: list[str]) -> dict:
+    """Persist the links the user typed at onboarding — extraction may skip them."""
+    social_links = dict(brand.get("social_links") or {})
+    reference_links = [item for item in (brand.get("reference_links") or []) if isinstance(item, dict)]
+    seen_refs = {str(item.get("url") or "").strip().casefold() for item in reference_links}
+    for url in urls:
+        url = url.strip()
+        if not url:
+            continue
+        platform = _link_platform(url)
+        if platform == "website":
+            if not brand.get("website"):
+                brand["website"] = url
+        elif not social_links.get(platform):
+            social_links[platform] = url
+        marker = url.casefold()
+        if marker not in seen_refs:
+            reference_links.append({"label": platform, "url": url, "source": "onboarding"})
+            seen_refs.add(marker)
+    if not brand.get("website") and social_links.get("website"):
+        brand["website"] = social_links["website"]
+    brand["social_links"] = social_links
+    brand["reference_links"] = reference_links
+    return brand
 
 
 @router.post("/save-brand")
