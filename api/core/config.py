@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     google_image_model: str = "gemini-3.1-flash-preview-image-generation"
     google_video_model: str = "veo-3.1-fast-generate-preview"
+    google_vision_model: str = "gemini-2.5-flash"
     openai_image_model: str = "gpt-image-1.5"
     fal_key: str = ""
     google_ads_developer_token: str = ""

@@ -32,7 +32,9 @@ from .creative_assets import (
     AUDIO_KINDS,
     VIDEO_TRANSITION_KINDS,
     VISUAL_KINDS,
+    filter_assets_for_backgrounds_mode,
     generate_visual_asset_for_scene,
+    has_user_background_match,
     list_active_assets,
     pick_asset,
     record_asset_usage,
@@ -564,6 +566,15 @@ def title_from_suite(suite: Suite) -> str:
 def write_text_file(path: Path, text: str) -> Path:
     path.write_text(text.strip() or "OneShare", encoding="utf-8")
     return path
+
+
+BACKGROUNDS_MODES = {"blend", "user_only"}
+
+
+def resolve_backgrounds_mode(input_data: dict[str, Any]) -> str:
+    """Job option: blend user uploads with generated backgrounds (default) or user-only."""
+    mode = str(input_data.get("backgrounds_mode") or "").strip().lower()
+    return mode if mode in BACKGROUNDS_MODES else "blend"
 
 
 def requested_options(input_data: dict[str, Any]) -> set[str]:
@@ -1322,6 +1333,20 @@ async def build_remotion_scene_manifest(
                 ", ".join(f"{asset.kind}:{asset.id}" for asset in skipped_assets[:50]),
             )
         active_assets = available_assets
+    backgrounds_mode = resolve_backgrounds_mode(input_data)
+    active_assets, allow_generated_backgrounds = filter_assets_for_backgrounds_mode(
+        active_assets, mode=backgrounds_mode, suite_id=suite.id
+    )
+    if not allow_generated_backgrounds:
+        log_event(
+            log,
+            logging.INFO,
+            "Montage backgrounds restricted to user uploads (user_only mode).",
+            event="montage_backgrounds_mode",
+            suite_id=suite.id,
+            backgrounds_mode=backgrounds_mode,
+            user_asset_count=len([asset for asset in active_assets if asset.kind in VISUAL_KINDS]),
+        )
     selected_asset_ids: list[str] = []
     distinct_background_video_ids: set[str] = set()
     scenes: list[dict[str, Any]] = []
@@ -1353,7 +1378,15 @@ async def build_remotion_scene_manifest(
         ][index % 5]
         variety_seed = zlib.crc32(str(work_dir).encode("utf-8")) + index
         visual_video_asset = None
-        if subject_has_alpha and db and index == 0:
+        if (
+            subject_has_alpha
+            and db
+            and index == 0
+            and allow_generated_backgrounds
+            # In blend mode a matching user upload wins the hero scene;
+            # generation only fills gaps the user's own media doesn't cover.
+            and not has_user_background_match(active_assets, scene_text=caption, suite_id=suite.id)
+        ):
             # The hero scene always gets a freshly generated background tied to
             # the spoken line, so consecutive renders don't open identically.
             try:
@@ -1366,7 +1399,7 @@ async def build_remotion_scene_manifest(
             visual_video_asset = pick_asset(
                 active_assets, kind="visual_video", scene_text=caption, suite_id=suite.id, variety_seed=variety_seed
             )
-        if subject_has_alpha and not visual_video_asset and db and index < 2:
+        if subject_has_alpha and not visual_video_asset and db and index < 2 and allow_generated_backgrounds:
             try:
                 visual_video_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption, kind="visual_video")
                 if visual_video_asset:
@@ -1388,7 +1421,7 @@ async def build_remotion_scene_manifest(
             visual_asset = pick_asset(
                 active_assets, kind="visual_image", scene_text=caption, suite_id=suite.id, variety_seed=variety_seed
             )
-            if not visual_asset and db and index < 4:
+            if not visual_asset and db and index < 4 and allow_generated_backgrounds:
                 try:
                     visual_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption)
                     if visual_asset:
@@ -1616,6 +1649,8 @@ async def build_remotion_scene_manifest(
             "showCaptions": show_captions,
             "showTitles": show_titles,
             "subjectHasAlpha": subject_has_alpha,
+            "backgroundsMode": backgrounds_mode,
+            "generatedBackgroundsAllowed": allow_generated_backgrounds,
             "voiceCleanupApplied": bool(voice_cleanup and has_source_audio),
             "timingSource": "non_silent_segments" if timing_segments and len(timing_segments) > 1 else "transcript_or_timed_split",
         },

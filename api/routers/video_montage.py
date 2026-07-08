@@ -25,6 +25,7 @@ from ..services.video_montage import (
     job_dir,
     normalize_montage_source,
     publish_veed_source,
+    resolve_backgrounds_mode,
     safe_filename,
 )
 
@@ -60,6 +61,7 @@ def job_input_summary(job: GenerationJob) -> dict[str, Any]:
         "source_file_name": str(input_data.get("source_file_name") or "") or None,
         "notes": str(input_data.get("notes") or "") or None,
         "options": input_data.get("options") if isinstance(input_data.get("options"), list) else [],
+        "backgrounds_mode": str(input_data.get("backgrounds_mode") or "") or None,
     }
 
 
@@ -215,6 +217,7 @@ async def create_video_montage_job(
     caption_overrides_json: str = Form("[]"),
     title_overrides_json: str = Form("[]"),
     notes: str = Form(""),
+    backgrounds_mode: str = Form("blend"),
     zoom: str = Form("1"),
     subject_offset_x: str = Form("0"),
     subject_offset_y: str = Form("0"),
@@ -235,6 +238,7 @@ async def create_video_montage_job(
         "caption_overrides": caption_overrides,
         "title_overrides": title_overrides,
         "notes": notes.strip()[:3000],
+        "backgrounds_mode": resolve_backgrounds_mode({"backgrounds_mode": backgrounds_mode}),
         "zoom": parse_zoom(zoom),
         "subject_offset_x": parse_offset(subject_offset_x),
         "subject_offset_y": parse_offset(subject_offset_y),

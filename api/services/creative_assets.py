@@ -107,10 +107,80 @@ async def list_active_assets(db: AsyncSession, *, kinds: set[str] | None = None)
     return (await db.execute(query)).scalars().all()
 
 
+async def list_user_background_assets(db: AsyncSession, suite_id: str) -> list[CreativeAsset]:
+    """Active user-uploaded background assets belonging to one suite, newest first."""
+    rows = (
+        await db.execute(
+            select(CreativeAsset)
+            .where(CreativeAsset.active.is_(True))
+            .where(CreativeAsset.kind.in_(sorted(VISUAL_KINDS)))
+            .order_by(CreativeAsset.created_at.desc())
+        )
+    ).scalars().all()
+    return [row for row in rows if is_user_uploaded_asset(row) and _asset_suite_id(row) == str(suite_id)]
+
+
 def _asset_suite_id(asset: CreativeAsset) -> str | None:
     meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
     value = meta.get("suite_id")
     return str(value) if value else None
+
+
+def is_user_uploaded_asset(asset: CreativeAsset) -> bool:
+    meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    return bool(meta.get("user_uploaded"))
+
+
+def user_uploaded_suite_assets(assets: list[CreativeAsset], suite_id: str | None) -> list[CreativeAsset]:
+    """The suite's own user-uploaded visual backgrounds."""
+    if not suite_id:
+        return []
+    return [
+        asset
+        for asset in assets
+        if asset.kind in VISUAL_KINDS and is_user_uploaded_asset(asset) and _asset_suite_id(asset) == str(suite_id)
+    ]
+
+
+# A fresh same-suite user upload scores at least kind(+4) + suite(+6) + user(+8);
+# anything above this floor still counts as a usable match even after usage and
+# recency penalties, so generation only has to fill true gaps.
+MINIMAL_USER_BACKGROUND_SCORE = 12
+
+
+def has_user_background_match(
+    assets: list[CreativeAsset],
+    *,
+    scene_text: str,
+    suite_id: str | None,
+    min_score: int = MINIMAL_USER_BACKGROUND_SCORE,
+) -> bool:
+    """True when a user-uploaded suite background matches this scene well enough."""
+    for asset in user_uploaded_suite_assets(assets, suite_id):
+        if _score_asset(asset, scene_text, asset.kind, suite_id) >= min_score:
+            return True
+    return False
+
+
+def filter_assets_for_backgrounds_mode(
+    assets: list[CreativeAsset],
+    *,
+    mode: str,
+    suite_id: str | None,
+) -> tuple[list[CreativeAsset], bool]:
+    """Apply the job's backgrounds_mode to the candidate asset pool.
+
+    Returns ``(assets, allow_generated_backgrounds)``. In ``user_only`` mode
+    (and only when the suite actually has user uploads) visual candidates are
+    restricted to the user's own backgrounds and AI background generation is
+    disabled; audio/transition assets always pass through untouched.
+    """
+    user_assets = user_uploaded_suite_assets(assets, suite_id)
+    if mode == "user_only" and user_assets:
+        user_ids = {asset.id for asset in user_assets}
+        filtered = [asset for asset in assets if asset.kind not in VISUAL_KINDS or asset.id in user_ids]
+        return filtered, False
+    return assets, True
 
 
 def _score_asset(asset: CreativeAsset, scene_text: str, wanted_kind: str, suite_id: str | None = None) -> int:
@@ -130,6 +200,10 @@ def _score_asset(asset: CreativeAsset, scene_text: str, wanted_kind: str, suite_
     if suite_id and asset_suite:
         if asset_suite == suite_id:
             score += 6
+            # The user's own uploads beat suite-generated backgrounds, which
+            # beat the shared library: user upload > generated > library.
+            if is_user_uploaded_asset(asset):
+                score += 8
         elif wanted_kind in VISUAL_KINDS:
             score -= 20
     last_used = asset.last_used_at
