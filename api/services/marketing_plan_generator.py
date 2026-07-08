@@ -476,6 +476,10 @@ def _normalize_competitor(raw: Any, index: int) -> dict[str, Any] | None:
             platform = "website"
         else:
             platform = "other"
+    # "relevance" is either a free-text explanation (AI research) or the
+    # classifier verdict "nearby"/"real" — only the former belongs in reason.
+    relevance_text = str(raw.get("relevance") or "").strip()
+    relevance_verdict = relevance_text.lower() if relevance_text.lower() in {"nearby", "real"} else ""
     item = {
         "id": str(raw.get("id") or _stable_slug(name or url, f"competitor-{index}")),
         "name": name or url,
@@ -483,7 +487,7 @@ def _normalize_competitor(raw: Any, index: int) -> dict[str, Any] | None:
         "platform": platform,
         "result_type": str(raw.get("result_type") or raw.get("type") or platform).strip(),
         "url": url,
-        "reason": str(raw.get("reason") or raw.get("why_relevant") or raw.get("relevance") or "").strip(),
+        "reason": str(raw.get("reason") or raw.get("why_relevant") or ("" if relevance_verdict else relevance_text) or "").strip(),
         "offer": str(raw.get("offer") or raw.get("category") or raw.get("description") or "").strip(),
         "evidence": str(raw.get("evidence") or raw.get("snippet") or raw.get("summary") or "").strip(),
         "snippet": str(raw.get("snippet") or raw.get("summary") or raw.get("evidence") or raw.get("description") or "").strip(),
@@ -495,6 +499,17 @@ def _normalize_competitor(raw: Any, index: int) -> dict[str, Any] | None:
         item["classification_tags"] = tags
     if raw.get("research_lead") is not None:
         item["research_lead"] = bool(raw.get("research_lead"))
+    if relevance_verdict:
+        item["relevance"] = relevance_verdict
+    rating = raw.get("rating")
+    if isinstance(rating, (int, float)) and 0 < float(rating) <= 5:
+        item["rating"] = round(float(rating), 1)
+    reviews = raw.get("reviews")
+    if isinstance(reviews, (int, float)) and int(reviews) > 0:
+        item["reviews"] = int(reviews)
+    address = str(raw.get("address") or "").strip()
+    if address:
+        item["address"] = address
     return item
 
 

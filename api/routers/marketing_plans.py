@@ -123,6 +123,10 @@ class MarketingCompetitorInput(BaseModel):
     confidence: str | None = Field(default=None, max_length=80)
     research_lead: bool | None = None
     classification_tags: list[str] = Field(default_factory=list, max_length=8)
+    relevance: str | None = Field(default=None, max_length=20)
+    rating: float | None = Field(default=None, ge=0, le=5)
+    reviews: int | None = Field(default=None, ge=0)
+    address: str | None = Field(default=None, max_length=500)
 
 
 class MarketingCompetitorsUpdateRequest(BaseModel):
@@ -1139,6 +1143,15 @@ def _serpapi_competitors_from_payload(payload: dict[str, Any], result_type: str,
         }
         if result_type == "maps":
             item["platform"] = "maps"
+            rating = raw.get("rating")
+            if isinstance(rating, (int, float)) and 0 < float(rating) <= 5:
+                item["rating"] = round(float(rating), 1)
+            reviews = raw.get("reviews")
+            if isinstance(reviews, (int, float)) and int(reviews) > 0:
+                item["reviews"] = int(reviews)
+            address = str(raw.get("address") or "").strip()
+            if address:
+                item["address"] = address
             if not item["url"] and raw.get("gps_coordinates"):
                 coordinates = raw.get("gps_coordinates") or {}
                 lat = coordinates.get("latitude")
@@ -2454,6 +2467,14 @@ async def update_marketing_competitors(
             "classification_tags": _normalize_competitor_tags(competitor.classification_tags),
             "position": index,
         }
+        if competitor.relevance and competitor.relevance.strip().lower() in {"nearby", "real"}:
+            item["relevance"] = competitor.relevance.strip().lower()
+        if competitor.rating is not None and competitor.rating > 0:
+            item["rating"] = round(competitor.rating, 1)
+        if competitor.reviews:
+            item["reviews"] = competitor.reviews
+        if competitor.address and competitor.address.strip():
+            item["address"] = competitor.address.strip()
         saved_competitors.append(item)
 
     intelligence["competitors"] = saved_competitors[:80]
