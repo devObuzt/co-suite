@@ -494,8 +494,11 @@ async def test_generate_marketing_customer_personas_uses_fast_model_budget(monke
 
     await mpg.generate_marketing_customer_personas_research(suite, "ar")
 
-    assert call["timeout"] <= 25
-    assert call["max_tokens"] <= 2500
+    # Budget must be generous enough for 5 detailed Arabic personas (the old
+    # 20s/2200-token budget kept timing out and falling back to templates),
+    # while still bounded and on the fast model.
+    assert 60 <= call["timeout"] <= 180
+    assert 4000 <= call["max_tokens"] <= 8000
     expected_model = mpg.settings.openai_fast_model if mpg.settings.ai_text_provider == "openai" else mpg.settings.anthropic_fast_model
     assert call["provider"] == mpg.settings.ai_text_provider
     assert call["model"] == expected_model

@@ -30,8 +30,8 @@ MARKETING_PLAN_REPAIR_MAX_TOKENS = 7000
 MARKETING_PLAN_REPAIR_TIMEOUT_SECONDS = 220
 MARKET_RESEARCH_MAX_TOKENS = 3000
 MARKET_RESEARCH_TIMEOUT_SECONDS = 160
-CUSTOMER_PERSONAS_MAX_TOKENS = 2200
-CUSTOMER_PERSONAS_TIMEOUT_SECONDS = 20
+CUSTOMER_PERSONAS_MAX_TOKENS = 6000
+CUSTOMER_PERSONAS_TIMEOUT_SECONDS = 120
 SOCIAL_CONTENT_PLAN_MAX_TOKENS = 16000
 SOCIAL_CONTENT_PLAN_TIMEOUT_SECONDS = 240
 PAID_CONTENT_PLAN_MAX_TOKENS = 12000
@@ -824,55 +824,163 @@ def _fallback_customer_personas(
     he = str(language).startswith("he")
     if ar:
         templates = [
-            ("ليان", 28, "female", "متوسطة", "صاحبة مشروع صغير"),
-            ("أحمد", 41, "male", "مستقرة", "طبيب عيادة خاصة"),
-            ("سمر", 35, "female", "محدودة", "معلمة مدرسة"),
-            ("يوسف", 24, "male", "محدودة", "مستقل في بداية الطريق"),
-            ("نورا", 52, "female", "مرتفعة", "مديرة شركة عائلية"),
-            ("ماهر", 46, "male", "متوسطة", "صاحب متجر محلي"),
-            ("ريم", 31, "female", "متوسطة", "مسؤولة تسويق"),
-            ("كريم", 60, "male", "مستقرة", "مستثمر/صاحب أملاك"),
-            ("دانا", 22, "female", "محدودة", "طالبة جامعية"),
-            ("خالد", 38, "male", "مرتفعة", "مقاول خدمات"),
+            ("ليان", 28, "female", "متوسطة", "صاحبة مشروع صغير",
+             "وقتها مشتت بين تشغيل المشروع ومتابعة الزبائن، وما عندها مجال للتجربة والخطأ.",
+             f"حل جاهز من {service_text} يوفر وقتها ويبين نتيجته على مشروعها بسرعة.",
+             "بدها تكبّر المشروع قبل الموسم القادم وتوقف تضييع وقت على حلول ما زبطت.",
+             "نقدم باقة واضحة بنتيجة محددة ومدة تنفيذ قصيرة مع مثال لمشروع مشابه."),
+            ("أحمد", 41, "male", "مستقرة", "طبيب عيادة خاصة",
+             "مشغول بمرضاه وما عنده وقت يقارن العروض، وبخاف على سمعته من اختيار غلط.",
+             f"مزوّد موثوق يتولى {service_text} من البداية للنهاية بدون متابعة يومية منه.",
+             "زملاؤه سبقوه بخطوة وبدأ يحس إن عيادته أقل ظهورًا من غيرها.",
+             "نبرز الخبرة والنتائج مع أطباء آخرين ونعرض خدمة كاملة بإدارة عنا."),
+            ("سمر", 35, "female", "محدودة", "معلمة مدرسة",
+             "ميزانيتها محسوبة بدقة وبتخاف تدفع على شي ما تعرف قيمته الحقيقية.",
+             f"خيار اقتصادي مضمون من {service_text} بسعر واضح بدون تكاليف مخفية.",
+             "جمعت مبلغ مخصص وبدها تستغله صح من أول مرة.",
+             "نعرض سعر ثابت وشفاف مع ضمانة أو تجربة مصغرة قبل الالتزام."),
+            ("يوسف", 24, "male", "محدودة", "مستقل في بداية الطريق",
+             "لسه ببني اسمه وما بعرف شو الأولوية بمصاريفه القليلة.",
+             f"مدخل بسيط ورخيص لـ{service_text} يقدر يكبر معه خطوة خطوة.",
+             "شاف ناس بعمره نجحوا وبده يبدأ صح بدل ما يضيع سنة تجريب.",
+             "نقدم باقة مبتدئين بسعر دخول منخفض وترقية سهلة لما يكبر شغله."),
+            ("نورا", 52, "female", "مرتفعة", "مديرة شركة عائلية",
+             "جربت مزودين كثار وانخذلت، وصارت تدقق على كل تفصيلة قبل ما توقّع.",
+             f"شريك محترف يثبت جديته بالتقارير والالتزام مش بالوعود عن {service_text}.",
+             "بدها تحدّث صورة الشركة قبل ما تسلمها للجيل الجديد.",
+             "نعرض خطة عمل مكتوبة بمراحل ونتائج قابلة للقياس ومرجعيات حقيقية."),
+            ("ماهر", 46, "male", "متوسطة", "صاحب متجر محلي",
+             "زبائنه بيقلوا لصالح المتاجر الأونلاين وما بعرف كيف يوصل للجيل الجديد.",
+             f"طريقة عملية تجيب زبائن جدد للمتجر عبر {service_text} بدون تعقيد تقني.",
+             "لاحظ تراجع المبيعات هالسنة وبده يتحرك قبل ما يتأخر.",
+             "نركز على النتائج المحلية: زبائن من منطقته وأرقام قبل/بعد من متاجر مشابهة."),
+            ("ريم", 31, "female", "متوسطة", "مسؤولة تسويق",
+             "مطالبة بنتائج أمام إدارتها وما عندها وقت تدير مزود إضافي بشكل يومي.",
+             f"جهة تنفذ {service_text} باحترافية وتسلّمها تقارير جاهزة تعرضها لإدارتها.",
+             "عندها هدف ربع سنوي واضح وبدها شريك يوصلها له.",
+             "نتكلم بلغة الأرقام: أهداف، مؤشرات، وتقارير دورية جاهزة للعرض."),
+            ("كريم", 60, "male", "مستقرة", "مستثمر وصاحب أملاك",
+             "ما بلحق على التفاصيل التقنية وبفضل التعامل مع ناس بيفهموا وقته الضيق.",
+             f"إدارة كاملة لـ{service_text} مع تواصل مختصر وواضح عند الحاجة فقط.",
+             "بده يرفع قيمة استثماراته بدون ما يتورط بالإدارة اليومية.",
+             "نعرض خدمة مفتاح بالإيد مع مسؤول حساب واحد وتحديث شهري مختصر."),
+            ("دانا", 22, "female", "محدودة", "طالبة جامعية",
+             "بتقارن كل شي أونلاين قبل ما تقرر وبتتأثر بتجارب الناس أكثر من الإعلانات.",
+             f"عرض شبابي مرن من {service_text} يناسب ميزانية طالبة وينشرح بسرعة.",
+             "شافت المحتوى عالسوشيال وحابة تجرب إذا في عرض يناسبها.",
+             "نستخدم تجارب عملاء حقيقية وعروض دخول خفيفة سهلة المشاركة."),
+            ("خالد", 38, "male", "مرتفعة", "مقاول خدمات",
+             "شغله موسمي وبده يضمن طلبات ثابتة بدل الاعتماد على الواسطة والمعارف.",
+             f"قناة مستقرة تجيب له طلبات جدية من {service_text} على مدار السنة.",
+             "خلص موسم قوي وبده يستثمر أرباحه بشي يثبّت دخله.",
+             "نعرض نظام يجيب طلبات مؤهلة باستمرار مع أمثلة أرقام من مقاولين مثله."),
         ]
-        challenge = "لا يعرف أي عرض يختار ولا يثق بسهولة بالرسائل العامة."
-        need = f"شرح واضح يربط {service_text} بنتيجة ملموسة لحياته أو عمله."
-        motivation = "يريد تقليل المخاطرة واتخاذ قرار أسرع بثقة."
-        solution = "نحوّل العرض إلى رسالة مباشرة: المشكلة، النتيجة، الدليل، وخطوة تواصل سهلة."
     elif he:
         templates = [
-            ("נועה", 28, "female", "בינוני", "בעלת עסק קטן"),
-            ("אדם", 41, "male", "יציב", "רופא עצמאי"),
-            ("מירה", 35, "female", "מוגבל", "מורה בבית ספר"),
-            ("יוסף", 24, "male", "מוגבל", "פרילנסר מתחיל"),
-            ("רונית", 52, "female", "גבוה", "מנהלת עסק משפחתי"),
-            ("מאיר", 46, "male", "בינוני", "בעל חנות מקומית"),
-            ("רים", 31, "female", "בינוני", "מנהלת שיווק"),
-            ("כרמל", 60, "male", "יציב", "משקיע"),
-            ("דנה", 22, "female", "מוגבל", "סטודנטית"),
-            ("חאלד", 38, "male", "גבוה", "קבלן שירותים"),
+            ("נועה", 28, "female", "בינוני", "בעלת עסק קטן",
+             "מפוצלת בין תפעול העסק ללקוחות ואין לה זמן לניסוי וטעייה.",
+             f"פתרון מוכן של {service_text} שחוסך זמן ומראה תוצאה מהירה על העסק.",
+             "רוצה לצמוח לפני העונה הבאה ולהפסיק לבזבז זמן על פתרונות שלא עבדו.",
+             "מציעים חבילה ברורה עם תוצאה מוגדרת, לו\"ז קצר ודוגמה מעסק דומה."),
+            ("אדם", 41, "male", "יציב", "רופא עצמאי",
+             "עסוק במטופלים, אין לו זמן להשוות הצעות וחושש לשמו המקצועי.",
+             f"ספק אמין שמנהל את {service_text} מקצה לקצה בלי מעקב יומי ממנו.",
+             "קולגות כבר התקדמו והוא מרגיש שהקליניקה שלו פחות בולטת.",
+             "מדגישים ניסיון עם רופאים ותיקים ושירות מנוהל במלואו."),
+            ("מירה", 35, "female", "מוגבל", "מורה בבית ספר",
+             "תקציב מחושב בקפידה וחשש לשלם על משהו בלי ערך מוכח.",
+             f"אפשרות חסכונית ובטוחה של {service_text} במחיר שקוף בלי הפתעות.",
+             "חסכה סכום ייעודי ורוצה לנצל אותו נכון מהפעם הראשונה.",
+             "מחיר קבוע ושקוף עם אחריות או התנסות קטנה לפני התחייבות."),
+            ("יוסף", 24, "male", "מוגבל", "פרילנסר מתחיל",
+             "עדיין בונה שם לעצמו ולא יודע מה בעדיפות בהוצאות המצומצמות.",
+             f"כניסה פשוטה וזולה ל{service_text} שגדלה איתו שלב אחרי שלב.",
+             "ראה בני גילו מצליחים ורוצה להתחיל נכון במקום לבזבז שנה.",
+             "חבילת מתחילים במחיר כניסה נמוך עם שדרוג קל כשהעסק גדל."),
+            ("רונית", 52, "female", "גבוה", "מנהלת עסק משפחתי",
+             "התאכזבה מספקים בעבר ובודקת כל פרט לפני חתימה.",
+             f"שותף מקצועי שמוכיח רצינות בדוחות ובעמידה בזמנים סביב {service_text}.",
+             "רוצה לרענן את תדמית העסק לפני העברתו לדור הבא.",
+             "תוכנית עבודה כתובה בשלבים עם יעדים מדידים והמלצות אמיתיות."),
+            ("מאיר", 46, "male", "בינוני", "בעל חנות מקומית",
+             "הלקוחות עוברים לאונליין והוא לא יודע איך להגיע לדור הצעיר.",
+             f"דרך מעשית להביא לקוחות חדשים לחנות דרך {service_text} בלי סיבוך טכני.",
+             "שם לב לירידה במכירות השנה ורוצה לפעול לפני שיהיה מאוחר.",
+             "מתמקדים בתוצאות מקומיות: לקוחות מהאזור ומספרים לפני/אחרי."),
+            ("רים", 31, "female", "בינוני", "מנהלת שיווק",
+             "נדרשת לתוצאות מול ההנהלה ואין לה זמן לנהל ספק נוסף ביומיום.",
+             f"גורם שמבצע {service_text} מקצועית ומגיש דוחות מוכנים להנהלה.",
+             "יש לה יעד רבעוני ברור והיא צריכה שותף שמביא אותה אליו.",
+             "מדברים במספרים: יעדים, מדדים ודוחות תקופתיים מוכנים להצגה."),
+            ("כרמל", 60, "male", "יציב", "משקיע",
+             "לא מתעסק בפרטים טכניים ומעדיף אנשים שמכבדים את זמנו.",
+             f"ניהול מלא של {service_text} עם תקשורת קצרה וברורה רק כשצריך.",
+             "רוצה להשביח נכסים בלי להיגרר לניהול היומיומי.",
+             "שירות עד המפתח עם איש קשר אחד ועדכון חודשי תמציתי."),
+            ("דנה", 22, "female", "מוגבל", "סטודנטית",
+             "משווה הכל אונליין ומושפעת מחוויות אמיתיות יותר מפרסומות.",
+             f"הצעה צעירה וגמישה של {service_text} שמתאימה לתקציב סטודנטית.",
+             "ראתה תוכן ברשתות וסקרנית לנסות אם יש הצעה שמתאימה לה.",
+             "חוויות לקוח אמיתיות והצעות כניסה קלות שנוח לשתף."),
+            ("חאלד", 38, "male", "גבוה", "קבלן שירותים",
+             "העבודה עונתית והוא רוצה הזמנות קבועות במקום להסתמך על קשרים.",
+             f"ערוץ יציב שמביא פניות רציניות מ{service_text} לאורך כל השנה.",
+             "סיים עונה חזקה ורוצה להשקיע את הרווח במשהו שמייצב הכנסה.",
+             "מערכת שמביאה לידים איכותיים בקביעות עם מספרים מקבלנים דומים."),
         ]
-        challenge = "לא בטוח איזה פתרון מתאים לו ולא סומך על מסרים כלליים."
-        need = f"הסבר ברור שמחבר את {service_text} לתוצאה מעשית."
-        motivation = "רוצה לצמצם סיכון ולקבל החלטה בביטחון."
-        solution = "מחברים בעיה, תוצאה, הוכחת אמון ופעולת פנייה פשוטה."
     else:
         templates = [
-            ("Leen", 28, "female", "middle income", "small business owner"),
-            ("Adam", 41, "male", "comfortable", "private clinic doctor"),
-            ("Mira", 35, "female", "limited income", "school teacher"),
-            ("Yousef", 24, "male", "limited income", "early freelancer"),
-            ("Nora", 52, "female", "high income", "family business director"),
-            ("Maher", 46, "male", "middle income", "local store owner"),
-            ("Reem", 31, "female", "middle income", "marketing manager"),
-            ("Kareem", 60, "male", "comfortable", "investor"),
-            ("Dana", 22, "female", "limited income", "student"),
-            ("Khaled", 38, "male", "high income", "service contractor"),
+            ("Leen", 28, "female", "middle income", "small business owner",
+             "Torn between running the business and serving customers, with no room for trial and error.",
+             f"A ready-made {service_text} solution that saves time and shows results fast.",
+             "Wants to grow before next season and stop wasting time on failed experiments.",
+             "Offer a clear package with a defined outcome, short timeline, and a similar-business example."),
+            ("Adam", 41, "male", "comfortable", "private clinic doctor",
+             "Too busy with patients to compare offers, and worried about his reputation.",
+             f"A trusted provider handling {service_text} end to end without daily oversight.",
+             "Colleagues moved ahead and his clinic feels less visible.",
+             "Lead with experience with doctors and a fully managed service."),
+            ("Mira", 35, "female", "limited income", "school teacher",
+             "Careful budget and afraid of paying for unproven value.",
+             f"An affordable, safe {service_text} option with transparent pricing.",
+             "Saved a dedicated amount and wants to spend it right the first time.",
+             "Fixed transparent price with a guarantee or a small trial first."),
+            ("Yousef", 24, "male", "limited income", "early freelancer",
+             "Still building a name and unsure where his limited money should go first.",
+             f"A simple, cheap entry into {service_text} that can grow step by step.",
+             "Saw peers succeed and wants to start right instead of losing a year.",
+             "A starter package with a low entry price and an easy upgrade path."),
+            ("Nora", 52, "female", "high income", "family business director",
+             "Burned by past vendors; now scrutinizes every detail before signing.",
+             f"A professional partner proving commitment on {service_text} with reports, not promises.",
+             "Wants to refresh the company's image before handing it to the next generation.",
+             "A written staged plan with measurable outcomes and real references."),
+            ("Maher", 46, "male", "middle income", "local store owner",
+             "Customers drifting to online stores; unsure how to reach the younger generation.",
+             f"A practical way to bring new customers via {service_text} without technical hassle.",
+             "Noticed sales dropping this year and wants to act before it is too late.",
+             "Focus on local results: neighborhood customers and before/after numbers."),
+            ("Reem", 31, "female", "middle income", "marketing manager",
+             "Accountable for results to management with no time to babysit another vendor.",
+             f"A team that executes {service_text} professionally and delivers ready reports.",
+             "Has a clear quarterly target and needs a partner to reach it.",
+             "Speak in numbers: goals, KPIs, and periodic presentation-ready reports."),
+            ("Kareem", 60, "male", "comfortable", "investor",
+             "No patience for technical detail; prefers people who respect his time.",
+             f"Full management of {service_text} with short, clear communication only when needed.",
+             "Wants to raise asset value without day-to-day involvement.",
+             "Turn-key service with one account manager and a brief monthly update."),
+            ("Dana", 22, "female", "limited income", "student",
+             "Compares everything online and trusts real experiences over ads.",
+             f"A flexible, youth-friendly {service_text} offer that fits a student budget.",
+             "Saw the content on social media and is curious to try a fitting offer.",
+             "Use real customer stories and light, shareable entry offers."),
+            ("Khaled", 38, "male", "high income", "service contractor",
+             "Seasonal work; wants steady requests instead of relying on connections.",
+             f"A stable channel bringing serious {service_text} leads all year round.",
+             "Finished a strong season and wants to invest profits into stable income.",
+             "A system delivering qualified leads consistently, with numbers from similar contractors."),
         ]
-        challenge = "Unsure which offer fits and does not trust generic claims."
-        need = f"A clear explanation that connects {service_text} to a practical outcome."
-        motivation = "Wants to reduce risk and make a confident decision faster."
-        solution = "Frame the offer around the problem, outcome, proof, and an easy next step."
     return [
         {
             "id": f"persona-{index}",
@@ -886,7 +994,7 @@ def _fallback_customer_personas(
             "motivation": motivation,
             "solution": solution,
         }
-        for index, (name, age, gender, economic_status, profession) in enumerate(templates, start=1)
+        for index, (name, age, gender, economic_status, profession, challenge, need, motivation, solution) in enumerate(templates, start=1)
     ]
 
 
@@ -2553,6 +2661,7 @@ Rules:
 - Do not replace keywords, competitors, demand_supply, demand_signals, supply_signals, or opportunities.
 - Keep every visible field in the requested language except stable enum-like ids.
 - Personas are fictional but should be plausible for the target country, audience language, and business category.
+- Every persona MUST have a clearly different challenge, need, motivation, and solution — written specifically for that person's profession, life stage, and economic status. Never reuse the same sentence across personas.
 - Do not repeat any existing persona by name, profession, need, or challenge.
 
 Existing personas to avoid:
