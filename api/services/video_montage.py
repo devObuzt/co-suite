@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import zlib
@@ -22,6 +23,7 @@ from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
 
 from ..core.config import settings
+from ..core.external_calls import external_call
 from ..core.observability import log_event
 from ..models.suite import Suite
 from .media_storage import r2_configured, upload_bytes
@@ -97,6 +99,16 @@ def normalize_montage_source(source_path: Path, output_dir: Path) -> Path | None
     target = output_dir / "normalized-source.mp4"
     if target.exists() and target.stat().st_size > 0:
         return target
+    width, height = probe_video_dimensions(source_path)
+    if (
+        source_path.suffix.lower() == ".mp4"
+        and 0 < width <= 1080
+        and 0 < height <= 1920
+        and probe_video_codec(source_path) == "h264"
+    ):
+        # Already provider-compliant (e.g. a pre-staged preview source) —
+        # re-encoding it would only burn minutes.
+        return source_path
     try:
         run_command(
             [
@@ -255,10 +267,32 @@ def remove_background_with_veed_fal(
 ) -> dict[str, Any]:
     """Remove a person's video background using the VEED/fal provider.
 
-    The old successful montage POC started from this transparent WebM output.
-    Keeping this as a focused function makes it testable and lets the local
-    chromakey path remain a fallback instead of the main production path.
+    Wraps the actual provider exchange so every attempt lands in the logs with
+    success/failure and duration, regardless of which internal path returned.
     """
+    with external_call("veed-fal", "background_removal", model=FAL_VEED_MODEL) as call:
+        result = _remove_background_with_veed_fal_impl(
+            source_url=source_url,
+            output_path=output_path,
+            fal_key=fal_key,
+            poll_seconds=poll_seconds,
+            max_wait_seconds=max_wait_seconds,
+        )
+        result.setdefault("elapsed_seconds", call.elapsed_seconds)
+        call.note(request_id=result.get("request_id"))
+        if not result.get("ok"):
+            call.fail(result.get("error") or "unknown error")
+    return result
+
+
+def _remove_background_with_veed_fal_impl(
+    *,
+    source_url: str,
+    output_path: Path,
+    fal_key: str,
+    poll_seconds: int = 10,
+    max_wait_seconds: int = 900,
+) -> dict[str, Any]:
     if not fal_key:
         return {"ok": False, "provider": "veed-fal", "error": "FAL_KEY is missing."}
     if not source_url:
@@ -438,7 +472,40 @@ def drive_confirm_download_url(html: str) -> str | None:
     return f"{base}{separator}{urlencode(dict(params))}"
 
 
+def probe_video_codec(path: Path) -> str:
+    try:
+        result = run_command(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ]
+        )
+        return (result.stdout.strip().splitlines() or [""])[0].strip()
+    except Exception:
+        return ""
+
+
 async def download_source(source_url: str, destination: Path) -> tuple[Path | None, str | None]:
+    is_drive = "drive.google.com" in (source_url or "") or "drive.usercontent.google.com" in (source_url or "")
+    provider = "google-drive" if is_drive else "remote-url"
+    async with external_call(provider, "download_source_video") as call:
+        path, warning = await _download_source_impl(source_url, destination)
+        if path is not None:
+            call.note(size_bytes=path.stat().st_size if path.exists() else None)
+        if warning:
+            call.fail(warning)
+    return path, warning
+
+
+async def _download_source_impl(source_url: str, destination: Path) -> tuple[Path | None, str | None]:
     if not source_url:
         return None, "No source URL was provided."
 
@@ -644,11 +711,36 @@ def create_local_transparent_subject(
 ) -> dict[str, Any]:
     """Create a transparent VP9 subject video from a local green-screen source.
 
-    This keeps uploaded files on the same Remotion rendering path as the
-    provider-based transparent subject path. The old direct FFmpeg montage is
-    still available as a last-resort fallback, but it should not be the default
-    for green-screen talking-head videos.
+    Logged like the provider path so background-removal attempts are always
+    visible with success/failure and processing time.
     """
+    started = time.monotonic()
+    result = _create_local_transparent_subject_impl(
+        source_path=source_path,
+        output_path=output_path,
+        duration=duration,
+    )
+    elapsed = round(time.monotonic() - started, 2)
+    result.setdefault("elapsed_seconds", elapsed)
+    log_event(
+        log,
+        logging.INFO if result.get("ok") else logging.ERROR,
+        "Local chromakey background removal finished." if result.get("ok") else "Local chromakey background removal failed.",
+        event="montage_background_removal",
+        provider="local-chromakey",
+        ok=bool(result.get("ok")),
+        duration_seconds=elapsed,
+        error=(str(result.get("error"))[:500] if result.get("error") else None),
+    )
+    return result
+
+
+def _create_local_transparent_subject_impl(
+    *,
+    source_path: Path,
+    output_path: Path,
+    duration: float,
+) -> dict[str, Any]:
     if not ffmpeg_available():
         return {"ok": False, "provider": "local-chromakey", "error": "FFmpeg/FFprobe are not installed."}
     if not ffmpeg_filter_available("chromakey"):
@@ -1480,6 +1572,44 @@ async def render_remotion_montage(
     output_path: Path,
     suite: Suite,
     input_data: dict[str, Any],
+    transcript: tuple[list[dict[str, Any]], str | None] | None = None,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    result = await _render_remotion_montage_impl(
+        db=db,
+        transparent_source_path=transparent_source_path,
+        output_path=output_path,
+        suite=suite,
+        input_data=input_data,
+        transcript=transcript,
+    )
+    elapsed = round(time.monotonic() - started, 2)
+    result["render_duration_seconds"] = elapsed
+    rendered = bool(result.get("rendered"))
+    log_event(
+        log,
+        logging.INFO if rendered else logging.ERROR,
+        "Remotion montage render finished." if rendered else "Remotion montage render failed.",
+        event="montage_engine_render",
+        engine="remotion",
+        suite_id=suite.id,
+        rendered=rendered,
+        duration_seconds=elapsed,
+        video_duration_seconds=result.get("duration_seconds"),
+        scene_count=result.get("scene_count"),
+        reason=(str(result.get("reason"))[:500] if result.get("reason") else None),
+    )
+    return result
+
+
+async def _render_remotion_montage_impl(
+    *,
+    db: AsyncSession | None,
+    transparent_source_path: Path,
+    output_path: Path,
+    suite: Suite,
+    input_data: dict[str, Any],
+    transcript: tuple[list[dict[str, Any]], str | None] | None = None,
 ) -> dict[str, Any]:
     if not ffmpeg_available():
         return {"rendered": False, "reason": "FFmpeg/FFprobe are not installed in this runtime."}
@@ -1488,7 +1618,11 @@ async def render_remotion_montage(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     duration = min(probe_duration_seconds(transparent_source_path), float(settings.montage_max_duration_seconds))
-    transcript_segments, transcript_warning = transcribe_video_segments(transparent_source_path, output_path.parent)
+    transcript_segments, transcript_warning = (
+        transcript
+        if transcript is not None
+        else await asyncio.to_thread(transcribe_video_segments, transparent_source_path, output_path.parent)
+    )
     warnings = [transcript_warning] if transcript_warning else []
     work_dir = remotion_work_dir(output_path)
     manifest_path, scenes = await build_remotion_scene_manifest(
@@ -1737,6 +1871,32 @@ def finalise_audio(
 
 
 def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input_data: dict[str, Any]) -> dict[str, Any]:
+    started = time.monotonic()
+    result = _render_v1_video_impl(
+        source_path=source_path,
+        output_path=output_path,
+        suite=suite,
+        input_data=input_data,
+    )
+    elapsed = round(time.monotonic() - started, 2)
+    result["render_duration_seconds"] = elapsed
+    rendered = bool(result.get("rendered"))
+    log_event(
+        log,
+        logging.INFO if rendered else logging.ERROR,
+        "V1 FFmpeg montage render finished." if rendered else "V1 FFmpeg montage render failed.",
+        event="montage_engine_render",
+        engine="ffmpeg_local_fallback",
+        suite_id=suite.id,
+        rendered=rendered,
+        duration_seconds=elapsed,
+        video_duration_seconds=result.get("duration_seconds"),
+        reason=(str(result.get("reason"))[:500] if result.get("reason") else None),
+    )
+    return result
+
+
+def _render_v1_video_impl(*, source_path: Path, output_path: Path, suite: Suite, input_data: dict[str, Any]) -> dict[str, Any]:
     if not ffmpeg_available():
         return {
             "rendered": False,
@@ -2000,6 +2160,79 @@ async def generate_video_montage_for_suite(
     input_data: dict[str, Any],
     progress: ProgressWriter | None = None,
 ) -> dict[str, Any]:
+    """Run the montage pipeline with one start and one finish log line.
+
+    The finish line always carries rendered yes/no, the engine used, and the
+    total wall-clock time so an admin can read render outcomes straight from
+    the logs.
+    """
+    pipeline_started = time.monotonic()
+    log_event(
+        log,
+        logging.INFO,
+        "Video montage render started.",
+        event="video_montage_render_started",
+        job_id=job_id,
+        suite_id=suite.id,
+        mode=str(input_data.get("mode") or "talking_head"),
+        options=sorted(requested_options(input_data)),
+        has_uploaded_file=bool(input_data.get("source_file_path")),
+        has_source_url=bool(str(input_data.get("source_url") or "").strip()),
+    )
+    try:
+        result = await _generate_video_montage_impl(
+            db=db,
+            suite=suite,
+            job_id=job_id,
+            input_data=input_data,
+            progress=progress,
+        )
+    except Exception as exc:
+        log_event(
+            log,
+            logging.ERROR,
+            "Video montage render crashed.",
+            event="video_montage_render_finished",
+            job_id=job_id,
+            suite_id=suite.id,
+            rendered=False,
+            duration_seconds=round(time.monotonic() - pipeline_started, 2),
+            error=str(exc)[:500],
+        )
+        raise
+
+    total_seconds = round(time.monotonic() - pipeline_started, 2)
+    result["total_pipeline_seconds"] = total_seconds
+    render = (result.get("video_montage") or {}).get("render") or {}
+    background_removal = render.get("background_removal") or {}
+    rendered = bool(result.get("rendered"))
+    log_event(
+        log,
+        logging.INFO if rendered else logging.ERROR,
+        "Video montage render finished." if rendered else "Video montage render did not produce output.",
+        event="video_montage_render_finished",
+        job_id=job_id,
+        suite_id=suite.id,
+        rendered=rendered,
+        engine=render.get("engine"),
+        duration_seconds=total_seconds,
+        render_seconds=render.get("render_duration_seconds"),
+        background_removal_seconds=background_removal.get("elapsed_seconds"),
+        background_removal_provider=background_removal.get("provider"),
+        output_url=result.get("output_url"),
+        warning=(str(result.get("source_warning"))[:500] if result.get("source_warning") else None),
+    )
+    return result
+
+
+async def _generate_video_montage_impl(
+    *,
+    db: AsyncSession | None = None,
+    suite: Suite,
+    job_id: str,
+    input_data: dict[str, Any],
+    progress: ProgressWriter | None = None,
+) -> dict[str, Any]:
     output_dir = job_dir(job_id)
 
     def emit(stage: str, message: str, percent: int, partial: dict[str, Any] | None = None) -> None:
@@ -2063,11 +2296,13 @@ async def generate_video_montage_for_suite(
         source_warning = note_fallback("No source video URL or uploaded file was provided to this job.")
 
     veed_source_url = None
+    veed_stage_path: Path | None = None
     if "background" in options and settings.fal_key and (source_path or source_url):
         if source_path and r2_configured():
-            normalized_path = normalize_montage_source(source_path, output_dir)
+            normalized_path = await asyncio.to_thread(normalize_montage_source, source_path, output_dir)
             if normalized_path:
-                veed_source_url = publish_veed_source(job_id, normalized_path)
+                veed_stage_path = normalized_path
+                veed_source_url = await asyncio.to_thread(publish_veed_source, job_id, normalized_path)
         if not veed_source_url and source_url and not uploaded_path and not r2_configured():
             # Self-hosted/dev without R2: trust the user's URL as-is.
             veed_source_url = source_url
@@ -2082,11 +2317,24 @@ async def generate_video_montage_for_suite(
     if veed_source_url:
         emit("background_removal", "Removing video background with VEED/fal.", 35)
         transparent_path = output_dir / "transparent-subject.webm"
-        provider_result = remove_background_with_veed_fal(
+        veed_call = asyncio.to_thread(
+            remove_background_with_veed_fal,
             source_url=veed_source_url,
             output_path=transparent_path,
             fal_key=settings.fal_key,
         )
+        pretranscribed: tuple[list[dict[str, Any]], str | None] | None = None
+        transcription_source = veed_stage_path or source_path
+        if transcription_source:
+            # Transcription only needs the audio track, which VEED does not
+            # touch — run both provider calls concurrently instead of
+            # back-to-back (saves the full Whisper wait on every render).
+            provider_result, pretranscribed = await asyncio.gather(
+                veed_call,
+                asyncio.to_thread(transcribe_video_segments, transcription_source, output_dir),
+            )
+        else:
+            provider_result = await veed_call
         if provider_result.get("ok") and transparent_path.exists():
             emit("rendering", "Rendering layered Remotion montage.", 68)
             output_path = output_dir / "render.mp4"
@@ -2096,6 +2344,7 @@ async def generate_video_montage_for_suite(
                 output_path=output_path,
                 suite=suite,
                 input_data=input_data,
+                transcript=pretranscribed,
             )
             render_result["engine"] = "remotion_veed_fal"
             render_result["background_removal"] = provider_result

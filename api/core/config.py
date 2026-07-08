@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # Remotion render — browser tabs rendering in parallel; higher values
     # exhaust worker memory on long/4K sources
-    remotion_render_concurrency: int = 2
+    remotion_render_concurrency: int = 3
 
     # Longest source a montage will process (safety ceiling, not a feature cap)
     montage_max_duration_seconds: int = 180
