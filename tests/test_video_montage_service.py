@@ -141,10 +141,12 @@ async def test_render_remotion_pipeline_uses_transparent_subject_layers(tmp_path
     )
 
     assert result["rendered"] is True
-    assert "api_background_removal" in result["capabilities_applied"]
+    assert "background_removal" in result["capabilities_applied"]
     assert "remotion_layered_render" in result["capabilities_applied"]
     assert "behind_person_3d_title" in result["capabilities_applied"]
     assert "sound_effect_transitions" in result["capabilities_applied"]
+    assert "rtl_text_overlay" in result["capabilities_applied"]
+    assert "music_bed" in result["capabilities_applied"]
     manifest = (output.parent / "remotion-work" / "src" / "remotion" / "manifest.generated.json")
     assert manifest.exists()
     assert '"hasAlpha": true' in manifest.read_text(encoding="utf-8")
@@ -256,7 +258,7 @@ async def test_remotion_manifest_splits_single_transcript_into_multiple_scenes(t
         transparent_source_path=source,
         work_dir=work_dir,
         suite=suite,
-        input_data={"options": ["dead_spaces"], "notes": "عنوان أول. عنوان ثاني. عنوان ثالث"},
+        input_data={"options": ["dead_spaces", "music"], "notes": "عنوان أول. عنوان ثاني. عنوان ثالث"},
         duration=9.0,
         transcript_segments=[{"start": 0.0, "end": 9.0, "text": "عنوان أول عنوان ثاني عنوان ثالث عنوان رابع"}],
     )
@@ -373,9 +375,13 @@ async def test_generate_video_montage_prefers_veed_remotion_pipeline(tmp_path, m
     def fail_legacy_render(**_kwargs):
         raise AssertionError("legacy chromakey render should not run when VEED/Remotion succeeds")
 
+    async def fake_notes_analysis(**kwargs):
+        return kwargs["input_data"], None
+
     monkeypatch.setattr(video_montage, "remove_background_with_veed_fal", fake_remove_background)
     monkeypatch.setattr(video_montage, "render_remotion_montage", fake_render_remotion)
     monkeypatch.setattr(video_montage, "render_v1_video", fail_legacy_render)
+    monkeypatch.setattr(video_montage, "analyze_and_apply_montage_notes", fake_notes_analysis)
 
     suite = Suite(
         id="suite-video-test",
@@ -440,9 +446,13 @@ async def test_generate_video_montage_uses_remotion_for_uploaded_green_screen_so
     def fail_legacy_render(**_kwargs):
         raise AssertionError("legacy chromakey render should not run for uploaded green-screen source")
 
+    async def fake_notes_analysis(**kwargs):
+        return kwargs["input_data"], None
+
     monkeypatch.setattr(video_montage, "create_local_transparent_subject", fake_local_chromakey)
     monkeypatch.setattr(video_montage, "render_remotion_montage", fake_render_remotion)
     monkeypatch.setattr(video_montage, "render_v1_video", fail_legacy_render)
+    monkeypatch.setattr(video_montage, "analyze_and_apply_montage_notes", fake_notes_analysis)
 
     suite = Suite(
         id="suite-video-test",
@@ -657,3 +667,253 @@ def test_drive_confirm_download_url_parses_interstitial():
     assert url.startswith("https://drive.usercontent.google.com/download?id=abc&export=download&")
     assert "confirm=t" in url and "uuid=u-123" in url
     assert video_montage.drive_confirm_download_url("<html>nope</html>") is None
+
+
+def _fake_manifest_run_command(commands: list[list[str]]):
+    def fake_run_command(command: list[str]):
+        commands.append(command)
+        command_text = " ".join(command)
+        if "frame_%05d.png" in command_text:
+            frames_dir = Path(command[-1]).parent
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            (frames_dir / "frame_00000.png").write_bytes(b"png")
+        elif "anullsrc=channel_layout=stereo" in command_text:
+            Path(command[-1]).write_bytes(b"silent-audio")
+        elif "-c:a" in command:
+            Path(command[-1]).write_bytes(b"audio")
+
+        class Result:
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    return fake_run_command
+
+
+def _montage_suite() -> Suite:
+    return Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"name": "كونيك", "colors": {"primary": "#2f80ff"}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_remotion_manifest_disables_music_captions_titles_honestly(tmp_path, monkeypatch):
+    import json as json_module
+
+    source = tmp_path / "transparent.webm"
+    source.write_bytes(b"webm")
+
+    monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
+    monkeypatch.setattr(video_montage, "run_command", _fake_manifest_run_command([]))
+    suite = _montage_suite()
+
+    # Music off: no music bed, no sound effects, captions/titles flags on.
+    manifest_path, _scenes = await video_montage.build_remotion_scene_manifest(
+        db=None,
+        transparent_source_path=source,
+        work_dir=tmp_path / "work-no-music",
+        suite=suite,
+        input_data={"options": ["captions", "titles"], "notes": "بدون موسيقى"},
+        duration=6.0,
+        transcript_segments=[
+            {"start": 0.0, "end": 3.0, "text": "مشهد أول"},
+            {"start": 3.0, "end": 6.0, "text": "مشهد ثاني"},
+        ],
+    )
+    manifest = json_module.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["showCaptions"] is True
+    assert manifest["showTitles"] is True
+    assert manifest["audio"]["backgroundMusic"] is None
+    assert manifest["audio"]["soundEffects"] == []
+    assert manifest["diagnostics"]["musicEnabled"] is False
+    assert not (tmp_path / "work-no-music" / "public" / "remotion" / "sound" / "marketing-upbeat-bed.wav").exists()
+
+    # Captions/titles off: flags land in the manifest so the component skips them.
+    manifest_path, _scenes = await video_montage.build_remotion_scene_manifest(
+        db=None,
+        transparent_source_path=source,
+        work_dir=tmp_path / "work-music-only",
+        suite=suite,
+        input_data={"options": ["music"], "notes": "موسيقى فقط"},
+        duration=6.0,
+        transcript_segments=[
+            {"start": 0.0, "end": 3.0, "text": "مشهد أول"},
+            {"start": 3.0, "end": 6.0, "text": "مشهد ثاني"},
+        ],
+    )
+    manifest = json_module.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["showCaptions"] is False
+    assert manifest["showTitles"] is False
+    assert manifest["audio"]["backgroundMusic"] is not None
+    assert manifest["diagnostics"]["musicEnabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_remotion_manifest_fullframe_opaque_subject_omits_frames_and_backgrounds(tmp_path, monkeypatch):
+    import json as json_module
+
+    source = tmp_path / "normalized-source.mp4"
+    source.write_bytes(b"mp4")
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
+    monkeypatch.setattr(video_montage, "run_command", _fake_manifest_run_command(commands))
+
+    work_dir = tmp_path / "work"
+    manifest_path, scenes = await video_montage.build_remotion_scene_manifest(
+        db=None,
+        transparent_source_path=source,
+        work_dir=work_dir,
+        suite=_montage_suite(),
+        input_data={"options": ["captions", "titles", "music"], "notes": ""},
+        duration=6.0,
+        transcript_segments=[
+            {"start": 0.0, "end": 3.0, "text": "مشهد أول"},
+            {"start": 3.0, "end": 6.0, "text": "مشهد ثاني"},
+        ],
+        subject_has_alpha=False,
+    )
+
+    manifest = json_module.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["source"]["hasAlpha"] is False
+    # No framesPublicPath => the component falls back to full-frame OffthreadVideo.
+    assert "framesPublicPath" not in manifest["source"]
+    assert all("frame_%05d.png" not in " ".join(command) for command in commands)
+    assert all(scene["backgroundImagePublicPath"] is None for scene in manifest["scenes"])
+    assert all(scene["backgroundAssetKind"] == "none" for scene in manifest["scenes"])
+    backgrounds_dir = work_dir / "public" / "remotion" / "backgrounds"
+    assert not any(backgrounds_dir.glob("*.png"))
+    assert len(scenes) == 2
+
+
+@pytest.mark.asyncio
+async def test_remotion_manifest_voice_cleanup_filters_extracted_audio(tmp_path, monkeypatch):
+    source = tmp_path / "transparent.webm"
+    source.write_bytes(b"webm")
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
+    monkeypatch.setattr(video_montage, "run_command", _fake_manifest_run_command(commands))
+
+    await video_montage.build_remotion_scene_manifest(
+        db=None,
+        transparent_source_path=source,
+        work_dir=tmp_path / "work",
+        suite=_montage_suite(),
+        input_data={"options": ["voice_cleanup"], "notes": ""},
+        duration=3.0,
+        transcript_segments=[{"start": 0.0, "end": 2.5, "text": "نص"}],
+    )
+
+    audio_commands = [command for command in commands if "-vn" in command]
+    assert audio_commands, "expected an audio extraction command"
+    assert "-af" in audio_commands[0]
+    assert video_montage.VOICE_CLEANUP_AUDIO_FILTER in audio_commands[0]
+
+    # Without the option the extraction must stay raw.
+    commands.clear()
+    await video_montage.build_remotion_scene_manifest(
+        db=None,
+        transparent_source_path=source,
+        work_dir=tmp_path / "work-raw",
+        suite=_montage_suite(),
+        input_data={"options": [], "notes": ""},
+        duration=3.0,
+        transcript_segments=[{"start": 0.0, "end": 2.5, "text": "نص"}],
+    )
+    audio_commands = [command for command in commands if "-vn" in command]
+    assert audio_commands and "-af" not in audio_commands[0]
+
+
+@pytest.mark.asyncio
+async def test_remotion_manifest_music_mood_biases_music_pick(tmp_path, monkeypatch):
+    source = tmp_path / "transparent.webm"
+    source.write_bytes(b"webm")
+    picked: list[dict] = []
+
+    monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
+    monkeypatch.setattr(video_montage, "run_command", _fake_manifest_run_command([]))
+
+    def fake_pick_asset(_assets, **kwargs):
+        picked.append(kwargs)
+        return None
+
+    monkeypatch.setattr(video_montage, "pick_asset", fake_pick_asset)
+
+    await video_montage.build_remotion_scene_manifest(
+        db=None,
+        transparent_source_path=source,
+        work_dir=tmp_path / "work",
+        suite=_montage_suite(),
+        input_data={"options": ["music"], "notes": "", "music_mood": "هادئة"},
+        duration=3.0,
+        transcript_segments=[{"start": 0.0, "end": 2.5, "text": "نص"}],
+    )
+
+    music_picks = [call for call in picked if call.get("kind") == "music"]
+    assert music_picks
+    assert music_picks[0]["scene_text"].startswith("هادئة")
+
+
+@pytest.mark.asyncio
+async def test_dead_space_cut_runs_before_remotion_render(tmp_path, monkeypatch):
+    monkeypatch.setattr(video_montage, "job_dir", lambda _job_id: tmp_path)
+    monkeypatch.setattr(settings, "fal_key", "")
+    monkeypatch.setattr(video_montage, "ffmpeg_available", lambda: True)
+
+    source = tmp_path / "uploaded.mp4"
+    source.write_bytes(b"talking-head")
+    normalized = tmp_path / "normalized-source.mp4"
+
+    def fake_normalize(_source_path, _output_dir):
+        if not normalized.exists():
+            normalized.write_bytes(b"normalized")
+        return normalized
+
+    def fake_probe(path):
+        return 7.0 if "tight" in Path(path).name else 10.0
+
+    def fake_cut(source_path, output_path, duration):
+        assert Path(source_path) == normalized
+        assert duration == 10.0
+        Path(output_path).write_bytes(b"tight")
+        return Path(output_path), True, None
+
+    captured: dict = {}
+
+    async def fake_render_remotion(**kwargs):
+        captured.update(kwargs)
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+        return {
+            "rendered": True,
+            "output_url": "/static/video_montage/job-tight/render.mp4",
+            "capabilities_applied": ["remotion_layered_render", "full_frame_subject"],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(video_montage, "normalize_montage_source", fake_normalize)
+    monkeypatch.setattr(video_montage, "probe_duration_seconds", fake_probe)
+    monkeypatch.setattr(video_montage, "cut_dead_spaces", fake_cut)
+    monkeypatch.setattr(video_montage, "render_remotion_montage", fake_render_remotion)
+
+    result = await video_montage.generate_video_montage_for_suite(
+        suite=_montage_suite(),
+        job_id="job-tight",
+        input_data={"source_file_path": str(source), "options": ["dead_spaces", "captions"], "notes": ""},
+    )
+
+    render = result["video_montage"]["render"]
+    assert result["rendered"] is True
+    # Background off => honest full-frame Remotion render on the tightened source.
+    assert render["engine"] == "remotion_fullframe"
+    assert captured["subject_has_alpha"] is False
+    assert Path(captured["transparent_source_path"]) == normalized
+    # The tightened video replaced the cached normalized source for downstream steps.
+    assert normalized.read_bytes() == b"tight"
+    assert "silence_cutting" in render["capabilities_applied"]
+    assert render["dead_space_seconds_cut"] == 3.0

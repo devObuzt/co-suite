@@ -244,3 +244,39 @@ def test_montage_failure_reason_flags_unrendered_results():
         == "FFmpeg exploded"
     )
     assert failure({}) == "Video montage produced no output."
+
+
+@pytest.mark.asyncio
+async def test_montage_defers_to_queue_when_render_slot_busy(monkeypatch):
+    captured = {}
+
+    async def fake_update_job(_db, job_id, **fields):
+        captured["job_id"] = job_id
+        captured["fields"] = fields
+        return "updated-job"
+
+    monkeypatch.setattr(durable_generation_queue, "update_job", fake_update_job)
+    job = GenerationJob(
+        id="job-montage",
+        suite_id="suite-1",
+        type=GenerationJobType.video_montage,
+        status=GenerationJobStatus.running,
+    )
+
+    result = await durable_generation_queue.defer_montage_for_render_slot(None, job)
+
+    assert result == "updated-job"
+    assert captured["job_id"] == "job-montage"
+    fields = captured["fields"]
+    assert fields["status"] == GenerationJobStatus.waiting_capacity
+    assert fields["stage"] == "waiting_render_slot"
+    assert fields["message"] == "بانتظار دور الرندر"
+    assert fields["next_retry_at"] is not None
+
+
+def test_montage_render_semaphore_is_process_wide_singleton():
+    durable_generation_queue._montage_render_semaphore = None
+    first = durable_generation_queue.montage_render_semaphore()
+    second = durable_generation_queue.montage_render_semaphore()
+    assert first is second
+    assert not first.locked()

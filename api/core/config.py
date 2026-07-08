@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # limit and lets the kernel OOM-kill the compositor mid-render.
     remotion_offthread_cache_mb: int = 512
 
+    # How many video montages may render concurrently in one worker process.
+    # Two Remotion renders inside an 8GB container OOM-kill each other, so
+    # extra montage jobs wait for a slot while non-montage jobs keep flowing.
+    montage_render_slots: int = 1
+
     @field_validator("database_url", mode="before")
     @classmethod
     def fix_db_url(cls, v: str) -> str:

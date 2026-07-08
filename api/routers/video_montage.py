@@ -18,7 +18,7 @@ from ..core.security import get_current_user
 from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
 from ..models.user import User
-from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job
+from ..services.generation_jobs import create_job, serialize_job
 from ..services.media_storage import r2_configured, upload_bytes
 from ..services.video_montage import (
     download_source,
@@ -52,16 +52,15 @@ async def latest_video_montage_job(db: AsyncSession, suite_id: str) -> Generatio
     return result.scalar_one_or_none()
 
 
-async def active_video_montage_job(db: AsyncSession, suite_id: str) -> GenerationJob | None:
-    result = await db.execute(
-        select(GenerationJob)
-        .where(GenerationJob.suite_id == suite_id)
-        .where(GenerationJob.type == GenerationJobType.video_montage)
-        .where(GenerationJob.status.in_(ACTIVE_STATUSES))
-        .order_by(GenerationJob.created_at.desc())
-        .limit(1)
-    )
-    return result.scalar_one_or_none()
+def job_input_summary(job: GenerationJob) -> dict[str, Any]:
+    """Trimmed job input for the jobs list (source label, notes, options)."""
+    input_data = job.input if isinstance(job.input, dict) else {}
+    return {
+        "source_url": str(input_data.get("source_url") or "") or None,
+        "source_file_name": str(input_data.get("source_file_name") or "") or None,
+        "notes": str(input_data.get("notes") or "") or None,
+        "options": input_data.get("options") if isinstance(input_data.get("options"), list) else [],
+    }
 
 
 def parse_options(options_json: str | None) -> list[str]:
@@ -93,6 +92,31 @@ def parse_text_overrides(overrides_json: str | None, *, max_items: int = 18) -> 
         else:
             values.append("")
     return values
+
+
+@router.get("/jobs")
+async def list_video_montage_jobs(
+    suite_id: str,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recent montage jobs for the suite, newest first (multi-job queue UI)."""
+    await get_owned_suite(db, suite_id, current_user)
+    result = await db.execute(
+        select(GenerationJob)
+        .where(GenerationJob.suite_id == suite_id)
+        .where(GenerationJob.type == GenerationJobType.video_montage)
+        .order_by(GenerationJob.created_at.desc())
+        .limit(max(1, min(50, limit)))
+    )
+    jobs = result.scalars().all()
+    payload = []
+    for job in jobs:
+        serialized = serialize_job(job, suite_id=suite_id)
+        serialized["input"] = job_input_summary(job)
+        payload.append(serialized)
+    return {"jobs": payload}
 
 
 @router.get("/jobs/latest")
@@ -199,10 +223,8 @@ async def create_video_montage_job(
     db: AsyncSession = Depends(get_db),
 ):
     await get_owned_suite(db, suite_id, current_user)
-    existing = await active_video_montage_job(db, suite_id)
-    if existing:
-        return serialize_job(existing, suite_id=suite_id)
-
+    # Multiple montage jobs may queue at once; the worker serializes actual
+    # renders through its render-slot gate, so no active-job early return.
     options = parse_options(options_json)
     caption_overrides = parse_text_overrides(caption_overrides_json)
     title_overrides = parse_text_overrides(title_overrides_json)

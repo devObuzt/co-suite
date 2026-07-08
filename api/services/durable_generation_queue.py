@@ -46,6 +46,45 @@ log = logging.getLogger(__name__)
 RETRY_BASE_SECONDS = 30
 RETRY_MAX_SECONDS = 300
 POLL_INTERVAL_SECONDS = 2
+MONTAGE_SLOT_WAIT_SECONDS = 30
+
+# Only settings.montage_render_slots Remotion renders may run at once in this
+# process: two concurrent montage renders OOM-kill an 8GB worker container.
+_montage_render_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def montage_render_semaphore() -> asyncio.Semaphore:
+    global _montage_render_semaphore
+    if _montage_render_semaphore is None:
+        _montage_render_semaphore = asyncio.Semaphore(max(1, int(settings.montage_render_slots)))
+    return _montage_render_semaphore
+
+
+async def defer_montage_for_render_slot(db: AsyncSession, job: GenerationJob) -> Optional[GenerationJob]:
+    """Send a claimed montage back to the queue until a render slot frees up.
+
+    Uses waiting_capacity + next_retry_at so the claim query skips the job for
+    a while and non-montage jobs keep flowing through this worker loop.
+    """
+    updated = await update_job(
+        db,
+        job.id,
+        status=GenerationJobStatus.waiting_capacity,
+        stage="waiting_render_slot",
+        message="بانتظار دور الرندر",
+        progress=0,
+        next_retry_at=utcnow() + timedelta(seconds=MONTAGE_SLOT_WAIT_SECONDS),
+    )
+    log_event(
+        log,
+        logging.INFO,
+        "Montage job deferred: render slot busy in this worker.",
+        event="montage_render_slot_deferred",
+        job_id=job.id,
+        suite_id=job.suite_id,
+        wait_seconds=MONTAGE_SLOT_WAIT_SECONDS,
+    )
+    return updated
 
 
 def retry_delay_seconds(job: GenerationJob) -> int:
@@ -477,31 +516,37 @@ async def execute_claimed_job(
                 )
 
             if job.type == GenerationJobType.video_montage:
-                result = await db.execute(select(Suite).where(Suite.id == job.suite_id))
-                suite = result.scalar_one_or_none()
-                if not suite:
-                    return await mark_failed(db, job.id, "Suite not found")
-                montage_result = await generate_video_montage_for_suite(
-                    db=db,
-                    suite=suite,
-                    job_id=job.id,
-                    input_data=input_data,
-                    progress=progress,
-                )
-                failure_reason = montage_failure_reason(montage_result)
-                if failure_reason:
-                    return await mark_failed(db, job.id, failure_reason, result=montage_result)
-                # Auto-file the finished render into the suite's media library.
-                # A filing failure must never fail the montage job itself.
-                try:
-                    media_asset = montage_media_asset(suite, job.id, montage_result)
-                    if media_asset:
-                        db.add(media_asset)
-                        await db.flush()
-                except Exception:
-                    log.exception("Could not file montage output for job %s into the media library", job.id)
-                    await db.rollback()
-                return await mark_completed(db, job.id, montage_result)
+                semaphore = montage_render_semaphore()
+                if semaphore.locked():
+                    # Another montage is rendering in this process — requeue
+                    # this one instead of stacking a second Remotion render.
+                    return await defer_montage_for_render_slot(db, job)
+                async with semaphore:
+                    result = await db.execute(select(Suite).where(Suite.id == job.suite_id))
+                    suite = result.scalar_one_or_none()
+                    if not suite:
+                        return await mark_failed(db, job.id, "Suite not found")
+                    montage_result = await generate_video_montage_for_suite(
+                        db=db,
+                        suite=suite,
+                        job_id=job.id,
+                        input_data=input_data,
+                        progress=progress,
+                    )
+                    failure_reason = montage_failure_reason(montage_result)
+                    if failure_reason:
+                        return await mark_failed(db, job.id, failure_reason, result=montage_result)
+                    # Auto-file the finished render into the suite's media library.
+                    # A filing failure must never fail the montage job itself.
+                    try:
+                        media_asset = montage_media_asset(suite, job.id, montage_result)
+                        if media_asset:
+                            db.add(media_asset)
+                            await db.flush()
+                    except Exception:
+                        log.exception("Could not file montage output for job %s into the media library", job.id)
+                        await db.rollback()
+                    return await mark_completed(db, job.id, montage_result)
 
             return await mark_failed(db, job.id, f"Unsupported generation job type: {job.type}")
         except Exception as exc:

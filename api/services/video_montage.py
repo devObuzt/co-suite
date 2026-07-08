@@ -27,6 +27,7 @@ from ..core.external_calls import external_call
 from ..core.observability import log_event
 from ..models.suite import Suite
 from .media_storage import r2_configured, upload_bytes
+from .montage_notes_analyzer import analyze_and_apply_montage_notes
 from .creative_assets import (
     AUDIO_KINDS,
     VIDEO_TRANSITION_KINDS,
@@ -52,6 +53,8 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
 MAX_DISTINCT_BACKGROUND_VIDEOS = 2
 MAX_MONTAGE_SCENES = 24
 FAL_VEED_MODEL = "veed/video-background-removal"
+# Speech cleanup chain shared by the V1 mixer and the Remotion audio extract.
+VOICE_CLEANUP_AUDIO_FILTER = "highpass=f=80,lowpass=f=12000,afftdn,loudnorm=I=-16:LRA=11:TP=-1.5"
 
 
 def job_dir(job_id: str) -> Path:
@@ -1222,6 +1225,7 @@ async def build_remotion_scene_manifest(
     duration: float,
     transcript_segments: list[dict[str, Any]],
     fps: int = 30,
+    subject_has_alpha: bool = True,
 ) -> tuple[Path, list[dict[str, Any]]]:
     src_dir, public_dir = copy_remotion_runtime(work_dir)
     inputs_dir = public_dir / "inputs"
@@ -1231,32 +1235,48 @@ async def build_remotion_scene_manifest(
     backgrounds_dir.mkdir(parents=True, exist_ok=True)
     sound_dir.mkdir(parents=True, exist_ok=True)
 
+    options = requested_options(input_data)
+    # Honest options: a toggle the user switched off must leave zero trace in
+    # the manifest, so the render cannot silently apply it anyway.
+    show_captions = "captions" in options
+    show_titles = "titles" in options
+    music_enabled = "music" in options
+    voice_cleanup = "voice_cleanup" in options
+
     source_copy = inputs_dir / transparent_source_path.name
     if transparent_source_path.resolve() != source_copy.resolve():
         shutil.copy2(transparent_source_path, source_copy)
 
     frames_dir = inputs_dir / f"{transparent_source_path.stem}-frames"
-    frames_dir.mkdir(parents=True, exist_ok=True)
-    if not any(frames_dir.glob("frame_*.png")):
-        run_command(
-            [
-                "ffmpeg",
-                "-y",
-                "-c:v",
-                "libvpx-vp9",
-                "-i",
-                str(transparent_source_path),
-                "-vf",
-                f"fps={fps},scale=1080:1920:flags=lanczos",
-                "-start_number",
-                "0",
-                str(frames_dir / "frame_%05d.png"),
-            ]
-        )
+    if subject_has_alpha:
+        # Transparent VP9 subjects are pre-split into RGBA frames; opaque
+        # full-frame sources play directly through OffthreadVideo instead.
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        if not any(frames_dir.glob("frame_*.png")):
+            run_command(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-c:v",
+                    "libvpx-vp9",
+                    "-i",
+                    str(transparent_source_path),
+                    "-vf",
+                    f"fps={fps},scale=1080:1920:flags=lanczos",
+                    "-start_number",
+                    "0",
+                    str(frames_dir / "frame_%05d.png"),
+                ]
+            )
 
+    has_source_audio = ffprobe_has_audio(transparent_source_path)
     audio_path = inputs_dir / f"{transparent_source_path.stem}-audio.m4a"
-    if not audio_path.exists() and ffprobe_has_audio(transparent_source_path):
-        run_command(["ffmpeg", "-y", "-i", str(transparent_source_path), "-vn", "-c:a", "aac", "-b:a", "192k", str(audio_path)])
+    if not audio_path.exists() and has_source_audio:
+        audio_command = ["ffmpeg", "-y", "-i", str(transparent_source_path), "-vn"]
+        if voice_cleanup:
+            audio_command.extend(["-af", VOICE_CLEANUP_AUDIO_FILTER])
+        audio_command.extend(["-c:a", "aac", "-b:a", "192k", str(audio_path)])
+        run_command(audio_command)
     if not audio_path.exists():
         run_command(
             [
@@ -1275,7 +1295,6 @@ async def build_remotion_scene_manifest(
         )
 
     notes = str(input_data.get("notes") or "").strip()
-    options = requested_options(input_data)
     if not transcript_segments:
         transcript_segments = fallback_caption_segments(duration, notes or "مونتاج تسويقي جاهز")
     timing_segments = non_silent_segments(transparent_source_path, duration) if "dead_spaces" in options else None
@@ -1286,7 +1305,13 @@ async def build_remotion_scene_manifest(
         timing_segments=timing_segments,
     )
 
-    active_assets = await list_active_assets(db, kinds=AUDIO_KINDS | VISUAL_KINDS | VIDEO_TRANSITION_KINDS) if db else []
+    wanted_kinds: set[str] = set(VIDEO_TRANSITION_KINDS)
+    if subject_has_alpha:
+        # Background layers are invisible behind an opaque full-frame subject.
+        wanted_kinds |= VISUAL_KINDS
+    if music_enabled:
+        wanted_kinds |= AUDIO_KINDS
+    active_assets = await list_active_assets(db, kinds=wanted_kinds) if db else []
     if active_assets:
         available_assets = [asset for asset in active_assets if creative_asset_file_available(asset)]
         skipped_assets = [asset for asset in active_assets if asset not in available_assets]
@@ -1328,7 +1353,7 @@ async def build_remotion_scene_manifest(
         ][index % 5]
         variety_seed = zlib.crc32(str(work_dir).encode("utf-8")) + index
         visual_video_asset = None
-        if db and index == 0:
+        if subject_has_alpha and db and index == 0:
             # The hero scene always gets a freshly generated background tied to
             # the spoken line, so consecutive renders don't open identically.
             try:
@@ -1337,11 +1362,11 @@ async def build_remotion_scene_manifest(
                     active_assets.append(visual_video_asset)
             except Exception:
                 visual_video_asset = None
-        if not visual_video_asset:
+        if subject_has_alpha and not visual_video_asset:
             visual_video_asset = pick_asset(
                 active_assets, kind="visual_video", scene_text=caption, suite_id=suite.id, variety_seed=variety_seed
             )
-        if not visual_video_asset and db and index < 2:
+        if subject_has_alpha and not visual_video_asset and db and index < 2:
             try:
                 visual_video_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption, kind="visual_video")
                 if visual_video_asset:
@@ -1358,18 +1383,22 @@ async def build_remotion_scene_manifest(
             visual_video_asset = None
         if visual_video_asset:
             distinct_background_video_ids.add(visual_video_asset.id)
-        visual_asset = pick_asset(
-            active_assets, kind="visual_image", scene_text=caption, suite_id=suite.id, variety_seed=variety_seed
-        )
-        if not visual_asset and db and index < 4:
-            try:
-                visual_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption)
-                if visual_asset:
-                    active_assets.append(visual_asset)
-            except Exception:
-                visual_asset = None
+        visual_asset = None
+        if subject_has_alpha:
+            visual_asset = pick_asset(
+                active_assets, kind="visual_image", scene_text=caption, suite_id=suite.id, variety_seed=variety_seed
+            )
+            if not visual_asset and db and index < 4:
+                try:
+                    visual_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption)
+                    if visual_asset:
+                        active_assets.append(visual_asset)
+                except Exception:
+                    visual_asset = None
         background_path = backgrounds_dir / f"scene-{index + 1:02d}.png"
-        background_public_path = f"/remotion/backgrounds/{background_path.name}"
+        # An opaque full-frame subject covers the whole canvas, so scene
+        # backgrounds are skipped entirely (no generation, no assets).
+        background_public_path = f"/remotion/backgrounds/{background_path.name}" if subject_has_alpha else None
         background_video_public_path = None
         background_asset_id = None
         background_video_asset_id = None
@@ -1388,7 +1417,7 @@ async def build_remotion_scene_manifest(
                 background_image_asset_id = visual_asset.id
                 background_asset_id = background_asset_id or visual_asset.id
                 selected_asset_ids.append(visual_asset.id)
-        if not background_image_asset_id and not background_path.exists():
+        if subject_has_alpha and not background_image_asset_id and not background_path.exists():
             create_montage_background(background_path, suite)
         scenes.append(
             {
@@ -1412,7 +1441,7 @@ async def build_remotion_scene_manifest(
                 "backgroundAssetId": background_asset_id,
                 "backgroundVideoAssetId": background_video_asset_id,
                 "backgroundImageAssetId": background_image_asset_id,
-                "backgroundAssetKind": "visual_video" if background_video_public_path else ("visual_image" if background_asset_id else "generated_static"),
+                "backgroundAssetKind": "visual_video" if background_video_public_path else ("visual_image" if background_asset_id else ("generated_static" if subject_has_alpha else "none")),
             }
         )
 
@@ -1423,22 +1452,29 @@ async def build_remotion_scene_manifest(
             scenes[index + 1]["sourceStart"] = boundary
 
     edited_duration = sum(max(0.1, scene["sourceEnd"] - scene["sourceStart"]) for scene in scenes)
-    music_asset = pick_asset(active_assets, kind="music", scene_text=f"{suite.name} {' '.join(scene['caption'] for scene in scenes[:3])}")
-    transition_assets = [asset for asset in active_assets if asset.kind == "transition"]
+    music_asset = None
+    if music_enabled:
+        # Notes analysis can bias the library pick with a mood keyword
+        # (e.g. "هادئة") that outranks the generic suite/caption text.
+        music_mood = re.sub(r"\s+", " ", str(input_data.get("music_mood") or "")).strip()
+        music_query = f"{music_mood} {suite.name} {' '.join(scene['caption'] for scene in scenes[:3])}".strip()
+        music_asset = pick_asset(active_assets, kind="music", scene_text=music_query)
+    transition_assets = [asset for asset in active_assets if asset.kind == "transition"] if music_enabled else []
     transition_video_assets = [
         asset for asset in active_assets
         if asset.kind == "transition_video" and ("portrait" in [str(tag).lower() for tag in (asset.tags or [])] or "9:16" in str(asset.metadata_json or {}))
     ] or [asset for asset in active_assets if asset.kind == "transition_video"]
-    sfx_assets = [asset for asset in active_assets if asset.kind == "sfx"]
+    sfx_assets = [asset for asset in active_assets if asset.kind == "sfx"] if music_enabled else []
     music_path = sound_dir / "marketing-upbeat-bed.wav"
     whoosh_path = sound_dir / "soft-whoosh.wav"
-    try:
-        if not music_path.exists():
-            generate_marketing_music_bed(music_path, edited_duration + 1)
-        if not whoosh_path.exists():
-            generate_soft_whoosh(whoosh_path)
-    except Exception:
-        pass
+    if music_enabled:
+        try:
+            if not music_path.exists():
+                generate_marketing_music_bed(music_path, edited_duration + 1)
+            if not whoosh_path.exists():
+                generate_soft_whoosh(whoosh_path)
+        except Exception:
+            pass
 
     starts: list[float] = []
     cursor = 0.0
@@ -1462,13 +1498,15 @@ async def build_remotion_scene_manifest(
                         "publicPath": public_path,
                         "at": round(start, 3),
                         "duration": min(1.2, max(0.35, float(visual_asset.duration_seconds or 0.7))),
-                        "volume": 0.35,
+                        # Music/SFX off keeps the visual transition but mutes
+                        # the clip's embedded sound.
+                        "volume": 0.35 if music_enabled else 0.0,
                         "assetId": visual_asset.id,
                         "kind": "transition_video",
                     }
                 )
                 visual_transition_added = True
-        if visual_transition_added:
+        if visual_transition_added or not music_enabled:
             continue
         asset = transition_assets[index % len(transition_assets)] if transition_assets else None
         if asset:
@@ -1508,7 +1546,11 @@ async def build_remotion_scene_manifest(
         ]
         beat_cursor += duration_for_scene
 
-    background_music = {"publicPath": "/remotion/sound/marketing-upbeat-bed.wav", "volume": 0.14} if music_path.exists() else None
+    background_music = (
+        {"publicPath": "/remotion/sound/marketing-upbeat-bed.wav", "volume": 0.14}
+        if music_enabled and music_path.exists()
+        else None
+    )
     if music_asset:
         public_path = remotion_public_asset_path(music_asset.storage_url, work_dir, music_asset.id)
         if public_path:
@@ -1523,19 +1565,31 @@ async def build_remotion_scene_manifest(
         except Exception:
             log.exception("Failed to record creative asset usage for video montage job")
 
+    caption_style = str(input_data.get("caption_style") or "").strip().lower()
+    caption_scale = {"large": 1.3, "small": 0.85}.get(caption_style, 1.0)
+    source_manifest: dict[str, Any] = {
+        "publicPath": f"/remotion/inputs/{source_copy.name}",
+        "originalPath": str(transparent_source_path),
+        "durationSeconds": round(duration, 3),
+        "hasAlpha": subject_has_alpha,
+    }
+    if subject_has_alpha:
+        # Opaque sources omit framesPublicPath on purpose: the component then
+        # falls back to a full-frame OffthreadVideo of the source itself.
+        source_manifest.update(
+            {
+                "framesPublicPath": f"/remotion/inputs/{frames_dir.name}",
+                "framePattern": "frame_%05d.png",
+                "subjectTopRel": detect_subject_top_rel(frames_dir),
+            }
+        )
     manifest = {
         "fps": fps,
         "width": 1080,
         "height": 1920,
-        "source": {
-            "publicPath": f"/remotion/inputs/{source_copy.name}",
-            "originalPath": str(transparent_source_path),
-            "durationSeconds": round(duration, 3),
-            "hasAlpha": True,
-            "framesPublicPath": f"/remotion/inputs/{frames_dir.name}",
-            "framePattern": "frame_%05d.png",
-            "subjectTopRel": detect_subject_top_rel(frames_dir),
-        },
+        "showCaptions": show_captions,
+        "showTitles": show_titles,
+        "source": source_manifest,
         "audio": {
             "sourcePublicPath": f"/remotion/inputs/{audio_path.name}",
             "backgroundMusic": background_music,
@@ -1550,6 +1604,7 @@ async def build_remotion_scene_manifest(
             "subjectZoom": max(1.0, min(3.0, float(input_data.get("zoom") or 1.0))),
             "subjectOffsetXPct": max(-40.0, min(40.0, float(input_data.get("subject_offset_x") or 0.0))),
             "subjectOffsetYPct": max(-40.0, min(40.0, float(input_data.get("subject_offset_y") or 0.0))),
+            "captionScale": caption_scale,
         },
         "scenes": scenes,
         "durationSeconds": round(edited_duration, 3),
@@ -1557,6 +1612,11 @@ async def build_remotion_scene_manifest(
             "sceneCount": len(scenes),
             "soundEffectCount": len(sound_effects),
             "musicBed": bool(background_music),
+            "musicEnabled": music_enabled,
+            "showCaptions": show_captions,
+            "showTitles": show_titles,
+            "subjectHasAlpha": subject_has_alpha,
+            "voiceCleanupApplied": bool(voice_cleanup and has_source_audio),
             "timingSource": "non_silent_segments" if timing_segments and len(timing_segments) > 1 else "transcript_or_timed_split",
         },
     }
@@ -1573,6 +1633,7 @@ async def render_remotion_montage(
     suite: Suite,
     input_data: dict[str, Any],
     transcript: tuple[list[dict[str, Any]], str | None] | None = None,
+    subject_has_alpha: bool = True,
 ) -> dict[str, Any]:
     started = time.monotonic()
     result = await _render_remotion_montage_impl(
@@ -1582,6 +1643,7 @@ async def render_remotion_montage(
         suite=suite,
         input_data=input_data,
         transcript=transcript,
+        subject_has_alpha=subject_has_alpha,
     )
     elapsed = round(time.monotonic() - started, 2)
     result["render_duration_seconds"] = elapsed
@@ -1610,11 +1672,12 @@ async def _render_remotion_montage_impl(
     suite: Suite,
     input_data: dict[str, Any],
     transcript: tuple[list[dict[str, Any]], str | None] | None = None,
+    subject_has_alpha: bool = True,
 ) -> dict[str, Any]:
     if not ffmpeg_available():
         return {"rendered": False, "reason": "FFmpeg/FFprobe are not installed in this runtime."}
     if not transparent_source_path.exists():
-        return {"rendered": False, "reason": "Transparent subject video was not found."}
+        return {"rendered": False, "reason": "Subject video was not found."}
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     duration = min(probe_duration_seconds(transparent_source_path), float(settings.montage_max_duration_seconds))
@@ -1633,6 +1696,7 @@ async def _render_remotion_montage_impl(
         input_data=input_data,
         duration=duration,
         transcript_segments=transcript_segments,
+        subject_has_alpha=subject_has_alpha,
     )
     public_dir = work_dir / "public"
     entry = work_dir / "src" / "remotion" / "index.ts"
@@ -1670,22 +1734,37 @@ async def _render_remotion_montage_impl(
             "warnings": warnings,
         }
 
+    # Honest capability reporting: only claim what this render actually did,
+    # derived from the manifest the compositor consumed.
+    try:
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        manifest_data = {}
+    manifest_audio = manifest_data.get("audio") or {}
+    manifest_diagnostics = manifest_data.get("diagnostics") or {}
+    capabilities = ["remotion_layered_render", "mp4_delivery"]
+    if subject_has_alpha:
+        capabilities.extend(["background_removal", "transparent_subject_frames", "animated_background"])
+    else:
+        capabilities.append("full_frame_subject")
+    if manifest_data.get("showTitles"):
+        capabilities.append("behind_person_3d_title")
+    if manifest_data.get("showCaptions"):
+        capabilities.append("rtl_text_overlay")
+    if manifest_data.get("visualTransitions"):
+        capabilities.append("visual_transitions")
+    if manifest_audio.get("backgroundMusic"):
+        capabilities.append("music_bed")
+    if manifest_audio.get("soundEffects"):
+        capabilities.append("sound_effect_transitions")
+    if manifest_diagnostics.get("voiceCleanupApplied"):
+        capabilities.append("audio_cleanup")
+
     return {
         "rendered": output_path.exists(),
         "duration_seconds": duration,
         "output_url": public_static_url(output_path),
-        "capabilities_applied": [
-            "api_background_removal",
-            "transparent_subject_frames",
-            "remotion_layered_render",
-            "animated_background",
-            "behind_person_3d_title",
-            "rtl_text_overlay",
-            "visual_transitions",
-            "sound_effect_transitions",
-            "music_bed",
-            "mp4_delivery",
-        ],
+        "capabilities_applied": capabilities,
         "warnings": warnings,
         "manifest_path": str(manifest_path),
         "scene_count": len(scenes),
@@ -1764,7 +1843,7 @@ def finalise_audio(
 
     audio_chain = "anull"
     if cleanup_voice:
-        audio_chain = "highpass=f=80,lowpass=f=12000,afftdn,loudnorm=I=-16:LRA=11:TP=-1.5"
+        audio_chain = VOICE_CLEANUP_AUDIO_FILTER
         capabilities.append("audio_cleanup")
 
     if add_music:
@@ -2131,7 +2210,7 @@ def build_render_package(
         options = []
     engine = str(render_result.get("engine") or "")
     package = {
-        "version": "video_montage_remotion_v1" if engine in {"remotion_veed_fal", "remotion_local_chromakey"} else "video_montage_v1",
+        "version": "video_montage_remotion_v1" if engine in {"remotion_veed_fal", "remotion_local_chromakey", "remotion_fullframe"} else "video_montage_v1",
         "suite_id": suite.id,
         "mode": input_data.get("mode") or "talking_head",
         "source_url": input_data.get("source_url"),
@@ -2167,6 +2246,14 @@ async def generate_video_montage_for_suite(
     the logs.
     """
     pipeline_started = time.monotonic()
+    # Free-text notes win over the toggles: an LLM maps every request in the
+    # notes to a supported capability (or reports it as unsupported) before
+    # anything renders. Analysis failures never fail the job.
+    input_data, notes_analysis = await analyze_and_apply_montage_notes(
+        job_id=job_id,
+        suite_id=suite.id,
+        input_data=input_data,
+    )
     log_event(
         log,
         logging.INFO,
@@ -2178,6 +2265,7 @@ async def generate_video_montage_for_suite(
         options=sorted(requested_options(input_data)),
         has_uploaded_file=bool(input_data.get("source_file_path")),
         has_source_url=bool(str(input_data.get("source_url") or "").strip()),
+        notes_analyzed=notes_analysis is not None,
     )
     try:
         result = await _generate_video_montage_impl(
@@ -2187,6 +2275,8 @@ async def generate_video_montage_for_suite(
             input_data=input_data,
             progress=progress,
         )
+        if notes_analysis is not None:
+            result["notes_analysis"] = notes_analysis
     except Exception as exc:
         log_event(
             log,
@@ -2295,6 +2385,52 @@ async def _generate_video_montage_impl(
         # silently: the warning below survives into the final result.
         source_warning = note_fallback("No source video URL or uploaded file was provided to this job.")
 
+    # Dead-space cutting happens BEFORE background removal so the whole
+    # downstream pipeline (VEED, transcription, Remotion render) works on the
+    # tightened video. Previously only the V1 fallback ever cut silences.
+    dead_space_seconds_cut: float | None = None
+    if source_path and "dead_spaces" in options and ffmpeg_available():
+        emit("preparing_source", "Cutting silent gaps from the source.", 22)
+        normalized_for_cut = await asyncio.to_thread(normalize_montage_source, source_path, output_dir)
+        if normalized_for_cut:
+            pre_cut_duration = await asyncio.to_thread(probe_duration_seconds, normalized_for_cut)
+            tight_path, cut_applied, cut_warning = await asyncio.to_thread(
+                cut_dead_spaces,
+                normalized_for_cut,
+                output_dir / "tight-source.mp4",
+                pre_cut_duration,
+            )
+            if cut_applied:
+                tight_duration = await asyncio.to_thread(probe_duration_seconds, tight_path)
+                dead_space_seconds_cut = round(max(0.0, pre_cut_duration - tight_duration), 2)
+                # Replace the cached normalized source so every downstream
+                # normalize_montage_source() call reuses the tightened video.
+                normalized_target = output_dir / "normalized-source.mp4"
+                shutil.move(str(tight_path), str(normalized_target))
+                source_path = normalized_target
+                log_event(
+                    log,
+                    logging.INFO,
+                    "Cut dead spaces from montage source.",
+                    event="montage_dead_space_cut",
+                    job_id=job_id,
+                    suite_id=suite.id,
+                    seconds_cut=dead_space_seconds_cut,
+                    source_seconds=round(pre_cut_duration, 2),
+                    tightened_seconds=round(tight_duration, 2),
+                )
+            elif cut_warning:
+                note_fallback(f"Dead-space cutting skipped: {cut_warning}")
+
+    def annotate_render(render_result: dict[str, Any]) -> dict[str, Any]:
+        """Attach the pre-render silence cut to the engine's capability report."""
+        if dead_space_seconds_cut is not None:
+            capabilities = render_result.setdefault("capabilities_applied", [])
+            if "silence_cutting" not in capabilities:
+                capabilities.append("silence_cutting")
+            render_result["dead_space_seconds_cut"] = dead_space_seconds_cut
+        return render_result
+
     veed_source_url = None
     veed_stage_path: Path | None = None
     if "background" in options and settings.fal_key and (source_path or source_url):
@@ -2338,13 +2474,15 @@ async def _generate_video_montage_impl(
         if provider_result.get("ok") and transparent_path.exists():
             emit("rendering", "Rendering layered Remotion montage.", 68)
             output_path = output_dir / "render.mp4"
-            render_result = await render_remotion_montage(
-                db=db,
-                transparent_source_path=transparent_path,
-                output_path=output_path,
-                suite=suite,
-                input_data=input_data,
-                transcript=pretranscribed,
+            render_result = annotate_render(
+                await render_remotion_montage(
+                    db=db,
+                    transparent_source_path=transparent_path,
+                    output_path=output_path,
+                    suite=suite,
+                    input_data=input_data,
+                    transcript=pretranscribed,
+                )
             )
             render_result["engine"] = "remotion_veed_fal"
             render_result["background_removal"] = provider_result
@@ -2389,12 +2527,14 @@ async def _generate_video_montage_impl(
         if provider_result.get("ok") and transparent_path.exists():
             emit("rendering", "Rendering layered Remotion montage.", 68)
             output_path = output_dir / "render.mp4"
-            render_result = await render_remotion_montage(
-                db=db,
-                transparent_source_path=transparent_path,
-                output_path=output_path,
-                suite=suite,
-                input_data=input_data,
+            render_result = annotate_render(
+                await render_remotion_montage(
+                    db=db,
+                    transparent_source_path=transparent_path,
+                    output_path=output_path,
+                    suite=suite,
+                    input_data=input_data,
+                )
             )
             render_result["engine"] = "remotion_local_chromakey"
             render_result["background_removal"] = provider_result
@@ -2431,6 +2571,55 @@ async def _generate_video_montage_impl(
     elif source_path and "background" in options:
         source_warning = chain_warning("FFmpeg chromakey filter is unavailable; falling back to local FFmpeg preview.")
 
+    if source_path and "background" not in options and ffmpeg_available():
+        # Honest "no background isolation" montage: the normalized source
+        # plays as an opaque full-frame subject inside the same Remotion
+        # composition, so captions/titles/music still work without VEED.
+        emit("rendering", "Rendering full-frame Remotion montage.", 62)
+        normalized_path = await asyncio.to_thread(normalize_montage_source, source_path, output_dir)
+        if normalized_path:
+            output_path = output_dir / "render.mp4"
+            render_result = annotate_render(
+                await render_remotion_montage(
+                    db=db,
+                    transparent_source_path=normalized_path,
+                    output_path=output_path,
+                    suite=suite,
+                    input_data=input_data,
+                    subject_has_alpha=False,
+                )
+            )
+            render_result["engine"] = "remotion_fullframe"
+            if source_warning:
+                render_result["provider_note"] = source_warning
+            if render_result.get("rendered"):
+                emit("packaging", "Packaging montage output.", 88)
+                render_result["output_url"] = publish_montage_media(job_id, render_result.get("output_url"))
+                package = build_render_package(
+                    suite=suite,
+                    input_data=input_data,
+                    output_dir=output_dir,
+                    source_path=normalized_path,
+                    render_result=render_result,
+                    source_warning=None,
+                )
+                package["version"] = "video_montage_remotion_v1"
+                package["package_url"] = publish_montage_media(job_id, package.get("package_url"))
+                return {
+                    "video_montage": package,
+                    "output_url": render_result.get("output_url"),
+                    "package_url": package.get("package_url"),
+                    "rendered": True,
+                    "source_warning": None,
+                }
+            source_warning = chain_warning(
+                f"Full-frame Remotion render failed: {render_result.get('reason') or 'unknown error'}"
+            )
+        else:
+            source_warning = chain_warning(
+                "Could not normalize the source for the full-frame Remotion render; falling back to local FFmpeg preview."
+            )
+
     emit("rendering", "Rendering V1 montage preview.", 60)
     # Belt and braces: reaching this point without a source must always carry
     # an explanation into the final result, never a silent null warning.
@@ -2438,11 +2627,13 @@ async def _generate_video_montage_impl(
         source_warning = note_fallback("No usable source video was available for rendering.")
     output_path = output_dir / "render.mp4"
     render_result = (
-        render_v1_video(
-            source_path=source_path,
-            output_path=output_path,
-            suite=suite,
-            input_data=input_data,
+        annotate_render(
+            render_v1_video(
+                source_path=source_path,
+                output_path=output_path,
+                suite=suite,
+                input_data=input_data,
+            )
         )
         if source_path
         else {"rendered": False, "reason": source_warning or "No source video was provided."}
