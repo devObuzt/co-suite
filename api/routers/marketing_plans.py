@@ -63,6 +63,7 @@ class GenerateMarketingPlanRequest(BaseModel):
 class MarketingStageRequest(GenerateMarketingPlanRequest):
     existing_ids: list[str] = Field(default_factory=list, max_length=200)
     existing_values: list[str] = Field(default_factory=list, max_length=200)
+    count: int = Field(default=5, ge=1, le=10)
 
 
 class GenerateSocialContentPlanRequest(BaseModel):
@@ -2593,7 +2594,7 @@ async def generate_marketing_personas(
     intelligence = await generate_marketing_customer_personas_research(
         suite,
         output_language,
-        count=5,
+        count=request_data.count,
         existing_persona_values=existing_values,
         append=append,
     )
