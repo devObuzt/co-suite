@@ -162,7 +162,7 @@ def test_funnel_explicit_allowlist_blocks_cost_holes():
     assert not frozen_path_allowed("funnel", "DELETE", "/api/v1/suites/abc/marketing-plan")
     assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/competitors/generate")
     assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/social-content-plan/generate-items")
-    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/visuals/generate")
+    # visuals/generate is allowed at the gate but budget-capped to 1 call per lead
     assert not frozen_path_allowed("funnel", "POST", "/api/v1/onboarding/anything-else")
 
 
@@ -172,6 +172,7 @@ def test_funnel_explicit_allowlist_keeps_wizard_open():
     assert frozen_path_allowed("funnel", "GET", "/api/v1/suites/abc")
     assert frozen_path_allowed("funnel", "GET", "/api/v1/suites/abc/marketing-plan/pdf")
     assert frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/generate")
+    assert frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/visuals/generate")
     assert frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/social-content-plan/selection")
     assert frozen_path_allowed("funnel", "GET", "/api/v1/funnel/catalog")
 

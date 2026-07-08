@@ -43,7 +43,7 @@ from ..services.marketing_plan_generator import (
 )
 from ..services.marketing_plan_pdf import build_marketing_plan_pdf
 from ..services.marketing_plan_visuals import deck_visuals, ensure_marketing_plan_visuals
-from ..services.funnel_guard import block_funnel_regeneration
+from ..services.funnel_guard import block_funnel_regeneration, enforce_funnel_call_limit
 from ..services.multi_scraper import search_web
 from ..services.suite_access import require_suite_access
 
@@ -2135,6 +2135,7 @@ async def generate_marketing_plan_visuals(
     db: AsyncSession = Depends(get_db),
 ):
     """Generate the plan's field images once — shared by the plan page and the PDF."""
+    await enforce_funnel_call_limit(db, current_user, "marketing_plan_visuals", 1)
     suite = await get_owned_suite(db, suite_id, current_user)
     visuals = await ensure_marketing_plan_visuals(suite)
     if visuals:

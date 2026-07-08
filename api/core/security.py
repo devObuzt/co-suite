@@ -63,6 +63,7 @@ _FUNNEL_POST_PATTERNS = [
     re.compile(p)
     for p in (
         r"^/api/v1/suites/[^/]+/marketing-plan/generate$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/visuals/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/paid-content-plan/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/selection$",
