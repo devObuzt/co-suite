@@ -945,7 +945,10 @@ async def test_competitor_generation_clears_old_warnings_and_fills_missing_sourc
 
     assert intelligence["warnings"] == []
     assert "old SerpAPI failure should not stay visible" not in str(intelligence)
-    assert intelligence["source_warnings"] == ["SerpAPI Google Maps failed: 400"]
+    # Source-level failures are admin-only now: logged + stored internally,
+    # never surfaced to the user-facing source_warnings.
+    assert intelligence["source_warnings"] == []
+    assert intelligence["internal_source_warnings"] == ["SerpAPI Google Maps failed: 400"]
     assert {"google_organic", "maps", "instagram", "facebook", "tiktok"}.issubset(sources)
     assert [item["text"] for item in intelligence["keywords"]] == ["دورات تداول"]
 
