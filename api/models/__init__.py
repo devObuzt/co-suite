@@ -22,6 +22,7 @@ from .billing import (
 )
 from .admin import AppTextOverride, AuditLog, ProviderUsageEvent, CreativeAsset
 from .media_asset import MediaAsset
+from .services_catalog import ServiceItem, Lead, ServiceRequest
 
 __all__ = [
     "User",
@@ -35,4 +36,5 @@ __all__ = [
     "Subscription", "UsageEvent", "PlanTier", "BillingStatus", "LedgerAccountType", "BillingEventType",
     "AuditLog", "ProviderUsageEvent", "AppTextOverride", "CreativeAsset",
     "MediaAsset",
+    "ServiceItem", "Lead", "ServiceRequest",
 ]

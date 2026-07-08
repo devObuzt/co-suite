@@ -101,6 +101,11 @@ async def startup():
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS approval_status VARCHAR DEFAULT 'frozen' NOT NULL",
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR",
                     "UPDATE users SET approval_status = 'approved' WHERE lower(email) IN ('w.sholy@gmail.com', 'admin@connec.co.il') OR is_super_admin = TRUE",
+                    "CREATE TABLE IF NOT EXISTS service_items (id VARCHAR PRIMARY KEY, name JSON NOT NULL, description JSON NOT NULL, category JSON NOT NULL, billing_cycle VARCHAR DEFAULT 'one_time' NOT NULL, price_min DOUBLE PRECISION DEFAULT 0 NOT NULL, price_max DOUBLE PRECISION, unit JSON, is_active BOOLEAN DEFAULT TRUE NOT NULL, sort_order INTEGER DEFAULT 0 NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT now(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT now())",
+                    "CREATE TABLE IF NOT EXISTS leads (id VARCHAR PRIMARY KEY, user_id VARCHAR REFERENCES users(id) NOT NULL, suite_id VARCHAR REFERENCES suites(id) ON DELETE SET NULL, full_name VARCHAR NOT NULL, email VARCHAR NOT NULL, phone VARCHAR NOT NULL, status VARCHAR DEFAULT 'new' NOT NULL, source VARCHAR DEFAULT 'startbyconnec' NOT NULL, admin_notes TEXT, recommendations JSON, progress JSON, created_at TIMESTAMP WITH TIME ZONE DEFAULT now(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT now())",
+                    "CREATE INDEX IF NOT EXISTS ix_leads_user_id ON leads (user_id)",
+                    "CREATE TABLE IF NOT EXISTS service_requests (id VARCHAR PRIMARY KEY, lead_id VARCHAR REFERENCES leads(id) NOT NULL, items JSON NOT NULL, totals JSON NOT NULL, customer_notes TEXT, status VARCHAR DEFAULT 'new' NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT now())",
+                    "CREATE INDEX IF NOT EXISTS ix_service_requests_lead_id ON service_requests (lead_id)",
                 ):
                     await conn.execute(text(statement))
         except Exception as e:
