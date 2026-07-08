@@ -12,6 +12,8 @@ from urllib.parse import quote_plus, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
+from ..core.external_calls import external_call
+
 log = logging.getLogger(__name__)
 
 BROWSER_HEADERS = {
@@ -62,12 +64,14 @@ def extract_handle(url: str, platform: str) -> Optional[str]:
 async def scrape_website(url: str) -> dict:
     """Extract text, meta tags, colors, logo, services from any website."""
     try:
-        async with httpx.AsyncClient(
-            headers=BROWSER_HEADERS, timeout=15,
-            follow_redirects=True, verify=False,
-        ) as client:
-            resp = await client.get(url)
-            html = resp.text
+        async with external_call("scraper", "fetch_website", host=urlparse(url).netloc) as call:
+            async with httpx.AsyncClient(
+                headers=BROWSER_HEADERS, timeout=15,
+                follow_redirects=True, verify=False,
+            ) as client:
+                resp = await client.get(url)
+                html = resp.text
+            call.note(status_code=resp.status_code)
     except Exception as e:
         log.warning("Website fetch failed for %s: %s", url, e)
         return {"url": url, "error": str(e)}
@@ -344,8 +348,12 @@ async def scrape_instagram(url: str) -> dict:
     # ── Attempt 1: unofficial JSON API ───────────────────────────────────────
     try:
         api_url = f"https://i.instagram.com/api/v1/users/web_profile_info/?username={handle}"
-        async with httpx.AsyncClient(headers=IG_HEADERS, timeout=15, follow_redirects=True) as client:
-            resp = await client.get(api_url)
+        async with external_call("scraper", "fetch_social_profile", platform="instagram", host="i.instagram.com") as call:
+            async with httpx.AsyncClient(headers=IG_HEADERS, timeout=15, follow_redirects=True) as client:
+                resp = await client.get(api_url)
+            call.note(status_code=resp.status_code)
+            if resp.status_code != 200:
+                call.fail(f"HTTP {resp.status_code}")
 
         if resp.status_code == 200:
             data = resp.json()
@@ -404,8 +412,10 @@ async def scrape_instagram(url: str) -> dict:
 
     # ── Attempt 2: og: meta tags from public profile page ────────────────────
     try:
-        async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12, follow_redirects=True) as client:
-            resp = await client.get(f"https://www.instagram.com/{handle}/")
+        async with external_call("scraper", "fetch_social_profile", platform="instagram", host="www.instagram.com") as call:
+            async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12, follow_redirects=True) as client:
+                resp = await client.get(f"https://www.instagram.com/{handle}/")
+            call.note(status_code=resp.status_code)
         html = resp.text
         soup = BeautifulSoup(html, "html.parser")
         result["og_title"] = _meta(soup, "og:title")
@@ -426,7 +436,137 @@ async def scrape_instagram(url: str) -> dict:
     except Exception as e:
         log.warning("IG profile page fallback failed for @%s: %s", handle, e)
 
+    # ── Attempt 3: Google's index (Instagram blocks datacenter IPs, but search
+    # snippets still carry the bio, follower counts, and post captions) ───────
+    if not result.get("bio") and not result.get("captions_sample"):
+        try:
+            search_data = await _instagram_search_intel(handle)
+            for key, value in search_data.items():
+                if value and not result.get(key):
+                    result[key] = value
+            if search_data.get("bio") or search_data.get("captions_sample"):
+                result["source_method"] = "web_search"
+                log.info(
+                    "IG search fallback succeeded for @%s: bio=%s captions=%s",
+                    handle,
+                    bool(search_data.get("bio")),
+                    len((search_data.get("captions_sample") or "").split("---")),
+                )
+        except Exception as e:
+            log.warning("IG search fallback failed for @%s: %s", handle, e)
+
     return result
+
+
+def _parse_ig_count(text: str) -> int:
+    m = re.match(r"([\d.,]+)\s*([KMkm]?)", str(text or "").strip())
+    if not m:
+        return 0
+    try:
+        number = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return 0
+    multiplier = {"k": 1_000, "m": 1_000_000}.get(m.group(2).lower(), 1)
+    return int(number * multiplier)
+
+
+async def _serpapi_search(query: str, limit: int = 10) -> list[dict]:
+    from ..core.config import settings
+
+    api_key = (settings.serpapi_api_key or "").strip()
+    if not api_key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                "https://serpapi.com/search.json",
+                params={"api_key": api_key, "engine": "google", "q": query, "num": limit},
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        return [
+            {"title": item.get("title") or "", "url": item.get("link") or "", "snippet": item.get("snippet") or ""}
+            for item in (payload.get("organic_results") or [])[:limit]
+            if isinstance(item, dict)
+        ]
+    except Exception as e:
+        log.warning("SerpAPI search failed for '%s': %s", query, e)
+        return []
+
+
+_IG_SNIPPET_NOISE = re.compile(
+    r"[\d.,]+[KMkm]?\s+likes?,\s*[\d.,]*[KMkm]?\s*comments?\s*-\s*\S+\s+on\s+\w+\s+\d{1,2},\s*\d{4}\S{0,3}\s*:?\s*"
+)
+
+
+def _parse_ig_items(items: list[dict], handle_lower: str, out: dict, captions: list[str]) -> None:
+    for item in items:
+        url = str(item.get("url") or "").lower()
+        snippet = f'{item.get("title") or ""} {item.get("snippet") or ""}'.strip()
+        if not snippet or "instagram.com" not in url:
+            continue
+        path = urlparse(url).path.strip("/")
+        is_post = "/p/" in url or "/reel/" in url
+        is_profile = not is_post and path.split("/")[0].lstrip("@") == handle_lower
+        for pattern, key in (
+            (r"([\d.,]+[KMkm]?)\+?\s+followers", "followers"),
+            (r"([\d.,]+[KMkm]?)\+?\s+following", "following"),
+            (r"([\d.,]+[KMkm]?)\+?\s+posts", "posts_count"),
+        ):
+            match = re.search(pattern, snippet, re.IGNORECASE)
+            if match and not out.get(key):
+                out[key] = _parse_ig_count(match.group(1))
+        if is_profile and not out.get("bio"):
+            bio_text = snippet
+            bio_text = re.sub(r".*?on Instagram:\s*", "", bio_text, count=1) if "on Instagram:" in bio_text else bio_text
+            bio_text = re.sub(r"^.*?[\d.,]+[KMkm]?\s+Posts\s*-\s*", "", bio_text, count=1)
+            bio_text = re.sub(r".*?Instagram photos and videos\.?\s*", "", bio_text, count=1)
+            bio_text = bio_text.strip(' ".')
+            if len(bio_text) > 10:
+                out["bio"] = bio_text[:400]
+        if is_post:
+            caption = _IG_SNIPPET_NOISE.sub(" ", snippet)
+            caption = " ".join(caption.split()).strip(' "')
+            if len(caption) > 20:
+                captions.append(caption[:300])
+
+
+async def _instagram_search_intel(handle: str) -> dict:
+    """Profile bio, stats, and post captions for a handle via Google's index."""
+    handle_lower = handle.lower()
+    out: dict = {}
+    captions: list[str] = []
+
+    query = f'site:instagram.com "{handle}"'
+    items = await _serpapi_search(query, 10)
+    if not items:
+        items = await search_web(query, 8)
+    _parse_ig_items(items, handle_lower, out, captions)
+
+    # The profile page itself sometimes misses the first query — target it.
+    if not out.get("bio") or not out.get("followers"):
+        profile_items = await _serpapi_search(f'"instagram.com/{handle}"', 5)
+        if not profile_items:
+            profile_items = await search_web(f'instagram "{handle}"', 5)
+        _parse_ig_items(profile_items, handle_lower, out, captions)
+
+    if captions:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for caption in captions:
+            marker = caption[:80].casefold()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            deduped.append(caption)
+        out["captions_sample"] = "\n---\n".join(deduped[:8])[:3000]
+        tag_counts: dict[str, int] = {}
+        for caption in deduped:
+            for tag in re.findall(r"#(\w+)", caption):
+                tag_counts[tag.lower()] = tag_counts.get(tag.lower(), 0) + 1
+        if tag_counts:
+            out["top_hashtags"] = sorted(tag_counts, key=lambda key: -tag_counts[key])[:20]
+    return out
 
 
 async def scrape_facebook(url: str) -> dict:
@@ -434,9 +574,11 @@ async def scrape_facebook(url: str) -> dict:
     handle = extract_handle(url, "facebook") or url
     result = {"type": "facebook", "handle": handle, "url": url}
     try:
-        async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12, follow_redirects=True) as client:
-            resp = await client.get(url)
-            html = resp.text
+        async with external_call("scraper", "fetch_social_profile", platform="facebook", host=urlparse(url).netloc) as call:
+            async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12, follow_redirects=True) as client:
+                resp = await client.get(url)
+                html = resp.text
+            call.note(status_code=resp.status_code)
         soup = BeautifulSoup(html, "html.parser")
         result["og_title"] = _meta(soup, "og:title")
         result["og_description"] = _meta(soup, "og:description")
@@ -452,9 +594,11 @@ async def scrape_linkedin(url: str) -> dict:
     """Extract visible LinkedIn page info."""
     result = {"type": "linkedin", "url": url}
     try:
-        async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12, follow_redirects=True) as client:
-            resp = await client.get(url)
-            html = resp.text
+        async with external_call("scraper", "fetch_social_profile", platform="linkedin", host=urlparse(url).netloc) as call:
+            async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12, follow_redirects=True) as client:
+                resp = await client.get(url)
+                html = resp.text
+            call.note(status_code=resp.status_code)
         soup = BeautifulSoup(html, "html.parser")
         result["og_title"] = _meta(soup, "og:title")
         result["og_description"] = _meta(soup, "og:description")
@@ -477,9 +621,11 @@ async def search_business(business_name: str, location: str = "") -> str:
     # DuckDuckGo HTML search (no API key needed)
     try:
         search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
-        async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12) as client:
-            resp = await client.get(search_url)
-            soup = BeautifulSoup(resp.text, "html.parser")
+        async with external_call("duckduckgo", "search") as call:
+            async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12) as client:
+                resp = await client.get(search_url)
+            call.note(status_code=resp.status_code)
+        soup = BeautifulSoup(resp.text, "html.parser")
 
         for result in soup.select(".result__snippet")[:5]:
             text = result.get_text(" ", strip=True)
@@ -492,9 +638,11 @@ async def search_business(business_name: str, location: str = "") -> str:
     if len(snippets) < 2:
         try:
             g_url = f"https://www.google.com/search?q={quote_plus(query)}&hl=en&num=5"
-            async with httpx.AsyncClient(headers={**BROWSER_HEADERS, "Accept-Language": "en-US"}, timeout=12) as client:
-                resp = await client.get(g_url)
-                soup = BeautifulSoup(resp.text, "html.parser")
+            async with external_call("google-search", "search") as call:
+                async with httpx.AsyncClient(headers={**BROWSER_HEADERS, "Accept-Language": "en-US"}, timeout=12) as client:
+                    resp = await client.get(g_url)
+                call.note(status_code=resp.status_code)
+            soup = BeautifulSoup(resp.text, "html.parser")
             for span in soup.select("[data-sncf], .VwiC3b, .yXK7lf")[:5]:
                 text = span.get_text(" ", strip=True)
                 if text and len(text) > 30:
@@ -525,8 +673,10 @@ async def search_web(query: str, limit: int = 6) -> list[dict]:
     items: list[dict] = []
     try:
         search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
-        async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12) as client:
-            resp = await client.get(search_url)
+        async with external_call("duckduckgo", "search") as call:
+            async with httpx.AsyncClient(headers=BROWSER_HEADERS, timeout=12) as client:
+                resp = await client.get(search_url)
+            call.note(status_code=resp.status_code)
         soup = BeautifulSoup(resp.text, "html.parser")
         # DDG HTML structure: results are .result, title link is .result__a,
         # snippet is .result__snippet. The href may be a DDG redirect — extract
@@ -559,8 +709,10 @@ async def search_web(query: str, limit: int = 6) -> list[dict]:
     if not items:
         try:
             g_url = f"https://www.google.com/search?q={quote_plus(query)}&hl=en&num={limit}"
-            async with httpx.AsyncClient(headers={**BROWSER_HEADERS, "Accept-Language": "en-US"}, timeout=12) as client:
-                resp = await client.get(g_url)
+            async with external_call("google-search", "search") as call:
+                async with httpx.AsyncClient(headers={**BROWSER_HEADERS, "Accept-Language": "en-US"}, timeout=12) as client:
+                    resp = await client.get(g_url)
+                call.note(status_code=resp.status_code)
             soup = BeautifulSoup(resp.text, "html.parser")
             for a in soup.select("a[href]")[:20]:
                 href = a.get("href", "")
