@@ -48,6 +48,7 @@ MAX_REMOTE_BYTES = 500 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 45
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
 MAX_DISTINCT_BACKGROUND_VIDEOS = 2
+MAX_MONTAGE_SCENES = 24
 FAL_VEED_MODEL = "veed/video-background-removal"
 
 
@@ -820,7 +821,7 @@ def transcribe_video_segments(video_path: Path, output_dir: Path) -> tuple[list[
         ]
     transcript_path = output_dir / "transcript.json"
     transcript_path.write_text(json.dumps({"segments": segments}, ensure_ascii=False, indent=2), encoding="utf-8")
-    return segments[:18], None
+    return segments[:64], None
 
 
 def detect_subject_top_rel(frames_dir: Path) -> float | None:
@@ -942,7 +943,7 @@ def normalize_scene_segments(
         if float(segment.get("end") or 0) > float(segment.get("start") or 0)
     ]
     if len(valid_segments) >= 2:
-        return valid_segments[:18]
+        return valid_segments[:MAX_MONTAGE_SCENES]
 
     base_timings = [
         (max(0.0, start), min(duration, end))
@@ -961,7 +962,7 @@ def normalize_scene_segments(
     chunks = split_text_into_caption_chunks(text_seed, len(base_timings))
     return [
         {"start": round(start, 3), "end": round(end, 3), "text": chunks[index]}
-        for index, (start, end) in enumerate(base_timings[:18])
+        for index, (start, end) in enumerate(base_timings[:MAX_MONTAGE_SCENES])
         if end > start
     ]
 
@@ -1207,7 +1208,17 @@ async def build_remotion_scene_manifest(
     selected_asset_ids: list[str] = []
     distinct_background_video_ids: set[str] = set()
     scenes: list[dict[str, Any]] = []
-    for index, segment in enumerate(transcript_segments[:18]):
+    # Never drop the tail of long videos: segments beyond the scene cap are
+    # merged into the last scene instead of being cut from the montage.
+    capped_segments = list(transcript_segments)
+    if len(capped_segments) > MAX_MONTAGE_SCENES:
+        tail = capped_segments[MAX_MONTAGE_SCENES - 1 :]
+        merged = dict(tail[0])
+        merged["end"] = tail[-1].get("end", merged.get("end"))
+        merged["text"] = " ".join(str(seg.get("text") or "").strip() for seg in tail).strip()
+        merged["words"] = [word for seg in tail for word in (seg.get("words") or [])]
+        capped_segments = capped_segments[: MAX_MONTAGE_SCENES - 1] + [merged]
+    for index, segment in enumerate(capped_segments):
         start = max(0.0, float(segment.get("start") or 0) - 0.12)
         end = min(duration, float(segment.get("end") or duration) + 0.12)
         if end <= start:
@@ -1476,7 +1487,7 @@ async def render_remotion_montage(
         return {"rendered": False, "reason": "Transparent subject video was not found."}
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    duration = min(probe_duration_seconds(transparent_source_path), 45.0)
+    duration = min(probe_duration_seconds(transparent_source_path), float(settings.montage_max_duration_seconds))
     transcript_segments, transcript_warning = transcribe_video_segments(transparent_source_path, output_path.parent)
     warnings = [transcript_warning] if transcript_warning else []
     work_dir = remotion_work_dir(output_path)
@@ -1738,7 +1749,7 @@ def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input
         }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    duration = min(probe_duration_seconds(source_path), 45.0)
+    duration = min(probe_duration_seconds(source_path), float(settings.montage_max_duration_seconds))
     options = requested_options(input_data)
     capabilities = ["video_fit_vertical", "mp4_delivery"]
     warnings: list[str] = []
@@ -1754,7 +1765,7 @@ def render_v1_video(*, source_path: Path, output_path: Path, suite: Suite, input
         )
         if cut_applied:
             capabilities.append("silence_cutting")
-            duration = min(probe_duration_seconds(working_source), 45.0)
+            duration = min(probe_duration_seconds(working_source), float(settings.montage_max_duration_seconds))
         if cut_warning:
             warnings.append(cut_warning)
 
@@ -2120,7 +2131,7 @@ async def generate_video_montage_for_suite(
     if source_path and "background" in options and ffmpeg_filter_available("chromakey"):
         emit("background_removal", "Preparing transparent subject locally.", 48)
         transparent_path = output_dir / "transparent-local-subject.webm"
-        local_duration = min(probe_duration_seconds(source_path), 45.0)
+        local_duration = min(probe_duration_seconds(source_path), float(settings.montage_max_duration_seconds))
         provider_result = create_local_transparent_subject(
             source_path=source_path,
             output_path=transparent_path,

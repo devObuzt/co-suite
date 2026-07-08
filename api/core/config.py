@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # exhaust worker memory on long/4K sources
     remotion_render_concurrency: int = 2
 
+    # Longest source a montage will process (safety ceiling, not a feature cap)
+    montage_max_duration_seconds: int = 180
+
     # Remotion OffthreadVideo frame cache cap. Remotion's default is half the
     # system memory as seen from inside the container, which ignores the cgroup
     # limit and lets the kernel OOM-kill the compositor mid-render.
