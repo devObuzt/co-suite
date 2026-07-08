@@ -18,7 +18,7 @@ from ..core.security import get_current_user
 from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
 from ..models.user import User
-from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job, update_job
+from ..services.generation_jobs import ACTIVE_STATUSES, create_job, serialize_job
 from ..services.media_storage import r2_configured, upload_bytes
 from ..services.video_montage import (
     download_source,
@@ -217,14 +217,11 @@ async def create_video_montage_job(
         "subject_offset_x": parse_offset(subject_offset_x),
         "subject_offset_y": parse_offset(subject_offset_y),
     }
-    job = await create_job(
-        db,
-        suite_id=suite_id,
-        job_type=GenerationJobType.video_montage,
-        user_id=current_user.id,
-        input_data=input_data,
-    )
-
+    # Stage the uploaded source BEFORE the job row exists. The worker polls
+    # for queued jobs every couple of seconds, so creating the job first and
+    # attaching the source afterwards let the worker claim a job whose input
+    # had no source yet — it then "completed" instantly with nothing rendered.
+    job_id = str(uuid.uuid4())
     if source_file and source_file.filename:
         data = await source_file.read()
         if len(data) > MAX_UPLOAD_BYTES:
@@ -235,17 +232,28 @@ async def create_video_montage_job(
         # container is invisible to it — uploads must go through R2.
         if r2_configured():
             stored = await asyncio.to_thread(
-                upload_bytes, f"video_montage/{job.id}/upload-{filename}", data, content_type
+                upload_bytes, f"video_montage/{job_id}/upload-{filename}", data, content_type
             )
             input_data["source_url"] = stored.url
             input_data.pop("source_file_path", None)
         else:
-            output_dir = job_dir(job.id)
+            output_dir = job_dir(job_id)
             source_path = output_dir / filename
             source_path.write_bytes(data)
             input_data["source_file_path"] = str(source_path)
         input_data["source_file_name"] = filename
         input_data["source_content_type"] = content_type
-        job = await update_job(db, job.id, input=input_data) or job
+
+    if not input_data.get("source_url") and not input_data.get("source_file_path"):
+        raise HTTPException(status_code=400, detail="Provide a source video URL or upload a video file.")
+
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.video_montage,
+        user_id=current_user.id,
+        input_data=input_data,
+        job_id=job_id,
+    )
 
     return serialize_job(job, suite_id=suite_id)

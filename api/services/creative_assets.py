@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import mimetypes
 import logging
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.admin import CreativeAsset
 from ..models.suite import Suite
 from .content_generator import _generate_image, _generate_video_media
+from .media_storage import r2_configured, upload_bytes
 
 log = logging.getLogger(__name__)
 
@@ -154,17 +156,33 @@ async def create_asset_from_bytes(
     if kind not in ALL_KINDS:
         raise ValueError(f"Unsupported creative asset kind: {kind}")
     clean_filename = f"{uuid.uuid4().hex}_{safe_asset_filename(filename)}"
-    folder = CREATIVE_ROOT / kind
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / clean_filename
-    path.write_bytes(data)
-    guessed_type, _ = mimetypes.guess_type(path.name)
+    guessed_type, _ = mimetypes.guess_type(clean_filename)
     media_type = content_type or guessed_type or "application/octet-stream"
+
+    # Containers are ephemeral: a worker-local /static file dies on the next
+    # redeploy and leaves a dead DB row behind, so durable storage (R2) is the
+    # primary target. Local disk is only a dev/self-hosted fallback.
+    storage_url: str | None = None
+    if r2_configured():
+        try:
+            stored = await asyncio.to_thread(
+                upload_bytes, f"creative_assets/{kind}/{clean_filename}", data, media_type
+            )
+            storage_url = stored.url
+        except Exception:
+            log.exception("R2 upload failed for creative asset %s; falling back to local storage", clean_filename)
+    if not storage_url:
+        folder = CREATIVE_ROOT / kind
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / clean_filename
+        path.write_bytes(data)
+        storage_url = public_static_url(path)
+
     classification = classify_asset(title or filename, kind=kind, prompt=classification_prompt)
     row = CreativeAsset(
         kind=kind,
         title=title.strip() or safe_asset_filename(filename),
-        storage_url=public_static_url(path),
+        storage_url=storage_url,
         source_url=source_url,
         content_type=media_type,
         tags=classification["tags"],

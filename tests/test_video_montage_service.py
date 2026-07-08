@@ -578,3 +578,68 @@ def test_parse_offset_clamps_range():
     assert parse_offset("12.34") == 12.3
     assert parse_offset("-80") == -40.0
     assert parse_offset("junk") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_generate_video_montage_without_source_fails_with_explicit_warning(tmp_path, monkeypatch):
+    # A worker used to claim montage jobs before the API attached the uploaded
+    # source, then "complete" with rendered=false and a null source_warning.
+    monkeypatch.setattr(video_montage, "job_dir", lambda _job_id: tmp_path)
+    monkeypatch.setattr(settings, "fal_key", "test-fal-key")
+
+    suite = Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="Test",
+        slug="test",
+        brand={"name": "Test"},
+    )
+
+    result = await video_montage.generate_video_montage_for_suite(
+        suite=suite,
+        job_id="job-empty-source",
+        input_data={"options": ["background", "captions"], "notes": ""},
+    )
+
+    assert result["rendered"] is False
+    assert result["output_url"] is None
+    assert result["source_warning"]
+    assert "No source video" in result["source_warning"]
+    render = result["video_montage"]["render"]
+    assert render["rendered"] is False
+    assert render["reason"] == result["source_warning"]
+
+
+@pytest.mark.asyncio
+async def test_download_failure_warning_survives_veed_staging_fallback(tmp_path, monkeypatch):
+    # The VEED staging block used to overwrite source_warning, erasing the
+    # real download failure from the final result.
+    monkeypatch.setattr(video_montage, "job_dir", lambda _job_id: tmp_path)
+    monkeypatch.setattr(settings, "fal_key", "test-fal-key")
+    monkeypatch.setattr(video_montage, "r2_configured", lambda: True)
+
+    async def fake_download_source(_url, _target):
+        return None, "Could not download the source video: ReadTimeout"
+
+    monkeypatch.setattr(video_montage, "download_source", fake_download_source)
+
+    suite = Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="Test",
+        slug="test",
+        brand={"name": "Test"},
+    )
+
+    result = await video_montage.generate_video_montage_for_suite(
+        suite=suite,
+        job_id="job-download-fail",
+        input_data={
+            "source_url": "https://pub.example.r2.dev/video_montage/job/upload.mp4",
+            "options": ["background"],
+        },
+    )
+
+    assert result["rendered"] is False
+    assert "Could not download the source video: ReadTimeout" in result["source_warning"]
+    assert "Could not stage a normalized source" in result["source_warning"]

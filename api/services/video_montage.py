@@ -1168,9 +1168,13 @@ async def build_remotion_scene_manifest(
     active_assets = await list_active_assets(db, kinds=AUDIO_KINDS | VISUAL_KINDS | VIDEO_TRANSITION_KINDS) if db else []
     if active_assets:
         available_assets = [asset for asset in active_assets if creative_asset_file_available(asset)]
-        skipped_count = len(active_assets) - len(available_assets)
-        if skipped_count:
-            log.warning("Skipped %s missing local creative assets while building Remotion manifest", skipped_count)
+        skipped_assets = [asset for asset in active_assets if asset not in available_assets]
+        if skipped_assets:
+            log.warning(
+                "Skipped %s missing local creative assets while building Remotion manifest: %s",
+                len(skipped_assets),
+                ", ".join(f"{asset.kind}:{asset.id}" for asset in skipped_assets[:50]),
+            )
         active_assets = available_assets
     selected_asset_ids: list[str] = []
     distinct_background_video_ids: set[str] = set()
@@ -1976,6 +1980,15 @@ async def generate_video_montage_for_suite(
     source_url = str(input_data.get("source_url") or "").strip()
     options = requested_options(input_data)
 
+    def chain_warning(reason: str) -> str:
+        """Log a fallback and append it to the running source warning.
+
+        Reassigning `source_warning` outright used to erase the original
+        failure (e.g. the download error) from the final result.
+        """
+        note_fallback(reason)
+        return f"{source_warning} {reason}".strip() if source_warning else reason
+
     if uploaded_path:
         candidate = Path(str(uploaded_path))
         if candidate.exists():
@@ -1989,6 +2002,10 @@ async def generate_video_montage_for_suite(
         )
         if source_warning:
             note_fallback(source_warning)
+    else:
+        # A montage job without any source must fail loudly, never complete
+        # silently: the warning below survives into the final result.
+        source_warning = note_fallback("No source video URL or uploaded file was provided to this job.")
 
     veed_source_url = None
     if "background" in options and settings.fal_key and (source_path or source_url):
@@ -2001,11 +2018,11 @@ async def generate_video_montage_for_suite(
             veed_source_url = source_url
             note_fallback("R2 staging is unavailable; sending the original URL to VEED/fal.")
         if not veed_source_url:
-            source_warning = note_fallback(
+            source_warning = chain_warning(
                 "Could not stage a normalized source for VEED/fal; falling back to local chromakey preview."
             )
     elif "background" in options and not settings.fal_key:
-        source_warning = note_fallback("FAL_KEY is missing; falling back to local FFmpeg chromakey preview.")
+        source_warning = chain_warning("FAL_KEY is missing; falling back to local FFmpeg chromakey preview.")
 
     if veed_source_url:
         emit("background_removal", "Removing video background with VEED/fal.", 35)
@@ -2048,11 +2065,11 @@ async def generate_video_montage_for_suite(
                     "rendered": True,
                     "source_warning": None,
                 }
-            source_warning = note_fallback(
+            source_warning = chain_warning(
                 f"Remotion render failed after VEED/fal background removal: {render_result.get('reason') or 'unknown error'}"
             )
         else:
-            source_warning = note_fallback(
+            source_warning = chain_warning(
                 f"VEED/fal background removal failed: {provider_result.get('error') or 'unknown error'}"
             )
 
@@ -2100,17 +2117,21 @@ async def generate_video_montage_for_suite(
                     "rendered": True,
                     "source_warning": None,
                 }
-            source_warning = note_fallback(
+            source_warning = chain_warning(
                 f"Remotion render failed after local chromakey: {render_result.get('reason') or 'unknown error'}"
             )
         else:
-            source_warning = note_fallback(
+            source_warning = chain_warning(
                 f"Local chromakey background removal failed: {provider_result.get('error') or 'unknown error'}"
             )
     elif source_path and "background" in options:
-        source_warning = note_fallback("FFmpeg chromakey filter is unavailable; falling back to local FFmpeg preview.")
+        source_warning = chain_warning("FFmpeg chromakey filter is unavailable; falling back to local FFmpeg preview.")
 
     emit("rendering", "Rendering V1 montage preview.", 60)
+    # Belt and braces: reaching this point without a source must always carry
+    # an explanation into the final result, never a silent null warning.
+    if not source_path and not source_warning:
+        source_warning = note_fallback("No usable source video was available for rendering.")
     output_path = output_dir / "render.mp4"
     render_result = (
         render_v1_video(

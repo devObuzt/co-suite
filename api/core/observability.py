@@ -11,6 +11,16 @@ from ..models.generation_job import GenerationJob, GenerationJobStatus
 from .config import settings
 
 
+# Attributes every LogRecord carries by default (plus formatter-injected ones).
+# Anything outside this set was attached via `extra=` and belongs in the JSON
+# payload — a fixed allowlist silently dropped structured fields like `reason`.
+_RESERVED_LOG_RECORD_KEYS = frozenset(
+    logging.LogRecord(
+        name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None
+    ).__dict__
+) | {"message", "asctime", "taskName"}
+
+
 class JsonLogFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -20,20 +30,10 @@ class JsonLogFormatter(logging.Formatter):
             "message": record.getMessage(),
             "environment": settings.environment,
         }
-        for key in (
-            "event",
-            "job_id",
-            "suite_id",
-            "usage_event_id",
-            "route",
-            "provider",
-            "model",
-            "attempt",
-            "status",
-            "safe_error_class",
-        ):
-            value = getattr(record, key, None)
-            if value is not None:
+        for key, value in record.__dict__.items():
+            if key in _RESERVED_LOG_RECORD_KEYS or key.startswith("_"):
+                continue
+            if value is not None and key not in payload:
                 payload[key] = value
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)

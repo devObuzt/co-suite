@@ -218,3 +218,29 @@ async def test_run_forever_spawns_concurrent_worker_loops(monkeypatch):
     # All loops ran; only the first is allowed to recover stale jobs.
     assert len(seen_recover) == 3
     assert seen_recover.count(True) == 1
+
+
+def test_montage_failure_reason_flags_unrendered_results():
+    failure = durable_generation_queue.montage_failure_reason
+
+    # Usable outputs never fail the job.
+    assert failure({"rendered": True, "output_url": "https://cdn/render.mp4"}) is None
+    assert failure({"rendered": False, "output_url": "https://cdn/render.mp4"}) is None
+
+    # No render and no output must fail with the most specific reason known.
+    assert (
+        failure({"rendered": False, "output_url": None, "source_warning": "No source video was provided."})
+        == "No source video was provided."
+    )
+    assert (
+        failure(
+            {
+                "rendered": False,
+                "output_url": None,
+                "source_warning": None,
+                "video_montage": {"render": {"reason": "FFmpeg exploded"}},
+            }
+        )
+        == "FFmpeg exploded"
+    )
+    assert failure({}) == "Video montage produced no output."

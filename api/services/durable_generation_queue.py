@@ -77,6 +77,25 @@ def retry_fields_for_error(job: GenerationJob, error: Exception) -> dict:
     }
 
 
+def montage_failure_reason(montage_result: dict) -> Optional[str]:
+    """Reason a montage result should fail the job, or None when it is usable.
+
+    A montage that rendered nothing and has no output URL must never be
+    marked completed: the UI would show a finished job with no video and the
+    real cause would be buried inside the result payload.
+    """
+    if montage_result.get("rendered") or montage_result.get("output_url"):
+        return None
+    package = montage_result.get("video_montage")
+    render = (package or {}).get("render") if isinstance(package, dict) else None
+    reason = (
+        montage_result.get("source_warning")
+        or (render or {}).get("reason")
+        or "Video montage produced no output."
+    )
+    return str(reason)
+
+
 def progress_writer(job_id: str) -> Callable[[dict], None]:
     def progress(event: dict) -> None:
         async def _write() -> None:
@@ -469,6 +488,9 @@ async def execute_claimed_job(
                     input_data=input_data,
                     progress=progress,
                 )
+                failure_reason = montage_failure_reason(montage_result)
+                if failure_reason:
+                    return await mark_failed(db, job.id, failure_reason, result=montage_result)
                 # Auto-file the finished render into the suite's media library.
                 # A filing failure must never fail the montage job itself.
                 try:

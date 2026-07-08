@@ -116,3 +116,40 @@ async def test_failed_job_alert_uses_telegram_when_enabled(monkeypatch):
     assert result is True
     assert len(messages) == 1
     assert "OneShare incident: failed_job" in messages[0]
+
+
+def test_json_log_formatter_includes_arbitrary_extra_fields(monkeypatch):
+    # The formatter used a fixed allowlist, silently dropping structured
+    # fields like the montage fallback `reason`.
+    monkeypatch.setattr(observability.settings, "environment", "test")
+    logger = logging.getLogger("api.tests.log_event")
+    records: list[logging.LogRecord] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = CaptureHandler()
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
+        observability.log_event(
+            logger,
+            logging.WARNING,
+            "Video montage pipeline fell back.",
+            event="video_montage_fallback",
+            job_id="job_9",
+            suite_id="suite_9",
+            reason="Could not download the source video: timeout",
+            skipped=None,
+        )
+    finally:
+        logger.removeHandler(handler)
+
+    assert len(records) == 1
+    payload = json.loads(JsonLogFormatter().format(records[0]))
+    assert payload["event"] == "video_montage_fallback"
+    assert payload["job_id"] == "job_9"
+    assert payload["reason"] == "Could not download the source video: timeout"
+    assert "skipped" not in payload
+    assert payload["message"] == "Video montage pipeline fell back."

@@ -187,7 +187,11 @@ async def create_job(
     job_type: GenerationJobType,
     user_id: Optional[str],
     input_data: dict,
+    job_id: Optional[str] = None,
 ) -> GenerationJob:
+    # Callers that must stage files under the job id (e.g. montage uploads to
+    # R2) pass a pre-generated id so the job only becomes claimable once its
+    # input is complete — the worker polls every couple of seconds.
     job = GenerationJob(
         suite_id=suite_id,
         created_by=user_id,
@@ -198,6 +202,8 @@ async def create_job(
         progress=0,
         input=input_data,
     )
+    if job_id:
+        job.id = job_id
     db.add(job)
     await db.commit()
     await db.refresh(job)
@@ -346,10 +352,13 @@ async def mark_completed(db: AsyncSession, job_id: str, result: dict) -> Optiona
     )
 
 
-async def mark_failed(db: AsyncSession, job_id: str, error: str) -> Optional[GenerationJob]:
-    updated = await update_job(
-        db,
-        job_id,
+async def mark_failed(
+    db: AsyncSession,
+    job_id: str,
+    error: str,
+    result: Optional[dict] = None,
+) -> Optional[GenerationJob]:
+    fields = dict(
         status=GenerationJobStatus.failed,
         stage="failed",
         message="Generation failed.",
@@ -357,6 +366,11 @@ async def mark_failed(db: AsyncSession, job_id: str, error: str) -> Optional[Gen
         error=error,
         finished_at=utcnow(),
     )
+    if result is not None:
+        # Keep the diagnostic payload (warnings, fallback reasons) with the
+        # failed job instead of throwing it away.
+        fields["result"] = result
+    updated = await update_job(db, job_id, **fields)
     log_event(
         log,
         logging.ERROR,
