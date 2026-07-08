@@ -422,6 +422,21 @@ def probe_video_dimensions(path: Path) -> tuple[int, int]:
         return 0, 0
 
 
+def drive_confirm_download_url(html: str) -> str | None:
+    """Build the confirmed download URL from Drive's virus-scan interstitial."""
+    action = re.search(r'action="(https://drive\.usercontent\.google\.com/download[^"]*)"', html)
+    if not action:
+        return None
+    base = action.group(1).replace("&amp;", "&")
+    params = re.findall(r'<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"', html)
+    if not params:
+        return base
+    from urllib.parse import urlencode
+
+    separator = "&" if "?" in base else "?"
+    return f"{base}{separator}{urlencode(dict(params))}"
+
+
 async def download_source(source_url: str, destination: Path) -> tuple[Path | None, str | None]:
     if not source_url:
         return None, "No source URL was provided."
@@ -431,22 +446,34 @@ async def download_source(source_url: str, destination: Path) -> tuple[Path | No
     total = 0
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                content_type = (response.headers.get("content-type") or "").lower()
-                if "text/html" in content_type and "drive.google.com" in url:
-                    return None, "Google Drive did not return the video file. Share a direct-download link or upload the file."
-                if "text/html" in content_type:
-                    return None, "The URL returned a web page instead of a video file."
+            for attempt in range(2):
+                total = 0
+                async with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    content_type = (response.headers.get("content-type") or "").lower()
+                    if "text/html" in content_type:
+                        is_drive = "drive.google.com" in url or "drive.usercontent.google.com" in url
+                        if is_drive and attempt == 0:
+                            # Large Drive files return a virus-scan interstitial
+                            # page; extract its confirm form and retry once.
+                            html = (await response.aread()).decode("utf-8", errors="ignore")
+                            confirm_url = drive_confirm_download_url(html)
+                            if confirm_url:
+                                url = confirm_url
+                                continue
+                        if is_drive:
+                            return None, "Google Drive did not return the video file. Share a direct-download link or upload the file."
+                        return None, "The URL returned a web page instead of a video file."
 
-                with destination.open("wb") as handle:
-                    async for chunk in response.aiter_bytes():
-                        total += len(chunk)
-                        if total > MAX_REMOTE_BYTES:
-                            handle.close()
-                            destination.unlink(missing_ok=True)
-                            return None, "The remote video is larger than the 500 MB V1 limit."
-                        handle.write(chunk)
+                    with destination.open("wb") as handle:
+                        async for chunk in response.aiter_bytes():
+                            total += len(chunk)
+                            if total > MAX_REMOTE_BYTES:
+                                handle.close()
+                                destination.unlink(missing_ok=True)
+                                return None, "The remote video is larger than the 500 MB V1 limit."
+                            handle.write(chunk)
+                    break
     except Exception as exc:
         destination.unlink(missing_ok=True)
         return None, f"Could not download the source video: {exc}"

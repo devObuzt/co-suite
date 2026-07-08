@@ -643,3 +643,17 @@ async def test_download_failure_warning_survives_veed_staging_fallback(tmp_path,
     assert result["rendered"] is False
     assert "Could not download the source video: ReadTimeout" in result["source_warning"]
     assert "Could not stage a normalized source" in result["source_warning"]
+
+
+def test_drive_confirm_download_url_parses_interstitial():
+    html = (
+        '<form id="download-form" action="https://drive.usercontent.google.com/download?id=abc&amp;export=download" method="get">'
+        '<input type="hidden" name="confirm" value="t">'
+        '<input type="hidden" name="uuid" value="u-123">'
+        "</form>"
+    )
+    url = video_montage.drive_confirm_download_url(html)
+    assert url is not None
+    assert url.startswith("https://drive.usercontent.google.com/download?id=abc&export=download&")
+    assert "confirm=t" in url and "uuid=u-123" in url
+    assert video_montage.drive_confirm_download_url("<html>nope</html>") is None
