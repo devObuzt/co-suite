@@ -37,6 +37,7 @@ from .product_bulk_generator import (
     generate_first_product_templates,
     regenerate_product_asset,
 )
+from .media_library import montage_media_asset
 from .video_montage import generate_video_montage_for_suite
 from ..models.suite import Suite
 
@@ -468,6 +469,16 @@ async def execute_claimed_job(
                     input_data=input_data,
                     progress=progress,
                 )
+                # Auto-file the finished render into the suite's media library.
+                # A filing failure must never fail the montage job itself.
+                try:
+                    media_asset = montage_media_asset(suite, job.id, montage_result)
+                    if media_asset:
+                        db.add(media_asset)
+                        await db.flush()
+                except Exception:
+                    log.exception("Could not file montage output for job %s into the media library", job.id)
+                    await db.rollback()
                 return await mark_completed(db, job.id, montage_result)
 
             return await mark_failed(db, job.id, f"Unsupported generation job type: {job.type}")
