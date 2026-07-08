@@ -1619,7 +1619,25 @@ async def _serpapi_competitors(suite: Suite, language: str, existing_urls: list[
         if not items and label not in ("web search", "known competitors"):
             warnings.append(f"SerpAPI returned no usable {label} results.")
     competitors = await _classify_competitor_candidates(suite, language, competitors)
-    return competitors, warnings
+    return competitors, _combine_serpapi_warnings(warnings)
+
+
+def _combine_serpapi_warnings(warnings: list[str]) -> list[str]:
+    """Merge identical SerpAPI failures across sources into a single line."""
+    grouped: dict[tuple[str, str], list[str]] = {}
+    passthrough: list[str] = []
+    for warning in warnings:
+        match = re.match(r"^SerpAPI (.+?) failed(?: \((\d+)\))?: (.*)$", warning)
+        if not match:
+            passthrough.append(warning)
+            continue
+        label, code, detail = match.groups()
+        grouped.setdefault((code or "", detail.strip()), []).append(label)
+    combined: list[str] = []
+    for (code, detail), source_labels in grouped.items():
+        prefix = f"SerpAPI ({', '.join(source_labels)})" if len(source_labels) > 1 else f"SerpAPI {source_labels[0]}"
+        combined.append(f"{prefix} failed{f' ({code})' if code else ''}: {detail}")
+    return passthrough + combined
 
 
 def _save_competitor_scratch(suite: Suite, language: str | None = None) -> dict[str, Any]:
