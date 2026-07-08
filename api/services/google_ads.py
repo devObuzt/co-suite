@@ -44,6 +44,10 @@ GEO_TARGET_CONSTANTS = {
     "saudi": "geoTargetConstants/2682",
     "uae": "geoTargetConstants/2784",
     "united arab emirates": "geoTargetConstants/2784",
+    "united kingdom": "geoTargetConstants/2826",
+    "uk": "geoTargetConstants/2826",
+    "gb": "geoTargetConstants/2826",
+    "britain": "geoTargetConstants/2826",
 }
 
 

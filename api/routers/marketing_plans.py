@@ -600,6 +600,21 @@ def _is_israel_market(suite: Suite) -> bool:
     return bool(_serpapi_country_code(location) == "il" or any(term in location.casefold() for term in ("israel", "إسرائيل", "اسرائيل", "ישראל")))
 
 
+def _is_global_market(suite: Suite) -> bool:
+    """No target country selected, or the audience scope is explicitly worldwide."""
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    audience_location = brand.get("audience_location") if isinstance(brand.get("audience_location"), dict) else {}
+    scope = str(audience_location.get("scope") or "").strip().casefold()
+    if scope in {"world", "worldwide", "global"}:
+        return True
+    return not _suite_location(suite).strip()
+
+
+# Economically leading markets checked for worldwide suites (name passed to
+# the Keyword Planner geo lookup).
+GLOBAL_PLANNER_MARKETS = ("United States", "United Kingdom", "United Arab Emirates")
+
+
 def _needs_hebrew_market_terms(suite: Suite, language: str) -> bool:
     if not str(language or "").startswith("ar"):
         return False
@@ -623,6 +638,40 @@ def _hebrew_market_terms(values: list[str], limit: int = 10) -> list[str]:
         if _contains_hebrew(text):
             terms.append(text)
     return _unique_strings(terms, limit)
+
+
+def _is_latin_term(text: str) -> bool:
+    return bool(text) and not _contains_hebrew(text) and not any("؀" <= char <= "ۿ" for char in text)
+
+
+async def _english_planner_terms(keywords: list[str], limit: int = 10) -> list[str]:
+    """English Keyword Planner seeds for worldwide suites: AI translation of the
+    plan keywords, falling back to whichever terms are already Latin-script."""
+    fallback = _unique_strings([keyword for keyword in keywords if _is_latin_term(keyword)], limit)
+    source = [keyword for keyword in _unique_strings(keywords, limit) if not _is_latin_term(keyword)]
+    if not source:
+        return fallback
+    try:
+        prompt = {
+            "keywords": source,
+            "instructions": "Translate every keyword into the English search term people would actually type into Google for the same intent (1-3 words each). Return JSON only: {\"keywords\":[\"...\"]}.",
+        }
+        raw = await call_text_ai(
+            max_tokens=800,
+            messages=[{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+            system="You translate marketing search keywords into natural English search terms. Return strict JSON only.",
+            timeout=40,
+        )
+        parsed = json.loads(raw)
+        incoming = parsed.get("keywords") if isinstance(parsed, dict) else []
+        translated = [
+            _clean_search_fragment(item)
+            for item in incoming or []
+            if isinstance(item, str) and _is_latin_term(item)
+        ]
+        return _unique_strings([*translated, *fallback], limit)
+    except Exception:
+        return fallback
 
 
 async def _hebrew_planner_terms(keywords: list[str], limit: int = 10) -> list[str]:
@@ -1871,6 +1920,34 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
             "request": {"attempts": 0},
             "warning": None if previous_metrics else "No keywords or services are available yet to check in Keyword Planner.",
         }
+    elif _is_global_market(suite):
+        # Worldwide suite: translate the seeds to English and check demand in
+        # several economically leading markets, then merge the results.
+        english_terms = await _english_planner_terms(planner_keywords, 10)
+        seed_terms = english_terms or planner_keywords
+        website = _suite_website_url(suite)
+        raw_results = await asyncio.gather(
+            *[
+                fetch_keyword_planner_ideas(customer_id, refresh_token, seed_terms, "en", market, website)
+                for market in GLOBAL_PLANNER_MARKETS
+            ],
+            return_exceptions=True,
+        )
+        planner_results = [result for result in raw_results if isinstance(result, dict)]
+        if not planner_results:
+            first_error = next((result for result in raw_results if isinstance(result, Exception)), None)
+            planner_results = [{
+                "keyword_metrics": [],
+                "suggested_keywords": [],
+                "summary": build_keyword_planner_summary([]),
+                "request": {},
+                "warning": str(first_error) if first_error else "Keyword Planner returned no results for the global markets.",
+            }]
+        if previous_metrics or previous_suggestions:
+            planner_results.insert(0, {"keyword_metrics": previous_metrics, "suggested_keywords": previous_suggestions, "request": {}})
+        planner = _merge_keyword_planner_results(planner_results)
+        planner.setdefault("request", {})["global_markets"] = list(GLOBAL_PLANNER_MARKETS)
+        planner["request"]["english_seeds"] = seed_terms
     else:
         needs_hebrew = _needs_hebrew_market_terms(suite, output_language)
         primary_keywords = [keyword for keyword in planner_keywords if not _contains_hebrew(keyword)] or planner_keywords

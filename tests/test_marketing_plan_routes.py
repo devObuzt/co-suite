@@ -440,7 +440,7 @@ async def test_demand_supply_uses_platform_google_ads_credentials(monkeypatch):
         owner_id="user-1",
         name="Smart Line Academy",
         slug="smart-line",
-        brand={"name": "Smart Line Academy", "industry": "تعليم تداول", "services": ["دورات تداول"]},
+        brand={"name": "Smart Line Academy", "industry": "تعليم تداول", "services": ["دورات تداول"], "location": "الأردن"},
         connections={},
         strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "دورات تداول"}]}},
     )
@@ -483,7 +483,7 @@ async def test_demand_supply_uses_login_customer_id_as_customer_fallback(monkeyp
         owner_id="user-1",
         name="Smart Line Academy",
         slug="smart-line",
-        brand={"name": "Smart Line Academy", "industry": "تعليم تداول", "services": ["دورات تداول"]},
+        brand={"name": "Smart Line Academy", "industry": "تعليم تداول", "services": ["دورات تداول"], "location": "الأردن"},
         connections={},
         strategy={"marketing_intelligence": {"keywords": [{"id": "kw-1", "text": "دورات تداول"}]}},
     )
