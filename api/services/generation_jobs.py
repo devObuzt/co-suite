@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.observability import log_event, notify_generation_job_alert
@@ -261,9 +261,30 @@ async def mark_progress(db: AsyncSession, job_id: str, event: dict) -> Optional[
             fields["status"] = GenerationJobStatus(fields["status"])
         except ValueError:
             fields.pop("status", None)
-    for key, value in fields.items():
-        if hasattr(job, key):
-            setattr(job, key, value)
+    # Progress writes are fire-and-forget tasks: an empty partial result must
+    # never clobber a final result payload.
+    if not fields.get("result"):
+        fields.pop("result", None)
+    fields = {key: value for key, value in fields.items() if hasattr(GenerationJob, key)}
+    if not fields:
+        return job
+    # Guard again at write time: the job may have been finalized between our
+    # read above and this update, and a late progress write must lose.
+    await db.execute(
+        sa_update(GenerationJob)
+        .where(
+            GenerationJob.id == job_id,
+            GenerationJob.status.not_in(
+                [
+                    GenerationJobStatus.completed,
+                    GenerationJobStatus.failed,
+                    GenerationJobStatus.cancelled,
+                    GenerationJobStatus.timeout,
+                ]
+            ),
+        )
+        .values(**fields)
+    )
     await db.commit()
     await db.refresh(job)
     return job
