@@ -144,8 +144,81 @@ def user_uploaded_suite_assets(assets: list[CreativeAsset], suite_id: str | None
 
 # A fresh same-suite user upload scores at least kind(+4) + suite(+6) + user(+8);
 # anything above this floor still counts as a usable match even after usage and
-# recency penalties, so generation only has to fill true gaps.
+# recency penalties. The floor alone is NOT enough to "win" a scene in blend
+# mode: user_background_matches_scene additionally requires a real tag match
+# with the scene text, so the flat bonuses can never clear the gate by
+# themselves.
 MINIMAL_USER_BACKGROUND_SCORE = 12
+
+# Analysis wording that marks a user upload as unusable behind a speaker:
+# screen recordings, app UI, and text-heavy frames read as glitches when
+# composited under captions and a talking head.
+UNUSABLE_BACKGROUND_HINTS = (
+    "screenshot",
+    "screen shot",
+    "screen recording",
+    "screen-recording",
+    "screen capture",
+    "screencast",
+    "user interface",
+    "app interface",
+    "software interface",
+    "app screen",
+    "computer screen",
+    "phone screen",
+    "mobile screen",
+    "web page",
+    "webpage",
+    "website",
+    "browser window",
+    "dashboard",
+)
+
+
+def is_asset_unusable_for_background(asset: CreativeAsset) -> bool:
+    """True when a user upload must never be used as a scene background.
+
+    Covers uploads whose vision analysis found burned-in text
+    (``analysis.has_text``) or whose description/tags read as a screen
+    recording / UI capture.
+    """
+    meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
+    if bool(analysis.get("has_text")):
+        return True
+    analysis_tags = analysis.get("tags") if isinstance(analysis.get("tags"), list) else []
+    haystack = " ".join(
+        [str(analysis.get("description") or "")]
+        + [str(tag) for tag in analysis_tags]
+        + [str(tag) for tag in (asset.tags or [])]
+    ).lower()
+    return any(hint in haystack for hint in UNUSABLE_BACKGROUND_HINTS)
+
+
+def _scene_tag_match_count(asset: CreativeAsset, scene_text: str) -> int:
+    """How many of the asset's tags literally appear in the scene text."""
+    scene = scene_text.lower()
+    return sum(1 for tag in asset.tags or [] if str(tag).strip() and str(tag).lower() in scene)
+
+
+def user_background_matches_scene(
+    asset: CreativeAsset,
+    scene_text: str,
+    suite_id: str | None,
+    *,
+    min_score: int = MINIMAL_USER_BACKGROUND_SCORE,
+) -> bool:
+    """Blend-mode quality gate: does this user upload really fit the scene?
+
+    Requires at least one tag/analysis match with the scene text on top of
+    the score floor, so the flat kind+suite+user bonuses alone never let a
+    random upload win a scene. Screen-recording/has_text uploads never match.
+    """
+    if is_asset_unusable_for_background(asset):
+        return False
+    if _scene_tag_match_count(asset, scene_text) == 0:
+        return False
+    return _score_asset(asset, scene_text, asset.kind, suite_id) >= min_score
 
 
 def has_user_background_match(
@@ -157,7 +230,7 @@ def has_user_background_match(
 ) -> bool:
     """True when a user-uploaded suite background matches this scene well enough."""
     for asset in user_uploaded_suite_assets(assets, suite_id):
-        if _score_asset(asset, scene_text, asset.kind, suite_id) >= min_score:
+        if user_background_matches_scene(asset, scene_text, suite_id, min_score=min_score):
             return True
     return False
 
@@ -170,17 +243,45 @@ def filter_assets_for_backgrounds_mode(
 ) -> tuple[list[CreativeAsset], bool]:
     """Apply the job's backgrounds_mode to the candidate asset pool.
 
-    Returns ``(assets, allow_generated_backgrounds)``. In ``user_only`` mode
-    (and only when the suite actually has user uploads) visual candidates are
-    restricted to the user's own backgrounds and AI background generation is
-    disabled; audio/transition assets always pass through untouched.
+    Returns ``(assets, allow_generated_backgrounds)``. In every mode:
+
+    - user uploads belonging to a DIFFERENT suite are hard-excluded — another
+      client's media must never even be scoreable for this suite's videos;
+    - user uploads flagged as screen recordings / UI / burned-in text are
+      quality-excluded from the visual pool (logged).
+
+    In ``user_only`` mode (and only when the suite actually has usable user
+    uploads) visual candidates are additionally restricted to the user's own
+    backgrounds and AI background generation is disabled; audio/transition
+    assets always pass through untouched.
     """
-    user_assets = user_uploaded_suite_assets(assets, suite_id)
+    kept: list[CreativeAsset] = []
+    for asset in assets:
+        if asset.kind not in VISUAL_KINDS or not is_user_uploaded_asset(asset):
+            kept.append(asset)
+            continue
+        if not suite_id or _asset_suite_id(asset) != str(suite_id):
+            log.warning(
+                "Excluding foreign-suite user background %s (asset suite %s, montage suite %s) from candidate pool",
+                asset.id,
+                _asset_suite_id(asset),
+                suite_id,
+            )
+            continue
+        if is_asset_unusable_for_background(asset):
+            log.warning(
+                "Skipping user background %s for suite %s: analysis flags it as screen recording/UI/text-heavy, unusable behind a speaker",
+                asset.id,
+                suite_id,
+            )
+            continue
+        kept.append(asset)
+    user_assets = user_uploaded_suite_assets(kept, suite_id)
     if mode == "user_only" and user_assets:
         user_ids = {asset.id for asset in user_assets}
-        filtered = [asset for asset in assets if asset.kind not in VISUAL_KINDS or asset.id in user_ids]
+        filtered = [asset for asset in kept if asset.kind not in VISUAL_KINDS or asset.id in user_ids]
         return filtered, False
-    return assets, True
+    return kept, True
 
 
 def _score_asset(asset: CreativeAsset, scene_text: str, wanted_kind: str, suite_id: str | None = None) -> int:
@@ -223,16 +324,41 @@ def pick_asset(
     scene_text: str = "",
     suite_id: str | None = None,
     variety_seed: int = 0,
+    user_match_required: bool = False,
 ) -> CreativeAsset | None:
     candidates = [asset for asset in assets if asset.kind == kind]
+    if kind in VISUAL_KINDS and user_match_required:
+        # Blend mode: a user upload only wins a scene when it genuinely
+        # matches the scene text — otherwise generated/library media compete
+        # for the slot instead.
+        gated: list[CreativeAsset] = []
+        for asset in candidates:
+            if is_user_uploaded_asset(asset) and not user_background_matches_scene(asset, scene_text, suite_id):
+                log.info(
+                    "User background %s does not match scene text well enough; leaving the scene to generated/library media",
+                    asset.id,
+                )
+                continue
+            gated.append(asset)
+        candidates = gated
     if not candidates:
         return None
-    ranked = sorted(candidates, key=lambda item: _score_asset(item, scene_text, kind, suite_id), reverse=True)
-    if kind in VISUAL_KINDS and len(ranked) > 1:
-        # Rotate between the top candidates so consecutive renders vary.
-        pool = ranked[: min(3, len(ranked))]
+    scored = sorted(
+        ((asset, _score_asset(asset, scene_text, kind, suite_id)) for asset in candidates),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if kind in VISUAL_KINDS:
+        # Rotate between the top candidates so consecutive renders vary. The
+        # rotation pool never contains negative-relevance assets (e.g. another
+        # suite's generated backgrounds), so variety can't reintroduce what
+        # scoring pushed out.
+        usable = [asset for asset, score in scored if score >= 0]
+        if not usable:
+            return None
+        pool = usable[: min(3, len(usable))]
         return pool[variety_seed % len(pool)]
-    return ranked[0]
+    return scored[0][0]
 
 
 async def record_asset_usage(db: AsyncSession, asset_ids: list[str]) -> None:

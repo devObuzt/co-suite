@@ -6,7 +6,9 @@ from api.services import user_backgrounds
 from api.services.creative_assets import (
     filter_assets_for_backgrounds_mode,
     has_user_background_match,
+    is_asset_unusable_for_background,
     pick_asset,
+    user_background_matches_scene,
 )
 from api.services.user_backgrounds import (
     BACKGROUND_TAG_VOCAB,
@@ -26,12 +28,15 @@ def make_asset(
     suite_id: str | None = None,
     user_uploaded: bool = False,
     asset_id: str = "asset-1",
+    analysis: dict | None = None,
 ) -> CreativeAsset:
     metadata: dict = {}
     if suite_id:
         metadata["suite_id"] = suite_id
     if user_uploaded:
         metadata["user_uploaded"] = True
+    if analysis is not None:
+        metadata["analysis"] = analysis
     return CreativeAsset(
         id=asset_id,
         kind=kind,
@@ -262,3 +267,167 @@ def test_has_user_background_match_gates_hero_generation():
     # Foreign-suite uploads never count for this suite.
     foreign = make_asset(asset_id="foreign", suite_id="other", user_uploaded=True)
     assert not has_user_background_match([foreign], scene_text="أي مشهد", suite_id=suite_id)
+
+
+# --- FIX A: cross-suite hard exclusion + no negative scores in rotation --------
+
+
+def test_filter_hard_excludes_foreign_suite_user_uploads_in_every_mode():
+    suite_id = "suite-1"
+    foreign_user = make_asset(asset_id="foreign", suite_id="other-suite", user_uploaded=True)
+    own_user = make_asset(asset_id="own", suite_id=suite_id, user_uploaded=True)
+    library = make_asset(asset_id="library", tags=["business"])
+    music = make_asset(asset_id="music", kind="music")
+
+    for mode in ("blend", "user_only"):
+        filtered, _ = filter_assets_for_backgrounds_mode(
+            [foreign_user, own_user, library, music], mode=mode, suite_id=suite_id
+        )
+        ids = {asset.id for asset in filtered}
+        assert "foreign" not in ids, f"foreign upload leaked through mode={mode}"
+        assert "own" in ids
+        assert "music" in ids
+
+
+def test_filter_excludes_unattributed_user_uploads():
+    # A user upload without suite metadata can't be proven to belong here.
+    orphan_user = make_asset(asset_id="orphan", user_uploaded=True)
+    filtered, _ = filter_assets_for_backgrounds_mode([orphan_user], mode="blend", suite_id="suite-1")
+    assert filtered == []
+
+
+def test_pick_asset_never_returns_negative_score_visuals():
+    # A foreign suite's generated background scores deeply negative (-20);
+    # it must never surface — not even via the variety rotation pool.
+    foreign_generated = make_asset(asset_id="foreign-gen", kind="visual_video", suite_id="other-suite")
+    library = make_asset(asset_id="library", kind="visual_video")
+
+    for seed in range(6):
+        picked = pick_asset(
+            [foreign_generated, library],
+            kind="visual_video",
+            scene_text="any scene",
+            suite_id="suite-1",
+            variety_seed=seed,
+        )
+        assert picked is not None and picked.id == "library"
+
+    # When every candidate is negative there is no usable pick at all.
+    assert (
+        pick_asset([foreign_generated], kind="visual_video", scene_text="any", suite_id="suite-1", variety_seed=0)
+        is None
+    )
+
+
+# --- FIX C: blend-mode quality gate + screen-recording exclusion ---------------
+
+
+def test_is_asset_unusable_for_background_flags_text_and_screen_recordings():
+    has_text = make_asset(
+        asset_id="text",
+        suite_id="suite-1",
+        user_uploaded=True,
+        analysis={"description": "A poster", "tags": [], "has_text": True},
+    )
+    screen = make_asset(
+        asset_id="screen",
+        suite_id="suite-1",
+        user_uploaded=True,
+        analysis={"description": "Screen recording of an app dashboard", "tags": [], "has_text": False},
+    )
+    clean = make_asset(
+        asset_id="clean",
+        suite_id="suite-1",
+        user_uploaded=True,
+        tags=["mountain", "جبل"],
+        analysis={"description": "A mountain landscape at sunset", "tags": ["mountain"], "has_text": False},
+    )
+    assert is_asset_unusable_for_background(has_text)
+    assert is_asset_unusable_for_background(screen)
+    assert not is_asset_unusable_for_background(clean)
+
+
+def test_filter_quality_excludes_screen_recording_uploads_even_in_user_only():
+    suite_id = "suite-1"
+    screen = make_asset(
+        asset_id="screen",
+        suite_id=suite_id,
+        user_uploaded=True,
+        analysis={"description": "screenshot of a website", "tags": [], "has_text": False},
+    )
+    clean = make_asset(asset_id="clean", suite_id=suite_id, user_uploaded=True, tags=["nature"])
+
+    filtered, allow_generation = filter_assets_for_backgrounds_mode(
+        [screen, clean], mode="user_only", suite_id=suite_id
+    )
+    assert allow_generation is False
+    assert {asset.id for asset in filtered} == {"clean"}
+
+    # When ALL uploads are unusable, user_only falls back to generation.
+    filtered, allow_generation = filter_assets_for_backgrounds_mode([screen], mode="user_only", suite_id=suite_id)
+    assert allow_generation is True
+    assert filtered == []
+
+
+def test_user_background_matches_scene_requires_real_tag_match():
+    suite_id = "suite-1"
+    # Fresh upload: flat kind+suite+user bonuses clear the score floor,
+    # but with no tag match it still must NOT win a scene.
+    unrelated = make_asset(asset_id="unrelated", suite_id=suite_id, user_uploaded=True, tags=["mountain", "جبل"])
+    assert not user_background_matches_scene(unrelated, "أفضل قهوة بالبلد", suite_id)
+    assert user_background_matches_scene(unrelated, "رحلة إلى الجبل الأخضر", suite_id)
+    # has_text/screen uploads never match, regardless of tags.
+    texty = make_asset(
+        asset_id="texty",
+        suite_id=suite_id,
+        user_uploaded=True,
+        tags=["mountain", "جبل"],
+        analysis={"description": "mountain", "tags": ["mountain"], "has_text": True},
+    )
+    assert not user_background_matches_scene(texty, "رحلة إلى الجبل", suite_id)
+
+
+def test_has_user_background_match_ignores_bonus_only_uploads():
+    suite_id = "suite-1"
+    unrelated = make_asset(asset_id="unrelated", suite_id=suite_id, user_uploaded=True, tags=["mountain"])
+    # Bonuses alone (18+) used to clear the floor and block hero generation.
+    assert not has_user_background_match([unrelated], scene_text="أفضل قهوة بالبلد", suite_id=suite_id)
+
+
+def test_pick_asset_blend_gate_demotes_unmatched_user_uploads():
+    suite_id = "suite-1"
+    user = make_asset(asset_id="user", suite_id=suite_id, user_uploaded=True, tags=["mountain", "جبل"])
+    generated = make_asset(asset_id="generated", suite_id=suite_id)
+
+    # Blend: unmatched user upload loses the scene to suite-generated media.
+    picked = pick_asset(
+        [user, generated],
+        kind="visual_image",
+        scene_text="عرض خاص على القهوة",
+        suite_id=suite_id,
+        variety_seed=0,
+        user_match_required=True,
+    )
+    assert picked is not None and picked.id == "generated"
+
+    # Blend: a real match restores the user upload's priority.
+    picked = pick_asset(
+        [user, generated],
+        kind="visual_image",
+        scene_text="رحلة إلى الجبل",
+        suite_id=suite_id,
+        variety_seed=0,
+        user_match_required=True,
+    )
+    assert picked is not None and picked.id == "user"
+
+    # user_only keeps absolute priority: no scene-match gate.
+    picked = pick_asset(
+        [user, generated],
+        kind="visual_image",
+        scene_text="عرض خاص على القهوة",
+        suite_id=suite_id,
+        variety_seed=0,
+        user_match_required=False,
+    )
+    assert picked is not None and picked.id == "user"

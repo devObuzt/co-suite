@@ -929,3 +929,61 @@ def test_green_border_fraction_detects_green_screen(tmp_path):
 
     assert video_montage.green_border_fraction(green) > 0.9
     assert video_montage.green_border_fraction(blue) < 0.05
+
+
+# --- background video cap: rotate locked videos instead of going static --------
+
+
+def _bg_asset(asset_id: str):
+    from api.models.admin import CreativeAsset
+
+    return CreativeAsset(
+        id=asset_id,
+        kind="visual_video",
+        title=asset_id,
+        storage_url=f"https://cdn.example/{asset_id}.mp4",
+        tags=[],
+        use_cases=[],
+        usage_count=0,
+        active=True,
+        metadata_json={},
+    )
+
+
+def test_resolve_scene_background_video_locks_then_rotates():
+    video_a, video_b, video_c = _bg_asset("A"), _bg_asset("B"), _bg_asset("C")
+    locked: list = []
+
+    # Scenes 0/1 lock two distinct videos.
+    assert video_montage.resolve_scene_background_video(video_a, scene_index=0, locked_videos=locked).id == "A"
+    assert video_montage.resolve_scene_background_video(video_b, scene_index=1, locked_videos=locked).id == "B"
+    assert [asset.id for asset in locked] == ["A", "B"]
+
+    # Cap reached: later scenes rotate A/B — never static, never a third decoder.
+    resolved = [
+        video_montage.resolve_scene_background_video(video_c, scene_index=index, locked_videos=locked).id
+        for index in range(2, 8)
+    ]
+    assert resolved == ["A", "B", "A", "B", "A", "B"]
+    assert [asset.id for asset in locked] == ["A", "B"]
+
+
+def test_resolve_scene_background_video_reuses_locked_when_pick_is_empty():
+    video_a = _bg_asset("A")
+    locked: list = []
+    assert video_montage.resolve_scene_background_video(video_a, scene_index=0, locked_videos=locked).id == "A"
+    # No new pick for scene 1, but a usable locked video exists: reuse it.
+    assert video_montage.resolve_scene_background_video(None, scene_index=1, locked_videos=locked).id == "A"
+
+
+def test_resolve_scene_background_video_allows_static_only_without_videos():
+    assert video_montage.resolve_scene_background_video(None, scene_index=0, locked_videos=[]) is None
+
+
+def test_resolve_scene_background_video_keeps_already_locked_pick_below_cap():
+    video_a = _bg_asset("A")
+    locked: list = []
+    assert video_montage.resolve_scene_background_video(video_a, scene_index=0, locked_videos=locked).id == "A"
+    # The same video picked again below the cap stays itself and isn't re-locked.
+    assert video_montage.resolve_scene_background_video(video_a, scene_index=1, locked_videos=locked).id == "A"
+    assert [asset.id for asset in locked] == ["A"]

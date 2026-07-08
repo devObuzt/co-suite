@@ -25,6 +25,7 @@ from PIL import Image, ImageDraw, ImageFont
 from ..core.config import settings
 from ..core.external_calls import external_call
 from ..core.observability import log_event
+from ..models.admin import CreativeAsset
 from ..models.suite import Suite
 from .media_storage import r2_configured, upload_bytes
 from .montage_notes_analyzer import analyze_and_apply_montage_notes
@@ -636,6 +637,34 @@ def resolve_backgrounds_mode(input_data: dict[str, Any]) -> str:
     """Job option: blend user uploads with generated backgrounds (default) or user-only."""
     mode = str(input_data.get("backgrounds_mode") or "").strip().lower()
     return mode if mode in BACKGROUNDS_MODES else "blend"
+
+
+def resolve_scene_background_video(
+    picked: CreativeAsset | None,
+    *,
+    scene_index: int,
+    locked_videos: list[CreativeAsset],
+    max_distinct: int = MAX_DISTINCT_BACKGROUND_VIDEOS,
+) -> CreativeAsset | None:
+    """Cap distinct background videos per render without going static.
+
+    Every distinct background video adds an OffthreadVideo decoder to the
+    compositor; renders were OOM-killed at the 8GB container limit. Once
+    ``max_distinct`` videos are locked for this render, later scenes ROTATE
+    among the locked ones instead of being demoted to a static image — a
+    scene only goes static when there are genuinely no usable videos at all.
+
+    Mutates ``locked_videos``: a newly picked video below the cap is appended.
+    """
+    if len(locked_videos) >= max_distinct:
+        return locked_videos[scene_index % len(locked_videos)]
+    if picked is None:
+        if locked_videos:
+            return locked_videos[scene_index % len(locked_videos)]
+        return None
+    if all(asset.id != picked.id for asset in locked_videos):
+        locked_videos.append(picked)
+    return picked
 
 
 def requested_options(input_data: dict[str, Any]) -> set[str]:
@@ -1409,7 +1438,7 @@ async def build_remotion_scene_manifest(
             user_asset_count=len([asset for asset in active_assets if asset.kind in VISUAL_KINDS]),
         )
     selected_asset_ids: list[str] = []
-    distinct_background_video_ids: set[str] = set()
+    locked_background_videos: list[CreativeAsset] = []
     scenes: list[dict[str, Any]] = []
     # Never drop the tail of long videos: segments beyond the scene cap are
     # merged into the last scene instead of being cut from the montage.
@@ -1458,7 +1487,12 @@ async def build_remotion_scene_manifest(
                 visual_video_asset = None
         if subject_has_alpha and not visual_video_asset:
             visual_video_asset = pick_asset(
-                active_assets, kind="visual_video", scene_text=caption, suite_id=suite.id, variety_seed=variety_seed
+                active_assets,
+                kind="visual_video",
+                scene_text=caption,
+                suite_id=suite.id,
+                variety_seed=variety_seed,
+                user_match_required=allow_generated_backgrounds,
             )
         if subject_has_alpha and not visual_video_asset and db and index < 2 and allow_generated_backgrounds:
             try:
@@ -1467,20 +1501,21 @@ async def build_remotion_scene_manifest(
                     active_assets.append(visual_video_asset)
             except Exception:
                 visual_video_asset = None
-        # Every distinct background video adds an OffthreadVideo decoder to the
-        # compositor; renders were OOM-killed at the 8GB container limit.
-        if (
-            visual_video_asset
-            and visual_video_asset.id not in distinct_background_video_ids
-            and len(distinct_background_video_ids) >= MAX_DISTINCT_BACKGROUND_VIDEOS
-        ):
-            visual_video_asset = None
-        if visual_video_asset:
-            distinct_background_video_ids.add(visual_video_asset.id)
+        # Cap distinct background-video decoders; past the cap, scenes rotate
+        # among the locked videos instead of dropping to a static image.
+        if subject_has_alpha:
+            visual_video_asset = resolve_scene_background_video(
+                visual_video_asset, scene_index=index, locked_videos=locked_background_videos
+            )
         visual_asset = None
         if subject_has_alpha:
             visual_asset = pick_asset(
-                active_assets, kind="visual_image", scene_text=caption, suite_id=suite.id, variety_seed=variety_seed
+                active_assets,
+                kind="visual_image",
+                scene_text=caption,
+                suite_id=suite.id,
+                variety_seed=variety_seed,
+                user_match_required=allow_generated_backgrounds,
             )
             if not visual_asset and db and index < 4 and allow_generated_backgrounds:
                 try:
