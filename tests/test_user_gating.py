@@ -24,3 +24,38 @@ def test_serialize_user_public_defaults_missing_status_to_frozen():
     user = User(id="u1", email="a@b.com", full_name="A", hashed_password="h")
     payload = admin_audit.serialize_user_public(user)
     assert payload["approval_status"] == "frozen"
+
+
+from api.core.security import frozen_path_allowed
+
+
+def test_approved_user_passes_everywhere():
+    assert frozen_path_allowed("approved", "POST", "/api/v1/suites/")
+    assert frozen_path_allowed("approved", "GET", "/api/v1/billing/x")
+
+
+def test_frozen_user_only_reaches_auth_and_funnel():
+    assert frozen_path_allowed("frozen", "GET", "/api/v1/auth/me")
+    assert frozen_path_allowed("frozen", "POST", "/api/v1/funnel/enroll")
+    assert not frozen_path_allowed("frozen", "GET", "/api/v1/suites/")
+    assert not frozen_path_allowed("frozen", "POST", "/api/v1/onboarding/extract-brand")
+    assert not frozen_path_allowed("frozen", "GET", "/api/v1/billing/x")
+
+
+def test_funnel_user_reaches_wizard_paths_but_not_billing():
+    assert frozen_path_allowed("funnel", "POST", "/api/v1/onboarding/extract-brand")
+    assert frozen_path_allowed("funnel", "GET", "/api/v1/suites/abc")
+    assert frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/generate")
+    assert frozen_path_allowed("funnel", "GET", "/api/v1/auth/me")
+    assert not frozen_path_allowed("funnel", "GET", "/api/v1/billing/x")
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/connections/meta/connect")
+
+
+def test_funnel_user_cannot_create_suites_directly_or_generate_more():
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/")
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites")
+    assert not frozen_path_allowed(
+        "funnel", "POST", "/api/v1/suites/abc/marketing-plan/competitors/generate-more"
+    )
+    # GET on the suites collection stays allowed
+    assert frozen_path_allowed("funnel", "GET", "/api/v1/suites/")
