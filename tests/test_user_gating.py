@@ -67,3 +67,11 @@ def test_admin_user_update_accepts_approval_status():
     assert payload.approval_status == "approved"
     with pytest.raises(Exception):
         AdminUserUpdate(approval_status="nonsense")
+
+
+def test_prefix_matching_respects_path_segments():
+    assert not frozen_path_allowed("frozen", "GET", "/api/v1/authentication-bypass")
+    assert not frozen_path_allowed("funnel", "GET", "/api/v1/suitescoped")
+    assert not frozen_path_allowed("funnel", "GET", "/api/v1/onboardingv2/x")
+    assert frozen_path_allowed("frozen", "GET", "/api/v1/auth/me")
+    assert frozen_path_allowed("funnel", "GET", "/api/v1/suites")

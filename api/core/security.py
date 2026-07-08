@@ -32,6 +32,10 @@ FROZEN_ALLOWED_PREFIXES = ("/api/v1/auth", "/api/v1/funnel")
 FUNNEL_ALLOWED_PREFIXES = FROZEN_ALLOWED_PREFIXES + ("/api/v1/onboarding", "/api/v1/suites")
 
 
+def _path_in(path: str, prefixes: tuple[str, ...]) -> bool:
+    return any(path == p or path.startswith(p + "/") for p in prefixes)
+
+
 def frozen_path_allowed(approval_status: str, method: str, path: str) -> bool:
     """Per-status API gate. Anything not approved sees only its allowlist."""
     if approval_status == "approved":
@@ -43,8 +47,8 @@ def frozen_path_allowed(approval_status: str, method: str, path: str) -> bool:
         # The small "generate-more" refinement endpoints are not part of the funnel
         if path.rstrip("/").endswith("generate-more"):
             return False
-        return path.startswith(FUNNEL_ALLOWED_PREFIXES)
-    return path.startswith(FROZEN_ALLOWED_PREFIXES)
+        return _path_in(path, FUNNEL_ALLOWED_PREFIXES)
+    return _path_in(path, FROZEN_ALLOWED_PREFIXES)
 
 
 async def get_current_user(
