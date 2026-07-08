@@ -75,3 +75,18 @@ def test_compute_totals_quantity_and_bad_input():
 
 def test_compute_totals_empty():
     assert compute_totals([]) == {}
+
+
+from api.services.service_catalog_seed import SEED_ITEMS
+
+
+def test_seed_items_are_complete_and_bilingual():
+    assert len(SEED_ITEMS) >= 12
+    for item in SEED_ITEMS:
+        assert item["name"]["ar"] and item["name"]["he"]
+        assert item["description"]["ar"] and item["description"]["he"]
+        assert item["category"]["ar"] and item["category"]["he"]
+        assert item["billing_cycle"] in ("one_time", "monthly", "yearly")
+        assert item["price_min"] > 0
+        if item["price_max"] is not None:
+            assert item["price_max"] >= item["price_min"]
