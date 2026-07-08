@@ -12,7 +12,21 @@ from urllib.parse import quote_plus, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ..core.external_calls import external_call
+try:
+    from ..core.external_calls import external_call
+except ImportError:  # observability module not shipped yet — degrade to a no-op
+    from contextlib import asynccontextmanager
+
+    class _NoopExternalCall:
+        def note(self, **_kwargs):
+            return None
+
+        def fail(self, *_args, **_kwargs):
+            return None
+
+    @asynccontextmanager
+    async def external_call(*_args, **_kwargs):
+        yield _NoopExternalCall()
 
 log = logging.getLogger(__name__)
 
