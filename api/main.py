@@ -19,6 +19,7 @@ from .routers import admin
 from .routers import app_text
 from .routers import video_montage
 from .routers import media
+from .routers import funnel
 from .services.durable_generation_queue import run_forever
 from .services.creative_assets import count_builtin_creative_assets, seed_builtin_creative_assets
 from .services.service_catalog_seed import seed_service_items
@@ -185,6 +186,7 @@ app.include_router(admin.router, prefix="/api/v1")
 app.include_router(app_text.router, prefix="/api/v1")
 app.include_router(video_montage.router, prefix="/api/v1")
 app.include_router(media.router, prefix="/api/v1")
+app.include_router(funnel.router, prefix="/api/v1")
 
 
 @app.get("/health")

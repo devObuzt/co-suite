@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     provider_limit_alert_min_wait_seconds: int = 60
     failed_job_alerts_enabled: bool = True
     admin_email: str = ""
+    lead_owner_email: str = "w.sholy@gmail.com"
 
     class Config:
         env_file = str(_here / ".env")
