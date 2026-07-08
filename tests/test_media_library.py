@@ -166,3 +166,39 @@ def test_pick_asset_rotates_visual_candidates_by_seed():
     assets = [_asset(asset_id=f"v{i}") for i in range(3)]
     picked = {pick_asset(assets, kind="visual_video", variety_seed=seed).id for seed in range(3)}
     assert len(picked) == 3
+
+
+def test_capacity_alerts_fire_on_crossed_thresholds():
+    from api.services.capacity_watchdog import evaluate_capacity_alerts
+
+    calm = {
+        "queue_depth": 1,
+        "running": 2,
+        "oldest_queued_seconds": 30,
+        "render_p95_seconds": 900,
+        "failed_last_hour": 0,
+        "completed_last_hour": 4,
+        "waiting_retry": 0,
+    }
+    assert evaluate_capacity_alerts(calm) == []
+
+    stressed = {
+        "queue_depth": 9,
+        "running": 2,
+        "oldest_queued_seconds": 600,
+        "render_p95_seconds": 32 * 60,
+        "failed_last_hour": 3,
+        "completed_last_hour": 3,
+        "waiting_retry": 4,
+    }
+    codes = [code for code, _ in evaluate_capacity_alerts(stressed)]
+    assert codes == ["queue_wait", "queue_depth", "render_p95", "failure_rate", "provider_limits"]
+
+
+def test_daily_digest_formatting():
+    from api.services.capacity_watchdog import format_daily_digest
+
+    text = format_daily_digest(
+        {"montages": 14, "completed": 20, "failed": 1, "avg_wait_seconds": 42.3, "render_p95_seconds": 16 * 60}
+    )
+    assert "14" in text and "42" in text and "16" in text and "1" in text
