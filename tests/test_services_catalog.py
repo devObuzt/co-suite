@@ -45,3 +45,33 @@ def test_service_request_serialization():
     out = serialize_service_request(req)
     assert out["status"] == "new"
     assert out["totals"]["monthly"]["min"] == 800.0
+
+
+from api.services.service_pricing import compute_totals
+
+
+def test_compute_totals_mixed_cycles_and_ranges():
+    totals = compute_totals([
+        {"billing_cycle": "one_time", "price_min": 3500, "price_max": None, "qty": 1},
+        {"billing_cycle": "one_time", "price_min": 5500, "price_max": 8500, "qty": 1},
+        {"billing_cycle": "monthly", "price_min": 800, "price_max": None, "qty": 1},
+        {"billing_cycle": "monthly", "price_min": 2200, "price_max": None, "qty": 1},
+        {"billing_cycle": "yearly", "price_min": 69, "price_max": 90, "qty": 1},
+    ])
+    assert totals["one_time"] == {"min": 9000.0, "max": 12000.0}
+    assert totals["monthly"] == {"min": 3000.0, "max": 3000.0}
+    assert totals["yearly"] == {"min": 69.0, "max": 90.0}
+
+
+def test_compute_totals_quantity_and_bad_input():
+    # unknown cycle is coerced to one_time, qty floors at 1
+    totals = compute_totals([
+        {"billing_cycle": "one_time", "price_min": 1200, "price_max": None, "qty": 3},
+        {"billing_cycle": "bogus-cycle", "price_min": 10, "price_max": None, "qty": 0},
+    ])
+    assert totals["one_time"] == {"min": 3610.0, "max": 3610.0}
+    assert "bogus-cycle" not in totals
+
+
+def test_compute_totals_empty():
+    assert compute_totals([]) == {}
