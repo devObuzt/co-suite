@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import JWTError, jwt
@@ -29,11 +30,65 @@ def create_access_token(user_id: str, expires_delta: Optional[timedelta] = None)
 
 
 FROZEN_ALLOWED_PREFIXES = ("/api/v1/auth", "/api/v1/funnel")
-FUNNEL_ALLOWED_PREFIXES = FROZEN_ALLOWED_PREFIXES + ("/api/v1/onboarding", "/api/v1/suites")
 
 
 def _path_in(path: str, prefixes: tuple[str, ...]) -> bool:
     return any(path == p or path.startswith(p + "/") for p in prefixes)
+
+
+# Explicit allowlist for "funnel" (anonymous self-registered lead) users.
+# Anything not matched here is blocked (403 account_frozen), even under
+# /api/v1/onboarding or /api/v1/suites — no bare-prefix leakage.
+_FUNNEL_GET_PATTERNS = [
+    re.compile(p)
+    for p in (
+        r"^/api/v1/onboarding(/.*)?$",
+        r"^/api/v1/suites/?$",
+        r"^/api/v1/suites/[^/]+$",
+        r"^/api/v1/suites/[^/]+/marketing-plan(/.*)?$",
+    )
+]
+
+_FUNNEL_POST_EXACT = {
+    "/api/v1/onboarding/extract-brand",
+    "/api/v1/onboarding/save-brand-step",
+    "/api/v1/onboarding/save-brand",
+    "/api/v1/onboarding/upload-brand-asset",
+    "/api/v1/onboarding/translate-brand-fields",
+    "/api/v1/onboarding/generate-strategy",
+    "/api/v1/onboarding/generate-brand-assets",
+}
+
+_FUNNEL_POST_PATTERNS = [
+    re.compile(p)
+    for p in (
+        r"^/api/v1/suites/[^/]+/marketing-plan/generate$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/generate$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/paid-content-plan/generate$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/selection$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/paid-content-plan/selection$",
+    )
+]
+
+
+def _funnel_path_allowed(method: str, path: str) -> bool:
+    path = path.rstrip("/") or "/"
+    method = method.upper()
+
+    # Auth + funnel-router endpoints are open to any method (register, enroll,
+    # state, catalog, recommendations, service-request, etc.).
+    if _path_in(path, FROZEN_ALLOWED_PREFIXES):
+        return True
+
+    if method == "GET":
+        return any(pattern.match(path) for pattern in _FUNNEL_GET_PATTERNS)
+
+    if method == "POST":
+        if path in _FUNNEL_POST_EXACT:
+            return True
+        return any(pattern.match(path) for pattern in _FUNNEL_POST_PATTERNS)
+
+    return False
 
 
 def frozen_path_allowed(approval_status: str, method: str, path: str) -> bool:
@@ -41,13 +96,7 @@ def frozen_path_allowed(approval_status: str, method: str, path: str) -> bool:
     if approval_status == "approved":
         return True
     if approval_status == "funnel":
-        # Funnel suites are created via /funnel/suite (owned by the lead owner)
-        if method.upper() == "POST" and path.rstrip("/") == "/api/v1/suites":
-            return False
-        # The small "generate-more" refinement endpoints are not part of the funnel
-        if path.rstrip("/").endswith("generate-more"):
-            return False
-        return _path_in(path, FUNNEL_ALLOWED_PREFIXES)
+        return _funnel_path_allowed(method, path)
     return _path_in(path, FROZEN_ALLOWED_PREFIXES)
 
 

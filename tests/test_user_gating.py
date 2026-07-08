@@ -156,3 +156,73 @@ def test_funnel_user_blocked_when_output_exists():
 def test_funnel_user_allowed_first_time_and_approved_always():
     block_funnel_regeneration(_user(status="funnel"), already_generated=False)
     block_funnel_regeneration(_user(status="approved"), already_generated=True)
+
+
+def test_funnel_explicit_allowlist_blocks_cost_holes():
+    assert not frozen_path_allowed("funnel", "DELETE", "/api/v1/suites/abc/marketing-plan")
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/competitors/generate")
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/social-content-plan/generate-items")
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/visuals/generate")
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/onboarding/anything-else")
+
+
+def test_funnel_explicit_allowlist_keeps_wizard_open():
+    assert frozen_path_allowed("funnel", "POST", "/api/v1/onboarding/extract-brand")
+    assert frozen_path_allowed("funnel", "POST", "/api/v1/onboarding/generate-strategy")
+    assert frozen_path_allowed("funnel", "GET", "/api/v1/suites/abc")
+    assert frozen_path_allowed("funnel", "GET", "/api/v1/suites/abc/marketing-plan/pdf")
+    assert frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/generate")
+    assert frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/social-content-plan/selection")
+    assert frozen_path_allowed("funnel", "GET", "/api/v1/funnel/catalog")
+
+
+from api.services.funnel_guard import enforce_funnel_call_limit
+
+
+class CallLimitDb:
+    """Feeds enforce_funnel_call_limit's single Lead lookup + commit tracking."""
+
+    def __init__(self, lead):
+        self._lead = lead
+        self.committed = False
+
+    async def execute(self, _query):
+        return _Result(self._lead)
+
+    async def commit(self):
+        self.committed = True
+
+
+@pytest.mark.asyncio
+async def test_funnel_call_limit_blocks_at_limit():
+    from api.models.services_catalog import Lead
+    lead = Lead(
+        id="l1", user_id="u1", full_name="A", email="a@b.c", phone="0",
+        progress={"calls": {"extract_brand": 5}},
+    )
+    db = CallLimitDb(lead)
+    with pytest.raises(HTTPException) as exc:
+        await enforce_funnel_call_limit(db, _user(status="funnel"), "extract_brand", 5)
+    assert exc.value.status_code == 429
+    assert exc.value.detail == "funnel_call_limit"
+    assert not db.committed
+
+
+@pytest.mark.asyncio
+async def test_funnel_call_limit_increments_and_commits_below_limit():
+    from api.models.services_catalog import Lead
+    lead = Lead(
+        id="l1", user_id="u1", full_name="A", email="a@b.c", phone="0",
+        progress={"calls": {"extract_brand": 2}},
+    )
+    db = CallLimitDb(lead)
+    await enforce_funnel_call_limit(db, _user(status="funnel"), "extract_brand", 5)
+    assert lead.progress["calls"]["extract_brand"] == 3
+    assert db.committed
+
+
+@pytest.mark.asyncio
+async def test_funnel_call_limit_noop_for_approved_users():
+    db = CallLimitDb(lead=None)
+    await enforce_funnel_call_limit(db, _user(status="approved"), "extract_brand", 5)
+    assert not db.committed

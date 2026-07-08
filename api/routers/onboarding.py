@@ -13,7 +13,7 @@ from ..models.suite import Suite, SuiteStatus
 from ..services.brand_ai import extract_brand_from_sources, suggest_brand_identity, suggest_brand_assets
 from ..services.media_storage import r2_configured, store_brand_asset
 from ..services.strategy_generator import generate_strategy as _generate_strategy
-from ..services.funnel_guard import block_funnel_regeneration
+from ..services.funnel_guard import block_funnel_regeneration, enforce_funnel_call_limit
 from ..services.suite_access import require_suite_access
 
 log = logging.getLogger(__name__)
@@ -78,6 +78,7 @@ async def extract_brand(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await enforce_funnel_call_limit(db, current_user, "extract_brand", 5)
     suite = await require_suite_access(db, data.suite_id, current_user)
 
     # Filter empty strings
@@ -349,6 +350,7 @@ async def generate_brand_assets_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await enforce_funnel_call_limit(db, current_user, "generate_brand_assets", 3)
     suite = await require_suite_access(db, data.suite_id, current_user)
 
     brand = dict(suite.brand) if suite.brand else {}
@@ -367,8 +369,13 @@ async def generate_brand_assets_endpoint(
 
 
 @router.post("/translate-brand-fields")
-async def translate_brand_fields(data: TranslateBrandFieldsRequest):
+async def translate_brand_fields(
+    data: TranslateBrandFieldsRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Translate USP/ESP/how_they_help from English to the user's preferred language."""
+    await enforce_funnel_call_limit(db, current_user, "translate_brand_fields", 10)
     if not data.target_language or data.target_language == "en":
         return {
             "unique_value": data.unique_value,

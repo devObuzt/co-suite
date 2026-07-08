@@ -271,20 +271,24 @@ async def recommendations(current_user: User = Depends(get_current_user), db: As
         f"- id={item.id} | {item.name.get('ar', '')} | {item.billing_cycle}"
         for item in rows
     ]
-    raw = await call_text_ai(
-        max_tokens=400,
-        system=(
-            "You match marketing/web services to a business. Return ONLY a JSON object: "
-            '{"recommended_service_ids": ["..."]} with 3-6 ids from the provided catalog.'
-        ),
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Business brand JSON:\n{json.dumps(brand, ensure_ascii=False)[:4000]}\n\n"
-                f"Catalog:\n" + "\n".join(catalog_lines)
+    try:
+        raw = await call_text_ai(
+            max_tokens=400,
+            system=(
+                "You match marketing/web services to a business. Return ONLY a JSON object: "
+                '{"recommended_service_ids": ["..."]} with 3-6 ids from the provided catalog.'
             ),
-        }],
-    )
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Business brand JSON:\n{json.dumps(brand, ensure_ascii=False)[:4000]}\n\n"
+                    f"Catalog:\n" + "\n".join(catalog_lines)
+                ),
+            }],
+        )
+    except Exception:
+        log.warning("recommendations LLM call failed", exc_info=True)
+        return {"recommended_service_ids": []}
     try:
         parsed = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
         ids = [i for i in parsed.get("recommended_service_ids", []) if any(r.id == i for r in rows)]
@@ -308,6 +312,31 @@ async def submit_service_request(
         await db.execute(select(ServiceItem).where(ServiceItem.is_active.is_(True)))
     ).scalars().all()
     items, totals = snapshot_selection([s.model_dump() for s in data.items], {r.id: r for r in rows})
+
+    existing = (
+        await db.execute(
+            select(ServiceRequest).where(
+                ServiceRequest.lead_id == lead.id, ServiceRequest.status == "new"
+            )
+        )
+    ).scalar_one_or_none()
+
+    if existing:
+        # Coalesce: a pending request is still "new" — update in place instead of
+        # creating a duplicate row / firing another Telegram notification.
+        existing.items = items
+        existing.totals = totals
+        existing.customer_notes = (data.customer_notes or "").strip() or None
+        lead.progress = {**(lead.progress or {}), "request_submitted": True}
+        await record_audit_log(
+            db, action="funnel.service_request", resource_type="service_request",
+            resource_id=existing.id, suite_id=lead.suite_id, target_user_id=current_user.id,
+            actor=current_user, request=request, metadata={"totals": totals, "coalesced": True},
+        )
+        await db.commit()
+        await db.refresh(existing)
+        return serialize_service_request(existing)
+
     req = ServiceRequest(
         lead_id=lead.id,
         items=items,
