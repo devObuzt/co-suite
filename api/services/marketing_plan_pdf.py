@@ -1296,6 +1296,32 @@ def _section_header(kicker: str, title: str, subtitle: str = "") -> str:
     )
 
 
+_CONTINUED_LABELS = {"ar": "تكملة", "he": "המשך", "en": "continued"}
+
+
+def _chunked_card_sections(
+    kicker: str,
+    title: str,
+    subtitle: str,
+    cards: list[str],
+    per_page: int,
+    language: str,
+    container_class: str = "cards",
+) -> list[str]:
+    """One <section> per chunk of cards; continuation pages repeat the title."""
+    continued = _CONTINUED_LABELS.get(str(language or "")[:2], _CONTINUED_LABELS["en"])
+    sections: list[str] = []
+    for start in range(0, len(cards), per_page):
+        chunk = cards[start:start + per_page]
+        page_title = title if start == 0 else f"{title} — {continued}"
+        sections.append(
+            "<section>"
+            + _section_header(kicker, page_title, subtitle if start == 0 else "")
+            + f'<div class="{container_class}">{"".join(chunk)}</div></section>'
+        )
+    return sections
+
+
 def _divider_section(image_src: str, kicker: str, title: str) -> str:
     if not image_src:
         return ""
@@ -1315,6 +1341,7 @@ def _deck_css(accent: str, rtl: bool) -> str:
     return f"""
 {_font_faces_css()}
 @page {{ size: 1280px 720px; margin: 0; }}
+@page content {{ margin: 44px 0; }}
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 html {{ background: #17171d; }}
 body {{
@@ -1324,8 +1351,8 @@ body {{
   font-size: 15px;
   line-height: 1.65;
 }}
-section {{ page-break-before: always; padding: 54px 68px; }}
-section.cover, section.divider {{ padding: 0; height: 720px; overflow: hidden; }}
+section {{ page: content; page-break-before: always; padding: 14px 68px 30px 68px; }}
+section.cover, section.divider {{ page: full-bleed; padding: 0; height: 720px; overflow: hidden; }}
 section:first-child {{ page-break-before: avoid; }}
 .kicker {{ color: {accent}; font-weight: 700; font-size: 15px; letter-spacing: 0.5px; margin-bottom: 4px; }}
 h2 {{ font-size: 40px; font-weight: 800; line-height: 1.25; margin-bottom: 6px; }}
@@ -1483,30 +1510,37 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
         + f'<div class="cards">{market_cards}</div></section>'
     )
 
-    # 6. Keywords — all of them, grouped by intent
-    keyword_sections = ""
-    for title, helper, values in _keyword_groups_full(intelligence, labels):
-        chips = "".join(_chip(value) for value in values)
-        keyword_sections += (
-            f'<h3 class="kicker" dir="auto">{escape(title)} — {len(values)}</h3>'
-            f'<p class="section-sub" dir="auto">{escape(helper)}</p><div>{chips}</div>'
+    # 6. Keywords — all of them: one slide per intent group, paginated chips
+    keyword_groups = _keyword_groups_full(intelligence, labels)
+    if keyword_groups:
+        for group_title, helper, values in keyword_groups:
+            chips = [_chip(value) for value in values]
+            sections.extend(
+                _chunked_card_sections(
+                    "04",
+                    f"{labels['keywords']} — {group_title} ({len(values)})",
+                    helper,
+                    chips,
+                    per_page=36,
+                    language=language,
+                    container_class="chips",
+                )
+            )
+    else:
+        sections.append(
+            "<section>"
+            + _section_header("04", labels["keywords"], _label(labels, "keywords_pitch", ""))
+            + f'<p class="section-sub" dir="auto">{escape(_label(labels, "keywords_missing", ""))}</p>'
+            + "</section>"
         )
-    if not keyword_sections:
-        keyword_sections = f'<p class="section-sub" dir="auto">{escape(_label(labels, "keywords_missing", ""))}</p>'
-    sections.append(
-        "<section>"
-        + _section_header("04", labels["keywords"], _label(labels, "keywords_pitch", ""))
-        + keyword_sections
-        + "</section>"
-    )
 
-    # 7. Competitors — all items per source
+    # 7. Competitors — all items per source, paginated with repeated titles
     grouped_competitors = _competitors_by_source(intelligence)
     for source, items in grouped_competitors.items():
         if not items:
             continue
         source_title = source.replace("_", " ").title()
-        competitor_cards = "".join(
+        competitor_cards = [
             _card(
                 str(item.get("title") or item.get("name") or labels["empty"]),
                 [
@@ -1516,11 +1550,16 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
                 extra_class="wide",
             )
             for item in items
-        )
-        sections.append(
-            "<section>"
-            + _section_header("05", f"{labels['competitors']} — {source_title}", _label(labels, "competitors_pitch", ""))
-            + f'<div class="cards">{competitor_cards}</div></section>'
+        ]
+        sections.extend(
+            _chunked_card_sections(
+                "05",
+                f"{labels['competitors']} — {source_title}",
+                _label(labels, "competitors_pitch", ""),
+                competitor_cards,
+                per_page=4,
+                language=language,
+            )
         )
 
     # 8. Demand & supply
@@ -1543,10 +1582,10 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
         + f'<div class="cards">{metrics}</div></section>'
     )
 
-    # 9. Personas — all of them
+    # 9. Personas — all of them, paginated with repeated titles
     personas = [item for item in _safe_list(intelligence.get("personas")) if isinstance(item, dict)]
     if personas:
-        persona_cards = ""
+        persona_cards = []
         for persona in personas:
             meta_bits = [str(persona.get("age") or "").strip(), str(persona.get("profession") or "").strip()]
             meta = " · ".join(bit for bit in meta_bits if bit)
@@ -1555,17 +1594,22 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
                 str(persona.get("challenges") or persona.get("challenge") or "").strip(),
             ]
             body = "".join(f'<p dir="auto">{escape(line)}</p>' for line in lines if line)
-            persona_cards += (
+            persona_cards.append(
                 '<div class="card">'
                 f'<h3 dir="auto">{escape(str(persona.get("name") or labels["empty"]))}</h3>'
                 + (f'<p class="persona-meta" dir="auto">{escape(meta)}</p>' if meta else "")
                 + body
                 + "</div>"
             )
-        sections.append(
-            "<section>"
-            + _section_header("07", labels["personas"], _label(labels, "personas_pitch", ""))
-            + f'<div class="cards">{persona_cards}</div></section>'
+        sections.extend(
+            _chunked_card_sections(
+                "07",
+                labels["personas"],
+                _label(labels, "personas_pitch", ""),
+                persona_cards,
+                per_page=6,
+                language=language,
+            )
         )
 
     # 10. Strategic direction
