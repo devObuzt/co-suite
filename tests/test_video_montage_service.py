@@ -917,3 +917,15 @@ async def test_dead_space_cut_runs_before_remotion_render(tmp_path, monkeypatch)
     assert normalized.read_bytes() == b"tight"
     assert "silence_cutting" in render["capabilities_applied"]
     assert render["dead_space_seconds_cut"] == 3.0
+
+
+def test_green_border_fraction_detects_green_screen(tmp_path):
+    from PIL import Image
+
+    green = tmp_path / "green.png"
+    Image.new("RGB", (320, 568), (40, 190, 60)).save(green)
+    blue = tmp_path / "blue.png"
+    Image.new("RGB", (320, 568), (30, 60, 200)).save(blue)
+
+    assert video_montage.green_border_fraction(green) > 0.9
+    assert video_montage.green_border_fraction(blue) < 0.05

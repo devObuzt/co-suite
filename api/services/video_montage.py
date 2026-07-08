@@ -123,6 +123,9 @@ def normalize_montage_source(source_path: Path, output_dir: Path) -> Path | None
                 str(source_path),
                 "-vf",
                 "scale=w=1080:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2",
+                # 24fps: VEED bills per frame — 20% off with no visible cost.
+                "-r",
+                "24",
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -475,6 +478,64 @@ def drive_confirm_download_url(html: str) -> str | None:
 
     separator = "&" if "?" in base else "?"
     return f"{base}{separator}{urlencode(dict(params))}"
+
+
+def green_border_fraction(image_path: Path) -> float:
+    """Fraction of the frame's top/side border pixels that read as chroma green."""
+    try:
+        with Image.open(image_path) as img:
+            rgb = img.convert("RGB")
+            width, height = rgb.size
+            pixels = rgb.load()
+            samples = 0
+            green = 0
+            xs = range(0, width, max(1, width // 60))
+            for x in xs:
+                for y in (2, height // 8, height // 4):
+                    r, g, b = pixels[x, min(y, height - 1)][:3]
+                    samples += 1
+                    if g > 90 and g > r * 1.25 and g > b * 1.25:
+                        green += 1
+            for y in range(0, height // 2, max(1, height // 40)):
+                for x in (2, width - 3):
+                    r, g, b = pixels[x, y][:3]
+                    samples += 1
+                    if g > 90 and g > r * 1.25 and g > b * 1.25:
+                        green += 1
+            return green / samples if samples else 0.0
+    except Exception:
+        log.exception("Green-screen probe failed for %s", image_path)
+        return 0.0
+
+
+def detect_green_screen(source_path: Path) -> bool:
+    """True when the source looks like studio green screen (border mostly green).
+
+    Green sources get the FREE local chromakey instead of the paid VEED
+    provider — VEED bills per frame and adds nothing over chroma keying here.
+    """
+    probe_frame = source_path.parent / f"{source_path.stem}-green-probe.png"
+    try:
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                "1",
+                "-i",
+                str(source_path),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=320:-2",
+                str(probe_frame),
+            ]
+        )
+        return green_border_fraction(probe_frame) >= 0.35
+    except Exception:
+        return False
+    finally:
+        probe_frame.unlink(missing_ok=True)
 
 
 def probe_video_codec(path: Path) -> str:
@@ -2468,7 +2529,24 @@ async def _generate_video_montage_impl(
 
     veed_source_url = None
     veed_stage_path: Path | None = None
-    if "background" in options and settings.fal_key and (source_path or source_url):
+    green_screen_detected = False
+    if (
+        settings.montage_smart_bg_routing
+        and "background" in options
+        and source_path
+        and ffmpeg_filter_available("chromakey")
+    ):
+        green_screen_detected = await asyncio.to_thread(detect_green_screen, source_path)
+        if green_screen_detected:
+            log_event(
+                log,
+                logging.INFO,
+                "Green-screen source detected; using free local chromakey instead of VEED.",
+                event="montage_green_screen_routing",
+                job_id=job_id,
+                suite_id=suite.id,
+            )
+    if "background" in options and settings.fal_key and (source_path or source_url) and not green_screen_detected:
         if source_path and r2_configured():
             normalized_path = await asyncio.to_thread(normalize_montage_source, source_path, output_dir)
             if normalized_path:

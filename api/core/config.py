@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # exhaust worker memory on long/4K sources
     remotion_render_concurrency: int = 3
 
+    # Detect green-screen sources and route them to the free local chromakey
+    # instead of the paid VEED provider
+    montage_smart_bg_routing: bool = True
+
     # Longest source a montage will process (safety ceiling, not a feature cap)
     montage_max_duration_seconds: int = 180
 
