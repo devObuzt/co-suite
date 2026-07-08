@@ -41,7 +41,7 @@ from ..services.marketing_plan_generator import (
     suite_research_payload,
 )
 from ..services.marketing_plan_pdf import build_marketing_plan_pdf
-from ..services.marketing_plan_visuals import ensure_marketing_plan_visuals
+from ..services.marketing_plan_visuals import deck_visuals, ensure_marketing_plan_visuals
 from ..services.multi_scraper import search_web
 
 router = APIRouter(tags=["marketing-plans"])
@@ -1944,6 +1944,7 @@ def _marketing_plan_response(
         "deck": _public_deck(deck) if deck else None,
         "intelligence": _intelligence(suite),
         "action_plan": _action_plan(suite),
+        "visuals": deck_visuals(suite),
         "generation_status": serialize_job(job, suite_id=suite_id),
     }
 
@@ -1973,6 +1974,20 @@ async def get_marketing_plan(
     if not deck:
         return _marketing_plan_response(suite, suite_id, job, "missing")
     return _marketing_plan_response(suite, suite_id, job, "ready")
+
+
+@router.post("/suites/{suite_id}/marketing-plan/visuals/generate")
+async def generate_marketing_plan_visuals(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate the plan's field images once — shared by the plan page and the PDF."""
+    suite = await get_owned_suite(db, suite_id, current_user)
+    visuals = await ensure_marketing_plan_visuals(suite)
+    if visuals:
+        await db.commit()
+    return {"visuals": visuals}
 
 
 @router.get("/suites/{suite_id}/marketing-plan/pdf")
