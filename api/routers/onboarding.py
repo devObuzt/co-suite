@@ -13,6 +13,7 @@ from ..models.suite import Suite, SuiteStatus
 from ..services.brand_ai import extract_brand_from_sources, suggest_brand_identity, suggest_brand_assets
 from ..services.media_storage import r2_configured, store_brand_asset
 from ..services.strategy_generator import generate_strategy as _generate_strategy
+from ..services.funnel_guard import block_funnel_regeneration
 from ..services.suite_access import require_suite_access
 
 log = logging.getLogger(__name__)
@@ -176,6 +177,7 @@ async def generate_strategy_endpoint(
     db: AsyncSession = Depends(get_db),
 ):
     suite = await require_suite_access(db, data.suite_id, current_user)
+    block_funnel_regeneration(current_user, already_generated=bool(suite.strategy))
 
     brand = dict(suite.brand or {})
 

@@ -141,3 +141,18 @@ async def test_funnel_user_restricted_to_lead_suite():
     with pytest.raises(HTTPException) as exc:
         await require_suite_access(db, "s1", _user(status="funnel"))
     assert exc.value.status_code == 403
+
+
+from api.services.funnel_guard import block_funnel_regeneration
+
+
+def test_funnel_user_blocked_when_output_exists():
+    with pytest.raises(HTTPException) as exc:
+        block_funnel_regeneration(_user(status="funnel"), already_generated=True)
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "funnel_regeneration_blocked"
+
+
+def test_funnel_user_allowed_first_time_and_approved_always():
+    block_funnel_regeneration(_user(status="funnel"), already_generated=False)
+    block_funnel_regeneration(_user(status="approved"), already_generated=True)

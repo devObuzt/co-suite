@@ -43,6 +43,7 @@ from ..services.marketing_plan_generator import (
 )
 from ..services.marketing_plan_pdf import build_marketing_plan_pdf
 from ..services.marketing_plan_visuals import deck_visuals, ensure_marketing_plan_visuals
+from ..services.funnel_guard import block_funnel_regeneration
 from ..services.multi_scraper import search_web
 from ..services.suite_access import require_suite_access
 
@@ -2183,6 +2184,7 @@ async def generate_marketing_plan(
     db: AsyncSession = Depends(get_db),
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
+    block_funnel_regeneration(current_user, already_generated=bool(_deck(suite)))
     request_data = payload or GenerateMarketingPlanRequest()
     active = await _active_marketing_plan_job(db, suite_id)
     if active:
@@ -2777,6 +2779,10 @@ async def generate_marketing_social_content_plan(
     db: AsyncSession = Depends(get_db),
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
+    block_funnel_regeneration(
+        current_user,
+        already_generated=bool((_action_plan(suite) or {}).get("social_content_plan")),
+    )
     request_data = payload or GenerateSocialContentPlanRequest()
     output_language = infer_plan_language(suite, request_data.language)
     plan = await generate_social_content_work_plan(
@@ -3046,6 +3052,10 @@ async def generate_marketing_paid_content_plan(
     db: AsyncSession = Depends(get_db),
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
+    block_funnel_regeneration(
+        current_user,
+        already_generated=bool((_action_plan(suite) or {}).get("paid_content_plan")),
+    )
     request_data = payload or GeneratePaidContentPlanRequest()
     output_language = infer_plan_language(suite, request_data.language)
     plan = await generate_paid_content_work_plan(suite, output_language)
