@@ -264,3 +264,58 @@ async def test_add_content_rules_rejects_empty_payload(monkeypatch):
             FakeDb(),
         )
     assert getattr(exc.value, "status_code", None) == 422
+
+
+# ── Suite deletion ────────────────────────────────────────────────────────────
+
+class _DeleteResult:
+    def __init__(self, suite):
+        self._suite = suite
+
+    def scalar_one_or_none(self):
+        return self._suite
+
+
+class _DeleteDb:
+    def __init__(self, suite):
+        self._suite = suite
+        self.statements = []
+        self.deleted = []
+        self.committed = False
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+        return _DeleteResult(self._suite)
+
+    async def delete(self, obj):
+        self.deleted.append(obj)
+
+    async def commit(self):
+        self.committed = True
+
+
+@pytest.mark.asyncio
+async def test_delete_suite_removes_suite_and_children():
+    suite, user = _suite_and_user()
+    db = _DeleteDb(suite)
+
+    response = await suites_router.delete_suite("suite-1", user, db)
+
+    assert response == {"ok": True, "deleted_suite_id": "suite-1"}
+    assert db.deleted == [suite]
+    assert db.committed is True
+    # owned-suite select + child deletes/updates across all suite tables
+    assert len(db.statements) >= 12
+
+
+@pytest.mark.asyncio
+async def test_delete_suite_rejects_non_owner():
+    suite, _owner = _suite_and_user()
+    intruder = User(id="user-2", email="other@example.com", hashed_password="hash", full_name="Other")
+    db = _DeleteDb(suite)
+
+    with pytest.raises(Exception) as exc:
+        await suites_router.delete_suite("suite-1", intruder, db)
+
+    assert getattr(exc.value, "status_code", None) == 404
+    assert db.deleted == []

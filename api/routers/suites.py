@@ -171,6 +171,51 @@ async def run_storage_test(
     return await test_public_storage()
 
 
+@router.delete("/{suite_id}")
+async def delete_suite(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently delete a suite and everything that belongs to it.
+
+    Linked users are never deleted — only their membership links. Audit and
+    provider-usage history is kept for admins with the suite reference nulled.
+    """
+    from sqlalchemy import delete as sa_delete, update as sa_update
+
+    from ..models.admin import AuditLog, ProviderUsageEvent
+    from ..models.billing import Subscription, UsageEvent
+    from ..models.content import ContentPost
+    from ..models.generation_job import GenerationJob
+    from ..models.media_asset import MediaAsset
+    from ..models.product_bulk import (
+        ProductBulkAsset,
+        ProductBulkBatch,
+        ProductBulkItem,
+        ProductTemplateDirection,
+    )
+
+    suite = await _get_owned_suite(db, suite_id, current_user)
+
+    batch_ids = select(ProductBulkBatch.id).where(ProductBulkBatch.suite_id == suite_id)
+    await db.execute(sa_delete(ProductBulkAsset).where(ProductBulkAsset.batch_id.in_(batch_ids)))
+    await db.execute(sa_delete(ProductBulkItem).where(ProductBulkItem.batch_id.in_(batch_ids)))
+    await db.execute(sa_delete(ProductTemplateDirection).where(ProductTemplateDirection.batch_id.in_(batch_ids)))
+    await db.execute(sa_delete(ProductBulkBatch).where(ProductBulkBatch.suite_id == suite_id))
+    await db.execute(sa_delete(ContentPost).where(ContentPost.suite_id == suite_id))
+    await db.execute(sa_delete(GenerationJob).where(GenerationJob.suite_id == suite_id))
+    await db.execute(sa_delete(MediaAsset).where(MediaAsset.suite_id == suite_id))
+    await db.execute(sa_delete(UsageEvent).where(UsageEvent.suite_id == suite_id))
+    await db.execute(sa_delete(Subscription).where(Subscription.suite_id == suite_id))
+    await db.execute(sa_delete(SuiteMember).where(SuiteMember.suite_id == suite_id))
+    await db.execute(sa_update(AuditLog).where(AuditLog.suite_id == suite_id).values(suite_id=None))
+    await db.execute(sa_update(ProviderUsageEvent).where(ProviderUsageEvent.suite_id == suite_id).values(suite_id=None))
+    await db.delete(suite)
+    await db.commit()
+    return {"ok": True, "deleted_suite_id": suite_id}
+
+
 @router.patch("/{suite_id}/brand")
 async def update_brand(
     suite_id: str,
