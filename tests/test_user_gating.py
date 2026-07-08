@@ -59,3 +59,11 @@ def test_funnel_user_cannot_create_suites_directly_or_generate_more():
     )
     # GET on the suites collection stays allowed
     assert frozen_path_allowed("funnel", "GET", "/api/v1/suites/")
+
+
+def test_admin_user_update_accepts_approval_status():
+    from api.routers.admin import AdminUserUpdate
+    payload = AdminUserUpdate(approval_status="approved")
+    assert payload.approval_status == "approved"
+    with pytest.raises(Exception):
+        AdminUserUpdate(approval_status="nonsense")

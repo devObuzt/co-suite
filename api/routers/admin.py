@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import re
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, EmailStr, Field
@@ -41,6 +41,7 @@ class AdminUserUpdate(BaseModel):
     is_active: bool | None = None
     is_verified: bool | None = None
     is_super_admin: bool | None = None
+    approval_status: Literal["approved", "frozen", "funnel"] | None = None
 
 
 class AdminPasswordUpdate(BaseModel):
@@ -280,6 +281,7 @@ async def billing_usage(
 @router.get("/users")
 async def users(
     q: str | None = None,
+    approval: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     admin: User = Depends(_admin_user),
@@ -300,6 +302,8 @@ async def users(
     if q:
         pattern = f"%{q.strip()}%"
         query = query.where(or_(User.email.ilike(pattern), User.full_name.ilike(pattern)))
+    if approval in ("approved", "frozen", "funnel"):
+        query = query.where(User.approval_status == approval)
     rows = (await db.execute(query)).all()
     return [
         {
@@ -350,7 +354,7 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     before = serialize_user_public(user)
-    for field in ("email", "full_name", "is_active", "is_verified", "is_super_admin"):
+    for field in ("email", "full_name", "is_active", "is_verified", "is_super_admin", "approval_status"):
         value = getattr(payload, field)
         if value is not None:
             setattr(user, field, value)
