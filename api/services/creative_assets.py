@@ -107,7 +107,13 @@ async def list_active_assets(db: AsyncSession, *, kinds: set[str] | None = None)
     return (await db.execute(query)).scalars().all()
 
 
-def _score_asset(asset: CreativeAsset, scene_text: str, wanted_kind: str) -> int:
+def _asset_suite_id(asset: CreativeAsset) -> str | None:
+    meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    value = meta.get("suite_id")
+    return str(value) if value else None
+
+
+def _score_asset(asset: CreativeAsset, scene_text: str, wanted_kind: str, suite_id: str | None = None) -> int:
     score = 4 if asset.kind == wanted_kind else 0
     scene = scene_text.lower()
     for tag in asset.tags or []:
@@ -118,15 +124,41 @@ def _score_asset(asset: CreativeAsset, scene_text: str, wanted_kind: str) -> int
             score += 2
         if wanted_kind in VISUAL_KINDS and use_case in {"animated_background", "topic_cutaway", "scene_layer"}:
             score += 2
+    # Backgrounds belong to their suite: prefer own visuals, never leak another
+    # client's generated backgrounds into this suite's videos.
+    asset_suite = _asset_suite_id(asset)
+    if suite_id and asset_suite:
+        if asset_suite == suite_id:
+            score += 6
+        elif wanted_kind in VISUAL_KINDS:
+            score -= 20
+    last_used = asset.last_used_at
+    if last_used is not None:
+        if last_used.tzinfo is None:
+            last_used = last_used.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - last_used).total_seconds() < 24 * 3600:
+            score -= 3
     score -= min(asset.usage_count, 10)
     return score
 
 
-def pick_asset(assets: list[CreativeAsset], *, kind: str, scene_text: str = "") -> CreativeAsset | None:
+def pick_asset(
+    assets: list[CreativeAsset],
+    *,
+    kind: str,
+    scene_text: str = "",
+    suite_id: str | None = None,
+    variety_seed: int = 0,
+) -> CreativeAsset | None:
     candidates = [asset for asset in assets if asset.kind == kind]
     if not candidates:
         return None
-    return sorted(candidates, key=lambda item: _score_asset(item, scene_text, kind), reverse=True)[0]
+    ranked = sorted(candidates, key=lambda item: _score_asset(item, scene_text, kind, suite_id), reverse=True)
+    if kind in VISUAL_KINDS and len(ranked) > 1:
+        # Rotate between the top candidates so consecutive renders vary.
+        pool = ranked[: min(3, len(ranked))]
+        return pool[variety_seed % len(pool)]
+    return ranked[0]
 
 
 async def record_asset_usage(db: AsyncSession, asset_ids: list[str]) -> None:
@@ -341,7 +373,7 @@ async def generate_visual_asset_for_scene(
             source_url=None,
             created_by_user_id=None,
             classification_prompt=video_prompt,
-            metadata={"scene_text": scene_text, "generated": True, "provider": "google_veo"},
+            metadata={"scene_text": scene_text, "generated": True, "provider": "google_veo", "suite_id": suite.id},
         )
 
     if kind == "visual_image":
@@ -358,7 +390,7 @@ async def generate_visual_asset_for_scene(
             source_url=None,
             created_by_user_id=None,
             classification_prompt=base_prompt,
-            metadata={"scene_text": scene_text, "generated": True, "provider": "google_image"},
+            metadata={"scene_text": scene_text, "generated": True, "provider": "google_image", "suite_id": suite.id},
         )
 
     return None

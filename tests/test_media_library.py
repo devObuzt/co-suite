@@ -133,3 +133,36 @@ def test_serialize_media_asset_returns_frontend_contract():
         "duration_seconds",
         "created_at",
     }
+
+
+def _asset(kind="visual_video", suite_id=None, usage=0, asset_id="a1"):
+    from api.models.admin import CreativeAsset
+
+    return CreativeAsset(
+        id=asset_id,
+        kind=kind,
+        title=asset_id,
+        storage_url=f"https://cdn.example/{asset_id}.mp4",
+        tags=[],
+        use_cases=[],
+        usage_count=usage,
+        active=True,
+        metadata_json={"suite_id": suite_id} if suite_id else {},
+    )
+
+
+def test_pick_asset_prefers_same_suite_visuals():
+    from api.services.creative_assets import pick_asset
+
+    own = _asset(suite_id="suite-a", asset_id="own")
+    foreign = _asset(suite_id="suite-b", asset_id="foreign")
+    picked = pick_asset([foreign, own], kind="visual_video", suite_id="suite-a", variety_seed=0)
+    assert picked.id == "own"
+
+
+def test_pick_asset_rotates_visual_candidates_by_seed():
+    from api.services.creative_assets import pick_asset
+
+    assets = [_asset(asset_id=f"v{i}") for i in range(3)]
+    picked = {pick_asset(assets, kind="visual_video", variety_seed=seed).id for seed in range(3)}
+    assert len(picked) == 3

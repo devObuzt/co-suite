@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import zlib
 import math
 import mimetypes
 import random
@@ -1195,7 +1196,21 @@ async def build_remotion_scene_manifest(
             ["#201225", "#d85cff", "#ffe9ff"],
             ["#1c1d21", "#ff5f45", "#fff0ec"],
         ][index % 5]
-        visual_video_asset = pick_asset(active_assets, kind="visual_video", scene_text=caption)
+        variety_seed = zlib.crc32(str(work_dir).encode("utf-8")) + index
+        visual_video_asset = None
+        if db and index == 0:
+            # The hero scene always gets a freshly generated background tied to
+            # the spoken line, so consecutive renders don't open identically.
+            try:
+                visual_video_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption, kind="visual_video")
+                if visual_video_asset:
+                    active_assets.append(visual_video_asset)
+            except Exception:
+                visual_video_asset = None
+        if not visual_video_asset:
+            visual_video_asset = pick_asset(
+                active_assets, kind="visual_video", scene_text=caption, suite_id=suite.id, variety_seed=variety_seed
+            )
         if not visual_video_asset and db and index < 2:
             try:
                 visual_video_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption, kind="visual_video")
@@ -1213,7 +1228,9 @@ async def build_remotion_scene_manifest(
             visual_video_asset = None
         if visual_video_asset:
             distinct_background_video_ids.add(visual_video_asset.id)
-        visual_asset = pick_asset(active_assets, kind="visual_image", scene_text=caption)
+        visual_asset = pick_asset(
+            active_assets, kind="visual_image", scene_text=caption, suite_id=suite.id, variety_seed=variety_seed
+        )
         if not visual_asset and db and index < 4:
             try:
                 visual_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption)
