@@ -100,6 +100,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_owner_chat_id: str = ""
     telegram_admin_chat_id: str = ""
+    telegram_company_chat_id: str = ""
+    telegram_topic_leads: str = ""
     observability_alerts_enabled: bool = True
     provider_limit_alert_min_wait_seconds: int = 60
     failed_job_alerts_enabled: bool = True

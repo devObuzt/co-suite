@@ -90,3 +90,30 @@ def test_seed_items_are_complete_and_bilingual():
         assert item["price_min"] > 0
         if item["price_max"] is not None:
             assert item["price_max"] >= item["price_min"]
+
+
+import pytest
+
+from api.services import telegram_notify
+
+
+@pytest.mark.asyncio
+async def test_send_company_message_skips_without_config(monkeypatch):
+    monkeypatch.setattr(telegram_notify.settings, "telegram_bot_token", "")
+    monkeypatch.setattr(telegram_notify.settings, "telegram_company_chat_id", "")
+    assert await telegram_notify.send_company_message("hi") is False
+
+
+@pytest.mark.asyncio
+async def test_send_company_message_survives_network_errors(monkeypatch):
+    monkeypatch.setattr(telegram_notify.settings, "telegram_bot_token", "t")
+    monkeypatch.setattr(telegram_notify.settings, "telegram_company_chat_id", "c")
+
+    class BoomClient:
+        def __init__(self, *a, **k): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **k): raise RuntimeError("network down")
+
+    monkeypatch.setattr(telegram_notify.httpx, "AsyncClient", BoomClient)
+    assert await telegram_notify.send_company_message("hi") is False
