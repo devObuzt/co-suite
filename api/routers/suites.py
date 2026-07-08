@@ -16,6 +16,7 @@ from ..services.content_rules import (
     normalize_content_rules,
     suggest_rules_from_feedback,
 )
+from ..services.suite_access import require_suite_access
 from ..services.suite_memory import build_suite_memory_v0, merge_suite_brand
 
 router = APIRouter(prefix="/suites", tags=["suites"])
@@ -136,12 +137,7 @@ async def get_suite(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Suite).where(Suite.id == suite_id))
-    suite = result.scalar_one_or_none()
-    if not suite:
-        raise HTTPException(status_code=404, detail="Suite not found")
-    if suite.owner_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    suite = await require_suite_access(db, suite_id, current_user)
     return serialize_suite(suite)
 
 

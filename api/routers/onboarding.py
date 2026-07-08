@@ -13,6 +13,7 @@ from ..models.suite import Suite, SuiteStatus
 from ..services.brand_ai import extract_brand_from_sources, suggest_brand_identity, suggest_brand_assets
 from ..services.media_storage import r2_configured, store_brand_asset
 from ..services.strategy_generator import generate_strategy as _generate_strategy
+from ..services.suite_access import require_suite_access
 
 log = logging.getLogger(__name__)
 
@@ -76,10 +77,7 @@ async def extract_brand(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Suite).where(Suite.id == data.suite_id))
-    suite = result.scalar_one_or_none()
-    if not suite or suite.owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Suite not found")
+    suite = await require_suite_access(db, data.suite_id, current_user)
 
     # Filter empty strings
     urls = [u.strip() for u in data.urls if u.strip()]
@@ -163,10 +161,7 @@ async def save_brand(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Suite).where(Suite.id == data.suite_id))
-    suite = result.scalar_one_or_none()
-    if not suite or suite.owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Suite not found")
+    suite = await require_suite_access(db, data.suite_id, current_user)
 
     suite.brand = data.brand
     suite.status = SuiteStatus.active
@@ -180,10 +175,7 @@ async def generate_strategy_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Suite).where(Suite.id == data.suite_id))
-    suite = result.scalar_one_or_none()
-    if not suite or suite.owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Suite not found")
+    suite = await require_suite_access(db, data.suite_id, current_user)
 
     brand = dict(suite.brand or {})
 
@@ -232,10 +224,7 @@ async def save_brand_step(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Suite).where(Suite.id == data.suite_id))
-    suite = result.scalar_one_or_none()
-    if not suite or suite.owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Suite not found")
+    suite = await require_suite_access(db, data.suite_id, current_user)
 
     brand = dict(suite.brand) if suite.brand else {}
     brand.update(data.data)
@@ -255,10 +244,7 @@ async def upload_brand_asset(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a logo or font file to R2, save URL to brand."""
-    result = await db.execute(select(Suite).where(Suite.id == suite_id))
-    suite = result.scalar_one_or_none()
-    if not suite or suite.owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Suite not found")
+    suite = await require_suite_access(db, suite_id, current_user)
 
     if not r2_configured():
         raise HTTPException(status_code=400, detail="Storage not configured")
@@ -361,10 +347,7 @@ async def generate_brand_assets_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Suite).where(Suite.id == data.suite_id))
-    suite = result.scalar_one_or_none()
-    if not suite or suite.owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Suite not found")
+    suite = await require_suite_access(db, data.suite_id, current_user)
 
     brand = dict(suite.brand) if suite.brand else {}
     brand["logo_style"] = data.logo_style

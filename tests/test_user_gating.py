@@ -75,3 +75,69 @@ def test_prefix_matching_respects_path_segments():
     assert not frozen_path_allowed("funnel", "GET", "/api/v1/onboardingv2/x")
     assert frozen_path_allowed("frozen", "GET", "/api/v1/auth/me")
     assert frozen_path_allowed("funnel", "GET", "/api/v1/suites")
+
+
+from unittest.mock import AsyncMock
+
+from fastapi import HTTPException
+
+from api.services.suite_access import require_suite_access
+
+
+class _Result:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+class AccessDb:
+    """Feeds require_suite_access's three sequential queries: suite, member, lead."""
+
+    def __init__(self, suite=None, member=None, lead=None):
+        self._answers = [suite, member, lead]
+        self._i = 0
+
+    async def execute(self, _query):
+        value = self._answers[min(self._i, len(self._answers) - 1)]
+        self._i += 1
+        return _Result(value)
+
+
+def _user(uid="u1", status="approved"):
+    from api.models.user import User
+    return User(id=uid, email=f"{uid}@x.com", full_name=uid, hashed_password="h", approval_status=status)
+
+
+def _suite(owner="owner-1", sid="s1"):
+    from api.models.suite import Suite
+    return Suite(id=sid, owner_id=owner, name="S", slug="s")
+
+
+@pytest.mark.asyncio
+async def test_member_gets_access_when_not_owner():
+    from api.models.suite import SuiteMember
+    db = AccessDb(suite=_suite(), member=SuiteMember(id="m1", suite_id="s1", user_id="u1"))
+    suite = await require_suite_access(db, "s1", _user())
+    assert suite.id == "s1"
+
+
+@pytest.mark.asyncio
+async def test_stranger_gets_404():
+    db = AccessDb(suite=_suite(), member=None)
+    with pytest.raises(HTTPException) as exc:
+        await require_suite_access(db, "s1", _user())
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_funnel_user_restricted_to_lead_suite():
+    from api.models.suite import SuiteMember
+    from api.models.services_catalog import Lead
+    member = SuiteMember(id="m1", suite_id="s1", user_id="u1")
+    other_lead = Lead(id="l1", user_id="u1", full_name="A", email="a@b.c", phone="0", suite_id="different-suite")
+    db = AccessDb(suite=_suite(), member=member, lead=other_lead)
+    with pytest.raises(HTTPException) as exc:
+        await require_suite_access(db, "s1", _user(status="funnel"))
+    assert exc.value.status_code == 403

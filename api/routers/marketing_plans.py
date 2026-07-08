@@ -44,6 +44,7 @@ from ..services.marketing_plan_generator import (
 from ..services.marketing_plan_pdf import build_marketing_plan_pdf
 from ..services.marketing_plan_visuals import deck_visuals, ensure_marketing_plan_visuals
 from ..services.multi_scraper import search_web
+from ..services.suite_access import require_suite_access
 
 router = APIRouter(tags=["marketing-plans"])
 
@@ -147,11 +148,7 @@ class MarketingPlanUnlockRequest(BaseModel):
 
 
 async def get_owned_suite(db: AsyncSession, suite_id: str, user: User) -> Suite:
-    result = await db.execute(select(Suite).where(Suite.id == suite_id, Suite.owner_id == user.id))
-    suite = result.scalar_one_or_none()
-    if not suite:
-        raise HTTPException(status_code=404, detail="Suite not found")
-    return suite
+    return await require_suite_access(db, suite_id, user)
 
 
 def _strategy(suite: Suite) -> dict[str, Any]:
