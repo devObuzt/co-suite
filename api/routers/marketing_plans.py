@@ -1111,7 +1111,13 @@ def _serpapi_competitors_from_payload(payload: dict[str, Any], result_type: str,
         if not isinstance(raw, dict):
             continue
         title = str(raw.get("title") or raw.get("name") or "").strip()
-        url = str(raw.get("link") or raw.get("website") or raw.get("url") or raw.get("place_id_search") or "").strip()
+        url = str(raw.get("link") or raw.get("website") or raw.get("url") or "").strip()
+        if "serpapi.com" in url:
+            url = ""
+        if result_type == "maps" and not url:
+            place_id = str(raw.get("place_id") or "").strip()
+            if place_id:
+                url = f"https://www.google.com/maps/place/?q=place_id:{place_id}"
         snippet = str(raw.get("snippet") or raw.get("description") or raw.get("address") or raw.get("type") or "").strip()
         if not title and not url:
             continue

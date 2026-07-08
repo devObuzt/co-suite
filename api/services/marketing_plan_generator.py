@@ -460,6 +460,10 @@ def _normalize_competitor(raw: Any, index: int) -> dict[str, Any] | None:
     url = str(raw.get("url") or raw.get("link") or raw.get("profile_url") or raw.get("website") or "").strip()
     if not name and not url:
         return None
+    # AI research sometimes invents placeholder entries ("اسم المنافس غير معروف",
+    # "Unknown competitor") with no link — they are noise, drop them.
+    if not url and re.search(r"غير معروف|غير معروفة|unknown|לא ידוע|not known", name, re.IGNORECASE):
+        return None
     platform = str(raw.get("platform") or raw.get("source") or "").strip().lower()
     if not platform:
         if "instagram.com" in url:
