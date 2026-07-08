@@ -26,3 +26,7 @@ api/.env
 .claude/worktrees/
 
 # Web (separate git repo — tracked separately)
+.gstack/
+
+# Telegram owner-feedback poll state (local offset, not shared)
+docs/software-company/owner-feedback/state.json

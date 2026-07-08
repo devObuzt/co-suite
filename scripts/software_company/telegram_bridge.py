@@ -8,6 +8,7 @@ configuration from environment variables at runtime.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,10 @@ from urllib import error, parse, request
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OWNER_REVIEW_DIR = REPO_ROOT / "docs" / "software-company" / "owner review"
+OWNER_FEEDBACK_DIR = REPO_ROOT / "docs" / "software-company" / "owner-feedback"
+OWNER_FEEDBACK_INBOX = OWNER_FEEDBACK_DIR / "inbox"
+OWNER_FEEDBACK_PROCESSED = OWNER_FEEDBACK_DIR / "processed"
+OWNER_FEEDBACK_STATE = OWNER_FEEDBACK_DIR / "state.json"
 
 TOPIC_ENV_KEYS = {
     "owner-review": "TELEGRAM_TOPIC_OWNER_REVIEW",
@@ -72,8 +77,11 @@ def telegram_request(method: str, payload: dict[str, Any] | None = None) -> dict
     return parsed
 
 
-def get_updates(limit: int) -> list[dict[str, Any]]:
-    query = parse.urlencode({"limit": limit, "allowed_updates": json.dumps(["message"])})
+def get_updates(limit: int, offset: int | None = None) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"limit": limit, "allowed_updates": json.dumps(["message"])}
+    if offset is not None:
+        params["offset"] = offset
+    query = parse.urlencode(params)
     url = f"{telegram_api_url('getUpdates')}?{query}"
     try:
         with request.urlopen(url, timeout=20) as response:
@@ -157,6 +165,10 @@ def topic_id_for(topic: str | None) -> int | None:
 
 
 def send_message(text: str, topic: str | None = None, dry_run: bool = False) -> int:
+    # Telegram sendMessage hard limit is 4096 chars.
+    if len(text) > 4000:
+        text = text[:3900].rstrip() + "\n\n...trimmed for Telegram..."
+
     payload: dict[str, Any] = {
         "chat_id": env("TELEGRAM_COMPANY_CHAT_ID"),
         "text": text,
@@ -202,6 +214,135 @@ def send_owner_review(project: str | None, dry_run: bool) -> int:
     return send_message(message, topic="owner-review", dry_run=dry_run)
 
 
+def topic_name_for_thread(thread_id: str) -> str:
+    if not thread_id:
+        return "main-chat"
+    for name, env_key in TOPIC_ENV_KEYS.items():
+        if os.environ.get(env_key, "").strip() == thread_id:
+            return name
+    return f"thread-{thread_id}"
+
+
+def extract_owner_notes(updates: list[dict[str, Any]], chat_id: str) -> list[dict[str, Any]]:
+    """Keep human-authored text messages from the company chat.
+
+    Bot messages, other chats, empty messages, and slash commands (topic-setup
+    noise like /topic_qa) are dropped.
+    """
+    notes: list[dict[str, Any]] = []
+    for update in updates:
+        message = update.get("message") or {}
+        chat = message.get("chat") or {}
+        sender = message.get("from") or {}
+
+        if str(chat.get("id", "")) != chat_id:
+            continue
+        if sender.get("is_bot"):
+            continue
+
+        text = str(message.get("text") or message.get("caption") or "").strip()
+        if not text or text.startswith("/"):
+            continue
+
+        reply = message.get("reply_to_message") or {}
+        reply_text = str(reply.get("text") or reply.get("caption") or "").strip()
+
+        notes.append(
+            {
+                "update_id": int(update.get("update_id", 0)),
+                "message_id": int(message.get("message_id", 0)),
+                "date": int(message.get("date", 0)),
+                "thread_id": str(message.get("message_thread_id") or ""),
+                "sender": str(sender.get("username") or sender.get("first_name") or "owner"),
+                "text": text,
+                "reply_excerpt": reply_text[:300],
+            }
+        )
+    return notes
+
+
+def note_filename(note: dict[str, Any]) -> str:
+    stamp = datetime.fromtimestamp(note["date"]).strftime("%Y-%m-%d_%H-%M-%S")
+    return f"{stamp}_update-{note['update_id']}.md"
+
+
+def format_note(note: dict[str, Any]) -> str:
+    stamp = datetime.fromtimestamp(note["date"]).strftime("%Y-%m-%d %H:%M:%S")
+    topic = topic_name_for_thread(note["thread_id"])
+    lines = [
+        f"# Owner note {note['update_id']}",
+        "",
+        f"- Date: {stamp}",
+        f"- Topic: {topic}",
+        f"- From: {note['sender']}",
+        "- Status: new",
+    ]
+    if note["reply_excerpt"]:
+        lines += ["", "## In reply to", "", "> " + note["reply_excerpt"].replace("\n", "\n> ")]
+    lines += ["", "## Note", "", note["text"], ""]
+    return "\n".join(lines)
+
+
+def load_feedback_state() -> dict[str, Any]:
+    if OWNER_FEEDBACK_STATE.exists():
+        try:
+            return dict(json.loads(OWNER_FEEDBACK_STATE.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_feedback_state(state: dict[str, Any]) -> None:
+    OWNER_FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
+    OWNER_FEEDBACK_STATE.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def known_update_ids() -> set[int]:
+    ids: set[int] = set()
+    for directory in (OWNER_FEEDBACK_INBOX, OWNER_FEEDBACK_PROCESSED):
+        if not directory.exists():
+            continue
+        for path in directory.glob("*_update-*.md"):
+            try:
+                ids.add(int(path.stem.rsplit("update-", 1)[1]))
+            except (IndexError, ValueError):
+                continue
+    return ids
+
+
+def fetch_notes(limit: int, dry_run: bool) -> int:
+    chat_id = env("TELEGRAM_COMPANY_CHAT_ID")
+    state = load_feedback_state()
+    offset = state.get("next_offset")
+
+    updates = get_updates(limit, offset=offset)
+    notes = extract_owner_notes(updates, chat_id)
+    known = known_update_ids()
+    new_notes = [note for note in notes if note["update_id"] not in known]
+
+    if dry_run:
+        print(json.dumps(new_notes, ensure_ascii=False, indent=2))
+        return 0
+
+    if updates:
+        state["next_offset"] = max(int(u.get("update_id", 0)) for u in updates) + 1
+        save_feedback_state(state)
+
+    if not new_notes:
+        print("No new owner notes.")
+        return 0
+
+    OWNER_FEEDBACK_INBOX.mkdir(parents=True, exist_ok=True)
+    for note in new_notes:
+        path = OWNER_FEEDBACK_INBOX / note_filename(note)
+        path.write_text(format_note(note), encoding="utf-8")
+        print(f"=== {path} ===")
+        print(format_note(note))
+
+    print(f"Saved {len(new_notes)} new owner note(s) to {OWNER_FEEDBACK_INBOX}")
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -210,13 +351,21 @@ def parse_args() -> argparse.Namespace:
     updates.add_argument("--limit", type=int, default=100)
 
     send = subparsers.add_parser("send", help="Send a text message to the company group/topic")
-    send.add_argument("text")
+    send.add_argument("text", nargs="?", default=None)
+    send.add_argument("--file", default=None, help="Read the message text from a file instead")
     send.add_argument("--topic", choices=sorted(TOPIC_ENV_KEYS), default=None)
     send.add_argument("--dry-run", action="store_true")
 
     review = subparsers.add_parser("send-owner-review", help="Send the latest owner-review report")
     review.add_argument("--project", default=None)
     review.add_argument("--dry-run", action="store_true")
+
+    fetch = subparsers.add_parser(
+        "fetch-notes",
+        help="Pull owner replies/notes from Telegram into docs/software-company/owner-feedback/inbox",
+    )
+    fetch.add_argument("--limit", type=int, default=100)
+    fetch.add_argument("--dry-run", action="store_true")
 
     return parser.parse_args()
 
@@ -227,9 +376,18 @@ def main() -> int:
         if args.command == "updates":
             return print_updates(args.limit)
         if args.command == "send":
-            return send_message(args.text, topic=args.topic, dry_run=args.dry_run)
+            if args.file:
+                text = Path(args.file).read_text(encoding="utf-8").strip()
+            elif args.text is not None:
+                text = args.text
+            else:
+                print("Provide message text or --file", file=sys.stderr)
+                return 2
+            return send_message(text, topic=args.topic, dry_run=args.dry_run)
         if args.command == "send-owner-review":
             return send_owner_review(args.project, dry_run=args.dry_run)
+        if args.command == "fetch-notes":
+            return fetch_notes(args.limit, dry_run=args.dry_run)
     except TelegramConfigError as exc:
         print(str(exc), file=sys.stderr)
         return 2
