@@ -15,6 +15,7 @@ class SignupRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: str
+    phone: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -38,6 +39,7 @@ async def signup(data: SignupRequest, request: Request, db: AsyncSession = Depen
         email=data.email,
         hashed_password=hash_password(data.password),
         full_name=data.full_name,
+        phone=(data.phone or "").strip() or None,
     )
     if data.email.strip().lower() == settings.admin_email.strip().lower():
         user.is_super_admin = True

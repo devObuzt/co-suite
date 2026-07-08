@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Optional
 from sqlalchemy import String, DateTime, Boolean, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..core.database import Base
@@ -15,6 +16,10 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     is_super_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # approved | frozen | funnel — anything but "approved" is blocked from the
+    # product API (see core.security.frozen_path_allowed)
+    approval_status: Mapped[str] = mapped_column(String, default="frozen", server_default="frozen", nullable=False)
+    phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

@@ -98,6 +98,9 @@ async def startup():
                     "CREATE INDEX IF NOT EXISTS ix_creative_assets_active ON creative_assets (active)",
                     "CREATE INDEX IF NOT EXISTS ix_creative_assets_created_at ON creative_assets (created_at)",
                     "CREATE INDEX IF NOT EXISTS ix_creative_assets_created_by_user_id ON creative_assets (created_by_user_id)",
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS approval_status VARCHAR DEFAULT 'frozen' NOT NULL",
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR",
+                    "UPDATE users SET approval_status = 'approved' WHERE lower(email) IN ('w.sholy@gmail.com', 'admin@connec.co.il') OR is_super_admin = TRUE",
                 ):
                     await conn.execute(text(statement))
         except Exception as e:

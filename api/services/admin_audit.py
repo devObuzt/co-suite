@@ -27,9 +27,11 @@ def serialize_user_public(user: User) -> dict[str, Any]:
         "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
+        "phone": user.phone,
         "is_active": bool(user.is_active),
         "is_verified": bool(user.is_verified),
         "is_super_admin": bool(user.is_super_admin),
+        "approval_status": user.approval_status or "frozen",
         "created_at": user.created_at,
         "updated_at": user.updated_at,
     }
