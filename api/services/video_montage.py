@@ -1763,6 +1763,7 @@ async def build_remotion_scene_manifest(
             "fontFamily": "ConnecAssistant",
             "arabicFontFamily": "ConnecCairo",
             "subjectZoom": max(1.0, min(3.0, float(input_data.get("zoom") or 1.0))),
+            "brandColor": "#%02x%02x%02x" % brand_primary_color(suite),
             "subjectOffsetXPct": max(-40.0, min(40.0, float(input_data.get("subject_offset_x") or 0.0))),
             "subjectOffsetYPct": max(-40.0, min(40.0, float(input_data.get("subject_offset_y") or 0.0))),
             "captionScale": caption_scale,
