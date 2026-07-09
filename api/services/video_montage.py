@@ -1618,6 +1618,13 @@ async def build_remotion_scene_manifest(
         asset for asset in active_assets
         if asset.kind == "transition_video" and ("portrait" in [str(tag).lower() for tag in (asset.tags or [])] or "9:16" in str(asset.metadata_json or {}))
     ] or [asset for asset in active_assets if asset.kind == "transition_video"]
+    # Deterministic per-render shuffle: without it every video walks the same
+    # usage-ordered transition sequence and reads as "the same transition".
+    render_shuffle_seed = zlib.crc32(str(work_dir).encode("utf-8"))
+    transition_video_assets = sorted(
+        transition_video_assets,
+        key=lambda asset: zlib.crc32(f"{render_shuffle_seed}-{asset.id}".encode("utf-8")),
+    )
     sfx_assets = [asset for asset in active_assets if asset.kind == "sfx"] if music_enabled else []
     music_path = sound_dir / "marketing-upbeat-bed.wav"
     whoosh_path = sound_dir / "soft-whoosh.wav"
@@ -1651,7 +1658,7 @@ async def build_remotion_scene_manifest(
                     {
                         "publicPath": public_path,
                         "at": round(start, 3),
-                        "duration": min(1.2, max(0.35, float(visual_asset.duration_seconds or 0.7))),
+                        "duration": min(0.9, max(0.35, float(visual_asset.duration_seconds or 0.7))),
                         # Music/SFX off keeps the visual transition but mutes
                         # the clip's embedded sound.
                         "volume": 0.35 if music_enabled else 0.0,
