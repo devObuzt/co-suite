@@ -240,21 +240,28 @@ def filter_assets_for_backgrounds_mode(
     *,
     mode: str,
     suite_id: str | None,
+    selected_ids: list[str] | set[str] | None = None,
 ) -> tuple[list[CreativeAsset], bool]:
-    """Apply the job's backgrounds_mode to the candidate asset pool.
+    """Apply the job's backgrounds_mode + explicit selection to the asset pool.
 
-    Returns ``(assets, allow_generated_backgrounds)``. In every mode:
+    Returns ``(assets, allow_generated_backgrounds)``. Uploads are a LIBRARY:
+    a user-uploaded background participates in a render ONLY when its id is in
+    this job's ``selected_ids``. No selection (empty/None) means every user
+    upload is excluded and the render behaves as if the feature didn't exist
+    (generated/library backgrounds only). In every mode:
 
     - user uploads belonging to a DIFFERENT suite are hard-excluded — another
       client's media must never even be scoreable for this suite's videos;
     - user uploads flagged as screen recordings / UI / burned-in text are
       quality-excluded from the visual pool (logged).
 
-    In ``user_only`` mode (and only when the suite actually has usable user
-    uploads) visual candidates are additionally restricted to the user's own
+    In ``user_only`` mode (and only when the job actually selected usable user
+    uploads) visual candidates are additionally restricted to the selected
     backgrounds and AI background generation is disabled; audio/transition
-    assets always pass through untouched.
+    assets always pass through untouched. ``user_only`` without a usable
+    selection falls back to the default generated/blend behaviour.
     """
+    selection = {str(item) for item in (selected_ids or []) if str(item).strip()}
     kept: list[CreativeAsset] = []
     for asset in assets:
         if asset.kind not in VISUAL_KINDS or not is_user_uploaded_asset(asset):
@@ -265,6 +272,13 @@ def filter_assets_for_backgrounds_mode(
                 "Excluding foreign-suite user background %s (asset suite %s, montage suite %s) from candidate pool",
                 asset.id,
                 _asset_suite_id(asset),
+                suite_id,
+            )
+            continue
+        if str(asset.id) not in selection:
+            log.info(
+                "Excluding user background %s for suite %s: not selected for this job (library-only upload)",
+                asset.id,
                 suite_id,
             )
             continue

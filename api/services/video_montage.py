@@ -639,6 +639,26 @@ def resolve_backgrounds_mode(input_data: dict[str, Any]) -> str:
     return mode if mode in BACKGROUNDS_MODES else "blend"
 
 
+# The Arabic result warning shown when a job asked for user_only backgrounds
+# but selected zero backgrounds for it — the render falls back to generated.
+USER_ONLY_WITHOUT_SELECTION_WARNING = (
+    "اخترت وضع خلفياتي فقط بدون اختيار خلفيات — استُخدمت الخلفيات المولّدة"
+)
+
+
+def selected_background_asset_ids(input_data: dict[str, Any], *, max_items: int = 20) -> list[str]:
+    """The job's explicitly selected user-background asset ids (possibly [])."""
+    raw = input_data.get("background_asset_ids")
+    if not isinstance(raw, list):
+        return []
+    ids: list[str] = []
+    for item in raw[:max_items]:
+        value = str(item or "").strip()
+        if value and value not in ids:
+            ids.append(value)
+    return ids
+
+
 def resolve_scene_background_video(
     picked: CreativeAsset | None,
     *,
@@ -1424,17 +1444,22 @@ async def build_remotion_scene_manifest(
             )
         active_assets = available_assets
     backgrounds_mode = resolve_backgrounds_mode(input_data)
+    background_asset_ids = selected_background_asset_ids(input_data)
     active_assets, allow_generated_backgrounds = filter_assets_for_backgrounds_mode(
-        active_assets, mode=backgrounds_mode, suite_id=suite.id
+        active_assets,
+        mode=backgrounds_mode,
+        suite_id=suite.id,
+        selected_ids=background_asset_ids,
     )
     if not allow_generated_backgrounds:
         log_event(
             log,
             logging.INFO,
-            "Montage backgrounds restricted to user uploads (user_only mode).",
+            "Montage backgrounds restricted to the job's selected user uploads (user_only mode).",
             event="montage_backgrounds_mode",
             suite_id=suite.id,
             backgrounds_mode=backgrounds_mode,
+            selected_background_ids=background_asset_ids,
             user_asset_count=len([asset for asset in active_assets if asset.kind in VISUAL_KINDS]),
         )
     selected_asset_ids: list[str] = []
@@ -1746,6 +1771,7 @@ async def build_remotion_scene_manifest(
             "showTitles": show_titles,
             "subjectHasAlpha": subject_has_alpha,
             "backgroundsMode": backgrounds_mode,
+            "selectedBackgroundAssetIds": background_asset_ids,
             "generatedBackgroundsAllowed": allow_generated_backgrounds,
             "voiceCleanupApplied": bool(voice_cleanup and has_source_audio),
             "timingSource": "non_silent_segments" if timing_segments and len(timing_segments) > 1 else "transcript_or_timed_split",
@@ -2408,6 +2434,19 @@ async def generate_video_montage_for_suite(
         )
         if notes_analysis is not None:
             result["notes_analysis"] = notes_analysis
+        if resolve_backgrounds_mode(input_data) == "user_only" and not selected_background_asset_ids(input_data):
+            # user_only without an explicit selection: the render already fell
+            # back to generated backgrounds, and the result must say so.
+            log_event(
+                log,
+                logging.WARNING,
+                "Video montage pipeline fell back.",
+                event="video_montage_fallback",
+                job_id=job_id,
+                suite_id=suite.id,
+                reason=USER_ONLY_WITHOUT_SELECTION_WARNING,
+            )
+            result["backgrounds_warning"] = USER_ONLY_WITHOUT_SELECTION_WARNING
     except Exception as exc:
         log_event(
             log,

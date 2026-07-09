@@ -1,7 +1,11 @@
 """User-uploaded montage backgrounds: vocabulary, analysis parsing, priority, modes."""
 import json
 
+import pytest
+from fastapi import HTTPException
+
 from api.models.admin import CreativeAsset
+from api.routers.video_montage import keep_valid_background_assets, parse_background_asset_ids
 from api.services import user_backgrounds
 from api.services.creative_assets import (
     filter_assets_for_backgrounds_mode,
@@ -18,7 +22,7 @@ from api.services.user_backgrounds import (
     normalize_analysis_tags,
     parse_analysis_json,
 )
-from api.services.video_montage import resolve_backgrounds_mode
+from api.services.video_montage import resolve_backgrounds_mode, selected_background_asset_ids
 
 
 def make_asset(
@@ -29,6 +33,7 @@ def make_asset(
     user_uploaded: bool = False,
     asset_id: str = "asset-1",
     analysis: dict | None = None,
+    active: bool = True,
 ) -> CreativeAsset:
     metadata: dict = {}
     if suite_id:
@@ -47,7 +52,7 @@ def make_asset(
         metadata_json=metadata,
         usage_count=0,
         last_used_at=None,
-        active=True,
+        active=active,
     )
 
 
@@ -219,7 +224,7 @@ def test_resolve_backgrounds_mode_defaults_and_validates():
     assert resolve_backgrounds_mode({"backgrounds_mode": "nonsense"}) == "blend"
 
 
-def test_user_only_mode_restricts_visuals_and_disables_generation():
+def test_user_only_mode_restricts_visuals_to_selected_and_disables_generation():
     suite_id = "suite-1"
     user_image = make_asset(asset_id="user-img", suite_id=suite_id, user_uploaded=True)
     generated = make_asset(asset_id="generated", suite_id=suite_id)
@@ -227,7 +232,10 @@ def test_user_only_mode_restricts_visuals_and_disables_generation():
     music = make_asset(asset_id="music", kind="music")
 
     filtered, allow_generation = filter_assets_for_backgrounds_mode(
-        [user_image, generated, library_video, music], mode="user_only", suite_id=suite_id
+        [user_image, generated, library_video, music],
+        mode="user_only",
+        suite_id=suite_id,
+        selected_ids=["user-img"],
     )
 
     assert allow_generation is False
@@ -244,15 +252,104 @@ def test_user_only_mode_falls_back_to_blend_without_user_uploads():
     assert filtered == [generated]
 
 
-def test_blend_mode_keeps_everything_and_allows_generation():
+def test_blend_mode_keeps_selected_uploads_and_allows_generation():
     suite_id = "suite-1"
     user_image = make_asset(asset_id="user-img", suite_id=suite_id, user_uploaded=True)
     library_video = make_asset(asset_id="lib-video", kind="visual_video")
     filtered, allow_generation = filter_assets_for_backgrounds_mode(
-        [user_image, library_video], mode="blend", suite_id=suite_id
+        [user_image, library_video], mode="blend", suite_id=suite_id, selected_ids=["user-img"]
     )
     assert allow_generation is True
     assert filtered == [user_image, library_video]
+
+
+# --- Per-job selection: uploads are a library, only selected ids participate ---
+
+
+def test_only_selected_user_uploads_participate_in_blend():
+    suite_id = "suite-1"
+    selected = make_asset(asset_id="selected", suite_id=suite_id, user_uploaded=True)
+    unselected = make_asset(asset_id="unselected", suite_id=suite_id, user_uploaded=True)
+    library = make_asset(asset_id="library", kind="visual_video")
+
+    filtered, allow_generation = filter_assets_for_backgrounds_mode(
+        [selected, unselected, library], mode="blend", suite_id=suite_id, selected_ids=["selected"]
+    )
+    assert allow_generation is True
+    assert {asset.id for asset in filtered} == {"selected", "library"}
+
+
+def test_empty_selection_excludes_all_user_uploads_in_every_mode():
+    suite_id = "suite-1"
+    user_a = make_asset(asset_id="user-a", suite_id=suite_id, user_uploaded=True)
+    user_b = make_asset(asset_id="user-b", kind="visual_video", suite_id=suite_id, user_uploaded=True)
+    generated = make_asset(asset_id="generated", suite_id=suite_id)
+    music = make_asset(asset_id="music", kind="music")
+
+    for mode in ("blend", "user_only"):
+        for selection in (None, []):
+            filtered, allow_generation = filter_assets_for_backgrounds_mode(
+                [user_a, user_b, generated, music], mode=mode, suite_id=suite_id, selected_ids=selection
+            )
+            assert allow_generation is True, f"mode={mode} selection={selection} must fall back to generated"
+            assert {asset.id for asset in filtered} == {"generated", "music"}
+
+
+def test_user_only_with_selection_of_unusable_upload_falls_back_to_generated():
+    suite_id = "suite-1"
+    screen = make_asset(
+        asset_id="screen",
+        suite_id=suite_id,
+        user_uploaded=True,
+        analysis={"description": "screenshot of a website", "tags": [], "has_text": False},
+    )
+    filtered, allow_generation = filter_assets_for_backgrounds_mode(
+        [screen], mode="user_only", suite_id=suite_id, selected_ids=["screen"]
+    )
+    assert allow_generation is True
+    assert filtered == []
+
+
+def test_selected_background_asset_ids_parses_job_input():
+    assert selected_background_asset_ids({}) == []
+    assert selected_background_asset_ids({"background_asset_ids": None}) == []
+    assert selected_background_asset_ids({"background_asset_ids": "not-a-list"}) == []
+    assert selected_background_asset_ids({"background_asset_ids": ["a", "b", "a", " ", 3]}) == ["a", "b", "3"]
+    many = [f"id-{index}" for index in range(30)]
+    assert len(selected_background_asset_ids({"background_asset_ids": many})) == 20
+
+
+# --- Router: selection parsing + validation helpers ----------------------------
+
+
+def test_parse_background_asset_ids_accepts_json_list_and_dedupes():
+    assert parse_background_asset_ids(None) == []
+    assert parse_background_asset_ids("") == []
+    assert parse_background_asset_ids("[]") == []
+    assert parse_background_asset_ids('["a", " b ", "a", ""]') == ["a", "b"]
+    many = json.dumps([f"id-{index}" for index in range(30)])
+    assert len(parse_background_asset_ids(many)) == 20
+
+
+def test_parse_background_asset_ids_rejects_bad_payloads():
+    with pytest.raises(HTTPException):
+        parse_background_asset_ids("{not json")
+    with pytest.raises(HTTPException):
+        parse_background_asset_ids('{"a": 1}')
+
+
+def test_keep_valid_background_assets_silently_drops_invalid_ids():
+    suite_id = "suite-1"
+    valid = make_asset(asset_id="valid", suite_id=suite_id, user_uploaded=True)
+    valid_video = make_asset(asset_id="valid-video", kind="visual_video", suite_id=suite_id, user_uploaded=True)
+    inactive = make_asset(asset_id="inactive", suite_id=suite_id, user_uploaded=True, active=False)
+    foreign = make_asset(asset_id="foreign", suite_id="other-suite", user_uploaded=True)
+    generated = make_asset(asset_id="generated", suite_id=suite_id)  # not user_uploaded
+    music = make_asset(asset_id="music", kind="music", suite_id=suite_id, user_uploaded=True)
+
+    requested = ["valid", "missing", "inactive", "foreign", "generated", "music", "valid-video"]
+    rows = [valid, valid_video, inactive, foreign, generated, music]
+    assert keep_valid_background_assets(requested, rows, suite_id=suite_id) == ["valid", "valid-video"]
 
 
 def test_has_user_background_match_gates_hero_generation():
@@ -281,7 +378,10 @@ def test_filter_hard_excludes_foreign_suite_user_uploads_in_every_mode():
 
     for mode in ("blend", "user_only"):
         filtered, _ = filter_assets_for_backgrounds_mode(
-            [foreign_user, own_user, library, music], mode=mode, suite_id=suite_id
+            [foreign_user, own_user, library, music],
+            mode=mode,
+            suite_id=suite_id,
+            selected_ids=["foreign", "own"],
         )
         ids = {asset.id for asset in filtered}
         assert "foreign" not in ids, f"foreign upload leaked through mode={mode}"
@@ -290,9 +390,12 @@ def test_filter_hard_excludes_foreign_suite_user_uploads_in_every_mode():
 
 
 def test_filter_excludes_unattributed_user_uploads():
-    # A user upload without suite metadata can't be proven to belong here.
+    # A user upload without suite metadata can't be proven to belong here,
+    # even when a job explicitly selects it.
     orphan_user = make_asset(asset_id="orphan", user_uploaded=True)
-    filtered, _ = filter_assets_for_backgrounds_mode([orphan_user], mode="blend", suite_id="suite-1")
+    filtered, _ = filter_assets_for_backgrounds_mode(
+        [orphan_user], mode="blend", suite_id="suite-1", selected_ids=["orphan"]
+    )
     assert filtered == []
 
 
@@ -358,13 +461,15 @@ def test_filter_quality_excludes_screen_recording_uploads_even_in_user_only():
     clean = make_asset(asset_id="clean", suite_id=suite_id, user_uploaded=True, tags=["nature"])
 
     filtered, allow_generation = filter_assets_for_backgrounds_mode(
-        [screen, clean], mode="user_only", suite_id=suite_id
+        [screen, clean], mode="user_only", suite_id=suite_id, selected_ids=["screen", "clean"]
     )
     assert allow_generation is False
     assert {asset.id for asset in filtered} == {"clean"}
 
-    # When ALL uploads are unusable, user_only falls back to generation.
-    filtered, allow_generation = filter_assets_for_backgrounds_mode([screen], mode="user_only", suite_id=suite_id)
+    # When ALL selected uploads are unusable, user_only falls back to generation.
+    filtered, allow_generation = filter_assets_for_backgrounds_mode(
+        [screen], mode="user_only", suite_id=suite_id, selected_ids=["screen"]
+    )
     assert allow_generation is True
     assert filtered == []
 

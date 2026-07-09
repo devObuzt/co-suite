@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import uuid
 from pathlib import Path
@@ -15,9 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import get_db
 from ..core.security import get_current_user
+from ..models.admin import CreativeAsset
 from ..models.generation_job import GenerationJob, GenerationJobType
 from ..models.suite import Suite
 from ..models.user import User
+from ..services.creative_assets import VISUAL_KINDS, is_user_uploaded_asset
 from ..services.generation_jobs import create_job, serialize_job
 from ..services.media_storage import r2_configured, upload_bytes
 from ..services.video_montage import (
@@ -28,6 +31,8 @@ from ..services.video_montage import (
     resolve_backgrounds_mode,
     safe_filename,
 )
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suites/{suite_id}/video-montage", tags=["video-montage"])
 
@@ -62,6 +67,11 @@ def job_input_summary(job: GenerationJob) -> dict[str, Any]:
         "notes": str(input_data.get("notes") or "") or None,
         "options": input_data.get("options") if isinstance(input_data.get("options"), list) else [],
         "backgrounds_mode": str(input_data.get("backgrounds_mode") or "") or None,
+        "background_asset_ids": (
+            input_data.get("background_asset_ids")
+            if isinstance(input_data.get("background_asset_ids"), list)
+            else []
+        ),
     }
 
 
@@ -75,6 +85,73 @@ def parse_options(options_json: str | None) -> list[str]:
     if not isinstance(parsed, list):
         raise HTTPException(status_code=400, detail="Options must be a list.")
     return [str(item)[:80] for item in parsed[:20] if str(item).strip()]
+
+
+def parse_background_asset_ids(raw_json: str | None, *, max_items: int = 20) -> list[str]:
+    """Parse the job's selected background asset ids (JSON array of strings)."""
+    if not raw_json:
+        return []
+    try:
+        parsed = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid background asset ids JSON.") from exc
+    if not isinstance(parsed, list):
+        raise HTTPException(status_code=400, detail="Background asset ids must be a list.")
+    ids: list[str] = []
+    for item in parsed[:max_items]:
+        value = str(item or "").strip()[:64]
+        if value and value not in ids:
+            ids.append(value)
+    return ids
+
+
+def keep_valid_background_assets(
+    requested_ids: list[str],
+    rows: list[CreativeAsset],
+    *,
+    suite_id: str,
+) -> list[str]:
+    """Silently keep only ids that are this suite's active user-uploaded visuals.
+
+    Invalid ids (missing, inactive, wrong kind, foreign suite, or not
+    user-uploaded) are dropped — the caller logs the rejects; the job never
+    fails over a stale selection.
+    """
+    by_id = {str(row.id): row for row in rows}
+    valid: list[str] = []
+    for asset_id in requested_ids:
+        row = by_id.get(asset_id)
+        metadata = row.metadata_json if row is not None and isinstance(row.metadata_json, dict) else {}
+        if (
+            row is None
+            or not row.active
+            or row.kind not in VISUAL_KINDS
+            or not is_user_uploaded_asset(row)
+            or str(metadata.get("suite_id") or "") != str(suite_id)
+        ):
+            continue
+        valid.append(asset_id)
+    return valid
+
+
+async def validate_background_asset_ids(
+    db: AsyncSession, suite_id: str, requested_ids: list[str]
+) -> list[str]:
+    if not requested_ids:
+        return []
+    rows = (
+        await db.execute(select(CreativeAsset).where(CreativeAsset.id.in_(requested_ids)))
+    ).scalars().all()
+    valid = keep_valid_background_assets(requested_ids, list(rows), suite_id=suite_id)
+    dropped = [asset_id for asset_id in requested_ids if asset_id not in valid]
+    if dropped:
+        log.warning(
+            "Dropping %s invalid background asset id(s) for suite %s montage job: %s",
+            len(dropped),
+            suite_id,
+            ", ".join(dropped),
+        )
+    return valid
 
 
 def parse_text_overrides(overrides_json: str | None, *, max_items: int = 18) -> list[str]:
@@ -218,6 +295,7 @@ async def create_video_montage_job(
     title_overrides_json: str = Form("[]"),
     notes: str = Form(""),
     backgrounds_mode: str = Form("blend"),
+    background_asset_ids_json: str = Form("[]"),
     zoom: str = Form("1"),
     subject_offset_x: str = Form("0"),
     subject_offset_y: str = Form("0"),
@@ -231,6 +309,9 @@ async def create_video_montage_job(
     options = parse_options(options_json)
     caption_overrides = parse_text_overrides(caption_overrides_json)
     title_overrides = parse_text_overrides(title_overrides_json)
+    background_asset_ids = await validate_background_asset_ids(
+        db, suite_id, parse_background_asset_ids(background_asset_ids_json)
+    )
     input_data: dict[str, Any] = {
         "mode": mode[:80],
         "source_url": source_url.strip()[:1500],
@@ -239,6 +320,9 @@ async def create_video_montage_job(
         "title_overrides": title_overrides,
         "notes": notes.strip()[:3000],
         "backgrounds_mode": resolve_backgrounds_mode({"backgrounds_mode": backgrounds_mode}),
+        # Uploads are a library: only the ids selected for THIS job may appear
+        # as backgrounds; [] means generated/library backgrounds only.
+        "background_asset_ids": background_asset_ids,
         "zoom": parse_zoom(zoom),
         "subject_offset_x": parse_offset(subject_offset_x),
         "subject_offset_y": parse_offset(subject_offset_y),
