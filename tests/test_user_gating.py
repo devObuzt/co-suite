@@ -160,10 +160,19 @@ def test_funnel_user_allowed_first_time_and_approved_always():
 
 def test_funnel_explicit_allowlist_blocks_cost_holes():
     assert not frozen_path_allowed("funnel", "DELETE", "/api/v1/suites/abc/marketing-plan")
-    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/competitors/generate")
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/keywords/generate-more")
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/competitors/generate-more")
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/demand-supply/generate-more")
     assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/social-content-plan/generate-items")
     # visuals/generate is allowed at the gate but budget-capped to 1 call per lead
     assert not frozen_path_allowed("funnel", "POST", "/api/v1/onboarding/anything-else")
+
+
+def test_funnel_allowlist_opens_marketing_plan_sections():
+    # The marketing-plan step generates section by section; each endpoint is
+    # cost-capped per lead via enforce_funnel_call_limit.
+    for section in ("keywords", "competitors", "demand-supply", "personas"):
+        assert frozen_path_allowed("funnel", "POST", f"/api/v1/suites/abc/marketing-plan/{section}/generate")
 
 
 def test_funnel_explicit_allowlist_keeps_wizard_open():

@@ -2318,6 +2318,7 @@ async def generate_marketing_competitors(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await enforce_funnel_call_limit(db, current_user, "marketing_competitors", 2)
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or GenerateMarketingPlanRequest()
     await _save_competitor_scratch_from_search(suite, request_data.language)
@@ -2529,6 +2530,7 @@ async def generate_marketing_keywords(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await enforce_funnel_call_limit(db, current_user, "marketing_keywords", 2)
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or MarketingStageRequest()
     output_language = infer_plan_language(suite, request_data.language)
@@ -2737,6 +2739,7 @@ async def generate_marketing_demand_supply(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await enforce_funnel_call_limit(db, current_user, "marketing_demand_supply", 2)
     return await _run_demand_supply_generation(suite_id, payload, current_user, db, more=False)
 
 
@@ -2757,6 +2760,8 @@ async def generate_marketing_personas(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Personas stream in batches of 2 up to 10, so the funnel cap covers one full run.
+    await enforce_funnel_call_limit(db, current_user, "marketing_personas", 6)
     suite = await get_owned_suite(db, suite_id, current_user)
     request_data = payload or MarketingStageRequest()
     output_language = infer_plan_language(suite, request_data.language)

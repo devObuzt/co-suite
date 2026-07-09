@@ -64,6 +64,12 @@ _FUNNEL_POST_PATTERNS = [
     for p in (
         r"^/api/v1/suites/[^/]+/marketing-plan/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/visuals/generate$",
+        # Marketing-plan page generates section by section; each endpoint is
+        # additionally cost-capped for funnel leads via enforce_funnel_call_limit.
+        r"^/api/v1/suites/[^/]+/marketing-plan/keywords/generate$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/competitors/generate$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/demand-supply/generate$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/personas/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/paid-content-plan/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/selection$",
