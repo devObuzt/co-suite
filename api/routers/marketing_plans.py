@@ -43,6 +43,7 @@ from ..services.marketing_plan_generator import (
 )
 from ..services.marketing_plan_pdf import build_marketing_plan_pdf
 from ..services.marketing_plan_visuals import deck_visuals, ensure_marketing_plan_visuals
+from ..services.meta_interests import match_meta_interests
 from ..services.funnel_guard import block_funnel_regeneration, enforce_funnel_call_limit
 from ..services.multi_scraper import search_web
 from ..services.suite_access import require_suite_access
@@ -1944,6 +1945,23 @@ async def _fetch_keyword_planner_ideas_logged(
         return result
 
 
+async def _social_demand_snapshot(suite: Suite) -> dict[str, Any]:
+    """Social-side demand: how many audience interests exist as Meta Ads
+    targeting interests, and how big their combined audience is."""
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    interests = [str(item).strip() for item in (brand.get("audience_interests") or []) if str(item).strip()]
+    if not interests:
+        return {"provider": "meta_ads_interest_search", "level": "UNKNOWN", "checked": 0, "matched": 0, "audience_size": 0, "matches": []}
+    english_terms = await _english_planner_terms(interests, 10)
+    snapshot = await match_meta_interests(english_terms or interests[:10])
+    if snapshot.get("level") == "UNKNOWN" and snapshot.get("internal_warning"):
+        # Meta unavailable — estimate from how rich the audience definition is.
+        log.error("Meta interest search unavailable for suite %s: %s", suite.id, snapshot.get("internal_warning"))
+        snapshot["level"] = "MEDIUM" if len(interests) >= 6 else "LOW"
+        snapshot["source"] = "estimate"
+    return snapshot
+
+
 async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None = None, more: bool = False) -> dict[str, Any]:
     output_language = infer_plan_language(suite, language)
     existing = _strategy(suite).get("marketing_intelligence")
@@ -2079,6 +2097,16 @@ async def _save_demand_supply_from_google_ads(suite: Suite, language: str | None
         "remaining_terms": remaining_terms,
         "last_seeds": {"keywords": selected_keywords, "services": selected_services},
     }
+    previous_social = previous.get("social") if isinstance(previous.get("social"), dict) else None
+    if more and previous_social and previous_social.get("matched"):
+        intelligence["demand_supply"]["social"] = previous_social
+    else:
+        try:
+            intelligence["demand_supply"]["social"] = await _social_demand_snapshot(suite)
+        except Exception as exc:  # social snapshot must never sink the Google side
+            log.error("Social demand snapshot failed for suite %s: %s", suite.id, exc)
+            if previous_social:
+                intelligence["demand_supply"]["social"] = previous_social
     return _save_marketing_intelligence(suite, intelligence)
 
 
