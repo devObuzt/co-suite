@@ -495,9 +495,9 @@ def _labels(language: str) -> dict[str, str]:
             "overview": "ملخص العرض",
             "services": "الخدمات / المنتجات",
             "keywords": "الكلمات المفتاحية",
-            "competitors": "المنافسون",
+            "competitors": "عينة من المنافسين",
             "demand": "العرض والطلب",
-            "personas": "شخصيات العملاء",
+            "personas": "عينة شخصيات محتملة من العملاء",
             "actions": "خطط العمل",
             "empty": "لم يتم توليد هذا القسم بعد.",
             "source": "المصدر",
@@ -601,9 +601,9 @@ def _labels(language: str) -> dict[str, str]:
             "overview": "תקציר",
             "services": "שירותים / מוצרים",
             "keywords": "מילות מפתח",
-            "competitors": "מתחרים",
+            "competitors": "מדגם מתחרים",
             "demand": "ביקוש והיצע",
-            "personas": "פרסונות לקוחות",
+            "personas": "דוגמת פרסונות לקוחות פוטנציאליים",
             "actions": "תכניות עבודה",
             "empty": "החלק הזה עדיין לא נוצר.",
             "source": "מקור",
@@ -706,9 +706,9 @@ def _labels(language: str) -> dict[str, str]:
         "overview": "Overview",
         "services": "Services / Products",
         "keywords": "Keywords",
-        "competitors": "Competitors",
+        "competitors": "A Sample of Competitors",
         "demand": "Demand and Supply",
-        "personas": "Customer Personas",
+        "personas": "Sample Potential Customer Personas",
         "actions": "Work Plans",
         "empty": "This section has not been generated yet.",
         "source": "Source",
@@ -1341,7 +1341,6 @@ def _deck_css(accent: str, rtl: bool) -> str:
     return f"""
 {_font_faces_css()}
 @page {{ size: 1280px 720px; margin: 0; }}
-@page content {{ margin: 44px 0; }}
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 html {{ background: #17171d; }}
 body {{
@@ -1351,8 +1350,10 @@ body {{
   font-size: 15px;
   line-height: 1.65;
 }}
-section {{ page: content; page-break-before: always; padding: 14px 68px 30px 68px; }}
-section.cover, section.divider {{ page: full-bleed; padding: 0; height: 720px; overflow: hidden; }}
+/* One section = exactly one slide: fixed height + hidden overflow means content
+   can never spill onto an untitled page; every slide starts with its header. */
+section {{ page-break-before: always; height: 720px; overflow: hidden; padding: 52px 68px 36px 68px; }}
+section.cover, section.divider {{ padding: 0; }}
 section:first-child {{ page-break-before: avoid; }}
 .kicker {{ color: {accent}; font-weight: 700; font-size: 15px; letter-spacing: 0.5px; margin-bottom: 4px; }}
 h2 {{ font-size: 40px; font-weight: 800; line-height: 1.25; margin-bottom: 6px; }}
@@ -1363,11 +1364,11 @@ h2 {{ font-size: 40px; font-weight: 800; line-height: 1.25; margin-bottom: 6px; 
   background: #212129; border-radius: 16px; padding: 18px 20px;
   margin: 0 0 14px 0; margin-inline-end: 14px;
   {accent_border}: 4px solid {accent};
-  page-break-inside: avoid;
+  page-break-inside: avoid; overflow: hidden;
 }}
 .card.wide {{ width: 545px; }}
-.card h3 {{ font-size: 18px; font-weight: 700; margin-bottom: 6px; color: #ffffff; }}
-.card p {{ color: #c3c3ce; font-size: 14px; line-height: 1.7; }}
+.card h3 {{ font-size: 18px; font-weight: 700; margin-bottom: 6px; color: #ffffff; overflow-wrap: break-word; }}
+.card p {{ color: #c3c3ce; font-size: 14px; line-height: 1.7; overflow-wrap: break-word; }}
 .chip {{
   display: inline-block; background: #23232b; color: #e9e9ef;
   border: 1px solid {accent}55; border-radius: 999px;
@@ -1472,38 +1473,53 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
         _card(labels["audience_demographics_language"], [_audience_demographic_summary(brand, labels), _audience_language_summary(brand, strategy, labels)]),
         _card(labels["audience_need"], [_audience_need_summary(brand, strategy, labels)]),
     ])
-    interests = _clean_list(brand.get("audience_interests"), 24)
-    behaviors = _clean_list(brand.get("audience_behaviors"), 24)
-    interest_chips = "".join(_chip(item) for item in interests)
-    behavior_chips = "".join(_chip(item) for item in behaviors)
-    audience_extra = ""
-    if interest_chips:
-        audience_extra += f'<h3 class="kicker" dir="auto">{escape(labels["audience_interests"])}</h3><div>{interest_chips}</div>'
-    if behavior_chips:
-        audience_extra += f'<h3 class="kicker" dir="auto">{escape(labels["audience_behaviors"])}</h3><div>{behavior_chips}</div>'
     sections.append(
         "<section>"
         + _section_header("02", labels["audience"], _label(labels, "audience_pitch", ""))
-        + f'<div class="cards">{audience_cards}</div>{audience_extra}</section>'
+        + f'<div class="cards">{audience_cards}</div></section>'
     )
+    # Interests and behaviors get their own titled chip slides — inlining them
+    # under the audience cards is what used to overflow onto untitled pages.
+    interests = _clean_list(brand.get("audience_interests"), 24)
+    behaviors = _clean_list(brand.get("audience_behaviors"), 24)
+    for chip_title_key, values in (("audience_interests", interests), ("audience_behaviors", behaviors)):
+        if not values:
+            continue
+        sections.extend(
+            _chunked_card_sections(
+                "02",
+                f"{labels['audience']} — {labels[chip_title_key]}",
+                "",
+                [_chip(item) for item in values],
+                per_page=18,
+                language=language,
+                container_class="chips",
+            )
+        )
 
     if visuals.get("audience"):
         sections.append(_divider_section(visuals["audience"], labels["audience"], _audience_need_summary(brand, strategy, labels)[:120]))
 
-    # 4. Services — all of them
+    # 4. Services — all of them, paginated
     services = _services(suite)
-    service_chips = "".join(_chip(item) for item in services) or _chip(labels["empty"])
-    sections.append(
-        "<section>"
-        + _section_header("03", labels["services"], _label(labels, "services_pitch", ""))
-        + f"<div>{service_chips}</div></section>"
+    service_chips = [_chip(item) for item in services] or [_chip(labels["empty"])]
+    sections.extend(
+        _chunked_card_sections(
+            "03",
+            labels["services"],
+            _label(labels, "services_pitch", ""),
+            service_chips,
+            per_page=21,
+            language=language,
+            container_class="chips",
+        )
     )
 
     if visuals.get("services"):
         sections.append(_divider_section(visuals["services"], labels["services"], suite_name))
 
     # 5. Market reading
-    market_cards = "".join(_card(title, lines) for title, lines in _market_insights(suite, intelligence, labels))
+    market_cards = "".join(_card(title, [_clamp_text(line, 140) for line in lines[:5]]) for title, lines in _market_insights(suite, intelligence, labels))
     sections.append(
         "<section>"
         + _section_header(labels["overview"], _label(labels, "market_reading", "Market reading"), _label(labels, "market_reading_subtitle", ""))
@@ -1521,7 +1537,7 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
                     f"{labels['keywords']} — {group_title} ({len(values)})",
                     helper,
                     chips,
-                    per_page=36,
+                    per_page=27,
                     language=language,
                     container_class="chips",
                 )
@@ -1542,9 +1558,9 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
         source_title = source.replace("_", " ").title()
         competitor_cards = [
             _card(
-                str(item.get("title") or item.get("name") or labels["empty"]),
+                _clamp_text(item.get("title") or item.get("name") or labels["empty"], 90),
                 [
-                    str(item.get("snippet") or item.get("description") or ""),
+                    _clamp_text(item.get("snippet") or item.get("description") or "", 160),
                     f"{labels['link']}: {_compact_url(item.get('url'), 60)}",
                 ],
                 extra_class="wide",
@@ -1590,12 +1606,12 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
             meta_bits = [str(persona.get("age") or "").strip(), str(persona.get("profession") or "").strip()]
             meta = " · ".join(bit for bit in meta_bits if bit)
             lines = [
-                str(persona.get("needs") or persona.get("need") or "").strip(),
-                str(persona.get("challenges") or persona.get("challenge") or "").strip(),
+                _clamp_text(persona.get("needs") or persona.get("need") or "", 170),
+                _clamp_text(persona.get("challenges") or persona.get("challenge") or "", 170),
             ]
             body = "".join(f'<p dir="auto">{escape(line)}</p>' for line in lines if line)
             persona_cards.append(
-                '<div class="card">'
+                '<div class="card wide">'
                 f'<h3 dir="auto">{escape(str(persona.get("name") or labels["empty"]))}</h3>'
                 + (f'<p class="persona-meta" dir="auto">{escape(meta)}</p>' if meta else "")
                 + body
@@ -1607,13 +1623,13 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
                 labels["personas"],
                 _label(labels, "personas_pitch", ""),
                 persona_cards,
-                per_page=6,
+                per_page=4,
                 language=language,
             )
         )
 
     # 10. Strategic direction
-    strategy_cards = "".join(_card(title, lines, extra_class="wide") for title, lines in _strategic_direction(suite, intelligence, labels))
+    strategy_cards = "".join(_card(title, [_clamp_text(line, 140) for line in lines[:5]], extra_class="wide") for title, lines in _strategic_direction(suite, intelligence, labels))
     sections.append(
         "<section>"
         + _section_header("08", _label(labels, "strategic_direction", "Strategic direction"), _label(labels, "strategy_pitch", ""))
@@ -1621,7 +1637,7 @@ def build_marketing_plan_pdf(suite: Suite) -> tuple[bytes, str]:
     )
 
     # 11. 30/60/90 execution
-    execution_cards = "".join(_card(title, lines) for title, lines in _execution_steps(action_plan, labels))
+    execution_cards = "".join(_card(title, [_clamp_text(line, 120) for line in lines[:5]]) for title, lines in _execution_steps(action_plan, labels))
     sections.append(
         "<section>"
         + _section_header("09", _label(labels, "execution", "30 / 60 / 90"), _label(labels, "execution_pitch", ""))
