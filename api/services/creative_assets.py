@@ -528,20 +528,55 @@ async def count_builtin_creative_assets(db: AsyncSession) -> int:
     )
 
 
+def _brand_primary_hex(suite: Suite) -> str:
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    colors = brand.get("colors") if isinstance(brand.get("colors"), dict) else {}
+    value = str(colors.get("primary") or "#2f80ff").strip()
+    match = re.fullmatch(r"#?([0-9a-fA-F]{6})", value)
+    return f"#{match.group(1).lower()}" if match else "#2f80ff"
+
+
+def brand_stage_suffix(suite: Suite) -> str:
+    """English style suffix appended to EVERY generated-background prompt.
+
+    Reference finding: winning montages unify every scene on one FIXED virtual
+    stage, so generated backgrounds read as one branded set instead of random
+    stock. The suite's primary color keys the stage glow to the brand.
+    """
+    return (
+        " Consistent virtual stage shared across the whole video series: "
+        "a dark tech grid floor fading to the horizon, "
+        f"ambient glow in the brand primary color {_brand_primary_hex(suite)}, "
+        "same camera angle and lighting across the series, "
+        "premium cohesive set design, background plate only."
+    )
+
+
 async def generate_visual_asset_for_scene(
     db: AsyncSession,
     *,
     suite: Suite,
     scene_text: str,
     kind: str = "visual_image",
+    visual_prompt: str | None = None,
 ) -> CreativeAsset | None:
+    # A shot-list beat brings its own literal scene description; without one
+    # the spoken line itself steers the visual.
+    scene_line = (
+        f"Depict LITERALLY what these words describe, as a concrete scene: {visual_prompt}."
+        if visual_prompt
+        else (
+            "Make it modern, high-energy, premium, and clearly connected to this spoken line: "
+            f"{scene_text}."
+        )
+    )
     base_prompt = (
         "Vertical 9:16 cinematic marketing background for a short social video. "
         "Background plate only: absolutely no people, faces, hands, bodies, or human silhouettes — "
         "a real person is composited on top and any generated human reads as a glitch. "
         "No readable text, no logos, no UI screenshots. Leave clean center space for a talking person. "
-        "Make it modern, high-energy, premium, and clearly connected to this spoken line: "
-        f"{scene_text}. Business name: {suite.name}."
+        f"{scene_line} Business name: {suite.name}."
+        f"{brand_stage_suffix(suite)}"
     )
     if kind == "visual_video":
         video_prompt = (
@@ -587,7 +622,14 @@ async def generate_visual_asset_for_scene(
             source_url=None,
             created_by_user_id=None,
             classification_prompt=video_prompt,
-            metadata={"scene_text": scene_text, "generated": True, "provider": "google_veo", "suite_id": suite.id},
+            metadata={
+                "scene_text": scene_text,
+                "visual_prompt": visual_prompt,
+                "generation_prompt": video_prompt,
+                "generated": True,
+                "provider": "google_veo",
+                "suite_id": suite.id,
+            },
         )
 
     if kind == "visual_image":
@@ -604,7 +646,14 @@ async def generate_visual_asset_for_scene(
             source_url=None,
             created_by_user_id=None,
             classification_prompt=base_prompt,
-            metadata={"scene_text": scene_text, "generated": True, "provider": "google_image", "suite_id": suite.id},
+            metadata={
+                "scene_text": scene_text,
+                "visual_prompt": visual_prompt,
+                "generation_prompt": base_prompt,
+                "generated": True,
+                "provider": "google_image",
+                "suite_id": suite.id,
+            },
         )
 
     return None

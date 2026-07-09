@@ -102,6 +102,11 @@ async def test_render_remotion_pipeline_uses_transparent_subject_layers(tmp_path
     monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
     monkeypatch.setattr(video_montage, "transcribe_video_segments", lambda _path, _dir: ([{"start": 0.0, "end": 2.8, "text": "هيك فيك تجيب ليدز جداد"}, {"start": 2.9, "end": 5.8, "text": "ونزيد المبيعات بسرعة"}], None))
 
+    async def fake_generate_shot_list(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(video_montage, "generate_shot_list", fake_generate_shot_list)
+
     render_commands: list[list[str]] = []
 
     def fake_run_command(command: list[str]):
@@ -987,3 +992,292 @@ def test_resolve_scene_background_video_keeps_already_locked_pick_below_cap():
     # The same video picked again below the cap stays itself and isn't re-locked.
     assert video_montage.resolve_scene_background_video(video_a, scene_index=1, locked_videos=locked).id == "A"
     assert [asset.id for asset in locked] == ["A"]
+
+
+# --- LLM shot list: beats become the scene units --------------------------------
+
+
+def test_beat_scene_segments_reattach_words_and_carry_beat_metadata():
+    beats = [
+        {"start": 0.0, "end": 1.2, "text": "استشارة", "beat_type": "enumeration", "visual_prompt": "open laptop showing a video call", "keyword": "استشارة", "prefer": "image"},
+        {"start": 1.2, "end": 4.0, "text": "تصوير ومونتاج", "beat_type": "narrative", "visual_prompt": "video editing timeline on a monitor", "keyword": "مونتاج", "prefer": "video"},
+    ]
+    transcript = [
+        {
+            "start": 0.0,
+            "end": 4.0,
+            "text": "استشارة تصوير ومونتاج",
+            "words": [
+                {"text": "استشارة", "start": 0.1, "end": 1.0},
+                {"text": "تصوير", "start": 1.3, "end": 2.0},
+                {"text": "ومونتاج", "start": 2.1, "end": 3.0},
+            ],
+        }
+    ]
+
+    segments = video_montage.beat_scene_segments(beats, transcript, duration=4.0)
+
+    assert len(segments) == 2
+    assert [w["text"] for w in segments[0]["words"]] == ["استشارة"]
+    assert [w["text"] for w in segments[1]["words"]] == ["تصوير", "ومونتاج"]
+    assert segments[0]["beat"]["visual_prompt"] == "open laptop showing a video call"
+    assert segments[1]["text"] == "تصوير ومونتاج"
+
+
+def test_beat_scene_segments_fall_back_when_beats_unusable():
+    transcript = [{"start": 0.0, "end": 4.0, "text": "نص", "words": []}]
+    # One usable beat is not enough to replace sentence scenes.
+    beats = [{"start": 0.0, "end": 4.0, "text": "نص", "visual_prompt": "desk"}]
+    assert video_montage.beat_scene_segments(beats, transcript, duration=4.0) == []
+    # Beats without visual prompts are unusable.
+    beats = [
+        {"start": 0.0, "end": 2.0, "text": "أ", "visual_prompt": ""},
+        {"start": 2.0, "end": 4.0, "text": "ب", "visual_prompt": ""},
+    ]
+    assert video_montage.beat_scene_segments(beats, transcript, duration=4.0) == []
+
+
+def test_enforce_short_beat_video_rule_blocks_new_videos_on_short_beats():
+    video_a, video_b = _bg_asset("A"), _bg_asset("B")
+    locked = [video_a]
+
+    # Short beat + new distinct video: blocked (scene reuses locked/image).
+    assert (
+        video_montage.enforce_short_beat_video_rule(
+            video_b, scene_seconds=1.0, is_beat_scene=True, locked_videos=locked
+        )
+        is None
+    )
+    # Short beat may still reuse an already-locked video.
+    assert (
+        video_montage.enforce_short_beat_video_rule(
+            video_a, scene_seconds=1.0, is_beat_scene=True, locked_videos=locked
+        ).id
+        == "A"
+    )
+    # Long beats and sentence scenes are untouched.
+    assert (
+        video_montage.enforce_short_beat_video_rule(
+            video_b, scene_seconds=2.5, is_beat_scene=True, locked_videos=locked
+        ).id
+        == "B"
+    )
+    assert (
+        video_montage.enforce_short_beat_video_rule(
+            video_b, scene_seconds=1.0, is_beat_scene=False, locked_videos=locked
+        ).id
+        == "B"
+    )
+
+
+@pytest.mark.asyncio
+async def test_remotion_manifest_uses_shot_list_beats_as_scene_units(tmp_path, monkeypatch):
+    source = tmp_path / "transparent.webm"
+    source.write_bytes(b"webm")
+    work_dir = tmp_path / "work"
+
+    monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
+
+    def fake_run_command(command: list[str]):
+        command_text = " ".join(command)
+        if "frame_%05d.png" in command_text:
+            frames_dir = Path(command[-1]).parent
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            (frames_dir / "frame_00000.png").write_bytes(b"png")
+        elif "-c:a" in command:
+            Path(command[-1]).write_bytes(b"audio")
+
+        class Result:
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(video_montage, "run_command", fake_run_command)
+
+    suite = Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"name": "كونيك"},
+    )
+    beats = [
+        {"start": 0.0, "end": 2.2, "text": "بدك تسويق حقيقي", "beat_type": "narrative", "visual_prompt": "marketing office desk with analytics glow", "keyword": "تسويق", "prefer": "video"},
+        {"start": 2.2, "end": 3.2, "text": "استشارة", "beat_type": "enumeration", "visual_prompt": "open laptop showing a video call", "keyword": "استشارة", "prefer": "image"},
+        {"start": 3.2, "end": 4.4, "text": "تصوير ومونتاج", "beat_type": "enumeration", "visual_prompt": "video editing timeline on a monitor", "keyword": "مونتاج", "prefer": "image"},
+        {"start": 4.4, "end": 6.0, "text": "احجز هلق", "beat_type": "cta", "visual_prompt": "smartphone with a glowing calendar", "keyword": "احجز", "prefer": "image"},
+    ]
+
+    manifest_path, scenes = await video_montage.build_remotion_scene_manifest(
+        db=None,
+        transparent_source_path=source,
+        work_dir=work_dir,
+        suite=suite,
+        input_data={"options": ["captions", "titles"], "title_overrides": ["عنوان يدوي"]},
+        duration=6.0,
+        # One long transcript sentence would previously become few sentence scenes.
+        transcript_segments=[{"start": 0.0, "end": 6.0, "text": "بدك تسويق حقيقي استشارة تصوير ومونتاج احجز هلق"}],
+        shot_list_beats=beats,
+    )
+
+    manifest = manifest_path.read_text(encoding="utf-8")
+    assert len(scenes) == 4
+    # Beat metadata rides on every scene; manual title overrides still win.
+    assert [scene["beatType"] for scene in scenes] == ["narrative", "enumeration", "enumeration", "cta"]
+    assert scenes[0]["behindText"] == "عنوان يدوي"
+    assert scenes[1]["behindText"] == "استشارة"
+    assert scenes[2]["caption"] == "تصوير ومونتاج"
+    assert scenes[1]["backgroundPrompt"] == "Literal visual beat: open laptop showing a video call"
+    assert all(scene["captionChunks"] for scene in scenes)
+    assert '"sceneSource": "shot_list_beats"' in manifest
+    assert '"enumeration": 2' in manifest
+    # Beat boundaries tile the transcript range (padding is healed at boundaries).
+    for previous, current in zip(scenes, scenes[1:]):
+        assert previous["sourceEnd"] == current["sourceStart"]
+
+
+@pytest.mark.asyncio
+async def test_remotion_manifest_falls_back_to_sentence_scenes_without_beats(tmp_path, monkeypatch):
+    source = tmp_path / "transparent.webm"
+    source.write_bytes(b"webm")
+    work_dir = tmp_path / "work"
+
+    monkeypatch.setattr(video_montage, "ffprobe_has_audio", lambda _path: True)
+
+    def fake_run_command(command: list[str]):
+        command_text = " ".join(command)
+        if "frame_%05d.png" in command_text:
+            frames_dir = Path(command[-1]).parent
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            (frames_dir / "frame_00000.png").write_bytes(b"png")
+        elif "-c:a" in command:
+            Path(command[-1]).write_bytes(b"audio")
+
+        class Result:
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(video_montage, "run_command", fake_run_command)
+
+    suite = Suite(
+        id="suite-video-test",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"name": "كونيك"},
+    )
+    transcript = [
+        {"start": 0.0, "end": 2.8, "text": "جملة أولى"},
+        {"start": 2.9, "end": 5.8, "text": "جملة ثانية"},
+    ]
+
+    # shot_list_beats=None (LLM failed) → exactly the previous sentence scenes.
+    manifest_path, scenes = await video_montage.build_remotion_scene_manifest(
+        db=None,
+        transparent_source_path=source,
+        work_dir=work_dir,
+        suite=suite,
+        input_data={"options": ["captions"]},
+        duration=6.0,
+        transcript_segments=transcript,
+        shot_list_beats=None,
+    )
+    manifest = manifest_path.read_text(encoding="utf-8")
+    assert len(scenes) == 2
+    assert scenes[0]["beatType"] is None
+    assert '"sceneSource": "sentence_segments"' in manifest
+
+    # Unusable beats (single beat) also fall back to sentence scenes.
+    work_dir_2 = tmp_path / "work2"
+    manifest_path_2, scenes_2 = await video_montage.build_remotion_scene_manifest(
+        db=None,
+        transparent_source_path=source,
+        work_dir=work_dir_2,
+        suite=suite,
+        input_data={"options": ["captions"]},
+        duration=6.0,
+        transcript_segments=transcript,
+        shot_list_beats=[{"start": 0.0, "end": 6.0, "text": "نص", "visual_prompt": "desk"}],
+    )
+    assert len(scenes_2) == 2
+    assert '"sceneSource": "sentence_segments"' in manifest_path_2.read_text(encoding="utf-8")
+
+
+# --- unified brand stage ---------------------------------------------------------
+
+
+def test_brand_stage_suffix_keys_the_stage_to_the_brand_color():
+    from api.services.creative_assets import brand_stage_suffix
+
+    suite = Suite(
+        id="suite-stage",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"colors": {"primary": "#E6AA3B"}},
+    )
+    suffix = brand_stage_suffix(suite)
+
+    assert "dark tech grid floor" in suffix
+    assert "#e6aa3b" in suffix
+    assert "same camera angle" in suffix
+    assert "background plate only" in suffix
+
+    # Missing/invalid brand color falls back to the default blue.
+    bare = Suite(id="s2", owner_id="u", name="x", slug="x", brand={"colors": {"primary": "red"}})
+    assert "#2f80ff" in brand_stage_suffix(bare)
+
+
+@pytest.mark.asyncio
+async def test_generated_backgrounds_use_literal_beat_prompt_and_stage_suffix(monkeypatch):
+    from api.services import creative_assets
+
+    prompts: list[str] = []
+
+    def fake_generate_image(prompt, _aspect, **_kwargs):
+        prompts.append(prompt)
+        return b"png"
+
+    async def fake_create_asset_from_bytes(_db, **kwargs):
+        assert kwargs["metadata"]["visual_prompt"] == "video editing timeline on a monitor"
+        assert "dark tech grid floor" in kwargs["metadata"]["generation_prompt"]
+        return "asset-row"
+
+    monkeypatch.setattr(creative_assets, "_generate_image", fake_generate_image)
+    monkeypatch.setattr(creative_assets, "create_asset_from_bytes", fake_create_asset_from_bytes)
+
+    suite = Suite(
+        id="suite-stage",
+        owner_id="user-1",
+        name="كونيك",
+        slug="connec",
+        brand={"colors": {"primary": "#e6aa3b"}},
+    )
+    asset = await creative_assets.generate_visual_asset_for_scene(
+        None,
+        suite=suite,
+        scene_text="تصوير ومونتاج",
+        visual_prompt="video editing timeline on a monitor",
+    )
+
+    assert asset == "asset-row"
+    assert len(prompts) == 1
+    # Literal beat prompt drives the image; the brand stage unifies the look.
+    assert "Depict LITERALLY" in prompts[0]
+    assert "video editing timeline on a monitor" in prompts[0]
+    assert "dark tech grid floor fading to the horizon" in prompts[0]
+    assert "#e6aa3b" in prompts[0]
+    assert "no people, faces, hands" in prompts[0]
+
+
+def test_remotion_component_renders_brand_stage_floor():
+    source = Path("web/src/remotion/AiMontage.tsx").read_text(encoding="utf-8")
+
+    # A constant brand-tinted floor band unifies every scene's stage.
+    assert "Unified brand stage" in source
+    assert "height: '28%'" in source
+    assert "opacity: 0.5" in source
+    assert "${BRAND_COLOR}2e" in source

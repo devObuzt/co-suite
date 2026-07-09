@@ -29,6 +29,7 @@ from ..models.admin import CreativeAsset
 from ..models.suite import Suite
 from .media_storage import r2_configured, upload_bytes
 from .montage_notes_analyzer import analyze_and_apply_montage_notes
+from .montage_shot_list import generate_shot_list
 from .creative_assets import (
     AUDIO_KINDS,
     VIDEO_TRANSITION_KINDS,
@@ -1183,6 +1184,71 @@ def normalize_scene_segments(
     ]
 
 
+def beat_scene_segments(
+    shot_list_beats: list[dict[str, Any]],
+    transcript_segments: list[dict[str, Any]],
+    *,
+    duration: float,
+) -> list[dict[str, Any]]:
+    """Scene units from LLM shot-list beats.
+
+    Each beat becomes one scene segment; the transcript's word-level
+    timestamps are re-attached by time window so karaoke captions keep their
+    real timing. Returns [] when the beats cannot form at least two scenes
+    (the caller then falls back to sentence scenes).
+    """
+    words = [
+        word
+        for segment in transcript_segments
+        for word in (segment.get("words") or [])
+        if isinstance(word, dict) and isinstance(word.get("start"), (int, float))
+    ]
+    segments: list[dict[str, Any]] = []
+    for beat in shot_list_beats or []:
+        if not isinstance(beat, dict):
+            continue
+        try:
+            start = max(0.0, float(beat.get("start")))
+            end = min(duration, float(beat.get("end")))
+        except (TypeError, ValueError):
+            continue
+        text = re.sub(r"\s+", " ", str(beat.get("text") or "")).strip()
+        visual_prompt = re.sub(r"\s+", " ", str(beat.get("visual_prompt") or "")).strip()
+        if end - start < 0.2 or not text or not visual_prompt:
+            continue
+        segments.append(
+            {
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": text,
+                "words": [word for word in words if start - 0.05 <= float(word["start"]) < end],
+                "beat": beat,
+            }
+        )
+    return segments if len(segments) >= 2 else []
+
+
+def enforce_short_beat_video_rule(
+    visual_video_asset: CreativeAsset | None,
+    *,
+    scene_seconds: float,
+    is_beat_scene: bool,
+    locked_videos: list[CreativeAsset],
+) -> CreativeAsset | None:
+    """Short shot-list beats (<2s) never introduce a NEW distinct video.
+
+    Every distinct background video costs an OffthreadVideo decoder; rapid
+    enumeration beats would blow the decoder cap in seconds. A short beat may
+    still reuse an already-locked video (resolve_scene_background_video then
+    rotates it in) but never locks a fresh one.
+    """
+    if not is_beat_scene or scene_seconds >= 2.0 or visual_video_asset is None:
+        return visual_video_asset
+    if any(asset.id == visual_video_asset.id for asset in locked_videos):
+        return visual_video_asset
+    return None
+
+
 def text_override_at(input_data: dict[str, Any], key: str, index: int) -> str | None:
     values = input_data.get(key)
     if not isinstance(values, list) or index >= len(values):
@@ -1347,6 +1413,7 @@ async def build_remotion_scene_manifest(
     transcript_segments: list[dict[str, Any]],
     fps: int = 30,
     subject_has_alpha: bool = True,
+    shot_list_beats: list[dict[str, Any]] | None = None,
 ) -> tuple[Path, list[dict[str, Any]]]:
     src_dir, public_dir = copy_remotion_runtime(work_dir)
     inputs_dir = public_dir / "inputs"
@@ -1419,12 +1486,23 @@ async def build_remotion_scene_manifest(
     if not transcript_segments:
         transcript_segments = fallback_caption_segments(duration, notes or "مونتاج تسويقي جاهز")
     timing_segments = non_silent_segments(transparent_source_path, duration) if "dead_spaces" in options else None
-    transcript_segments = normalize_scene_segments(
-        duration=duration,
-        transcript_segments=transcript_segments,
-        fallback_text=notes or title_from_suite(suite),
-        timing_segments=timing_segments,
-    )
+    # LLM shot-list beats (when available) replace sentence granularity as the
+    # scene units; any failure keeps exactly the previous behaviour.
+    scene_source = "sentence_segments"
+    if shot_list_beats:
+        beat_segments = beat_scene_segments(shot_list_beats, transcript_segments, duration=duration)
+        if beat_segments:
+            transcript_segments = beat_segments
+            scene_source = "shot_list_beats"
+        else:
+            log.warning("Shot-list beats could not form scene segments; falling back to sentence scenes.")
+    if scene_source != "shot_list_beats":
+        transcript_segments = normalize_scene_segments(
+            duration=duration,
+            transcript_segments=transcript_segments,
+            fallback_text=notes or title_from_suite(suite),
+            timing_segments=timing_segments,
+        )
 
     wanted_kinds: set[str] = set(VIDEO_TRANSITION_KINDS)
     if subject_has_alpha:
@@ -1464,6 +1542,8 @@ async def build_remotion_scene_manifest(
         )
     selected_asset_ids: list[str] = []
     locked_background_videos: list[CreativeAsset] = []
+    generated_image_count = 0
+    max_generated_images = max(0, int(settings.montage_max_generated_images_per_render))
     scenes: list[dict[str, Any]] = []
     # Never drop the tail of long videos: segments beyond the scene cap are
     # merged into the last scene instead of being cut from the montage.
@@ -1476,6 +1556,8 @@ async def build_remotion_scene_manifest(
         merged["words"] = [word for seg in tail for word in (seg.get("words") or [])]
         capped_segments = capped_segments[: MAX_MONTAGE_SCENES - 1] + [merged]
     for index, segment in enumerate(capped_segments):
+        beat = segment.get("beat") if isinstance(segment.get("beat"), dict) else None
+        segment_seconds = max(0.0, float(segment.get("end") or 0) - float(segment.get("start") or 0))
         start = max(0.0, float(segment.get("start") or 0) - 0.12)
         end = min(duration, float(segment.get("end") or duration) + 0.12)
         if end <= start:
@@ -1483,7 +1565,12 @@ async def build_remotion_scene_manifest(
         generated_caption = re.sub(r"\s+", " ", str(segment.get("text") or notes or title_from_suite(suite))).strip()
         caption = text_override_at(input_data, "caption_overrides", index) or generated_caption
         generated_title = title_from_caption(caption, title_from_suite(suite))
+        if beat and str(beat.get("keyword") or "").strip():
+            generated_title = str(beat.get("keyword")).strip()
         behind_text = text_override_at(input_data, "title_overrides", index) or generated_title
+        # Background picking scores against the beat's literal visual prompt +
+        # spoken words; sentence scenes keep scoring against the caption.
+        scene_match_text = f"{beat['visual_prompt']} {beat['text']}" if beat else caption
         palette = [
             ["#07111f", "#2f80ed", "#e8f3ff"],
             ["#15120f", "#e6aa3b", "#fff2cf"],
@@ -1492,20 +1579,30 @@ async def build_remotion_scene_manifest(
             ["#1c1d21", "#ff5f45", "#fff0ec"],
         ][index % 5]
         variety_seed = zlib.crc32(str(work_dir).encode("utf-8")) + index
+        # Short beats never mint a fresh Veo video: the clip could not even
+        # register before the cut, and each distinct video costs a decoder.
+        beat_allows_new_video = not (beat and segment_seconds < 2.0)
         visual_video_asset = None
         if (
             subject_has_alpha
             and db
             and index == 0
             and allow_generated_backgrounds
+            and beat_allows_new_video
             # In blend mode a matching user upload wins the hero scene;
             # generation only fills gaps the user's own media doesn't cover.
-            and not has_user_background_match(active_assets, scene_text=caption, suite_id=suite.id)
+            and not has_user_background_match(active_assets, scene_text=scene_match_text, suite_id=suite.id)
         ):
             # The hero scene always gets a freshly generated background tied to
             # the spoken line, so consecutive renders don't open identically.
             try:
-                visual_video_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption, kind="visual_video")
+                visual_video_asset = await generate_visual_asset_for_scene(
+                    db,
+                    suite=suite,
+                    scene_text=scene_match_text,
+                    kind="visual_video",
+                    visual_prompt=(beat.get("visual_prompt") if beat else None),
+                )
                 if visual_video_asset:
                     active_assets.append(visual_video_asset)
             except Exception:
@@ -1514,14 +1611,27 @@ async def build_remotion_scene_manifest(
             visual_video_asset = pick_asset(
                 active_assets,
                 kind="visual_video",
-                scene_text=caption,
+                scene_text=scene_match_text,
                 suite_id=suite.id,
                 variety_seed=variety_seed,
                 user_match_required=allow_generated_backgrounds,
             )
-        if subject_has_alpha and not visual_video_asset and db and index < 2 and allow_generated_backgrounds:
+        if (
+            subject_has_alpha
+            and not visual_video_asset
+            and db
+            and index < 2
+            and allow_generated_backgrounds
+            and beat_allows_new_video
+        ):
             try:
-                visual_video_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption, kind="visual_video")
+                visual_video_asset = await generate_visual_asset_for_scene(
+                    db,
+                    suite=suite,
+                    scene_text=scene_match_text,
+                    kind="visual_video",
+                    visual_prompt=(beat.get("visual_prompt") if beat else None),
+                )
                 if visual_video_asset:
                     active_assets.append(visual_video_asset)
             except Exception:
@@ -1529,6 +1639,12 @@ async def build_remotion_scene_manifest(
         # Cap distinct background-video decoders; past the cap, scenes rotate
         # among the locked videos instead of dropping to a static image.
         if subject_has_alpha:
+            visual_video_asset = enforce_short_beat_video_rule(
+                visual_video_asset,
+                scene_seconds=segment_seconds,
+                is_beat_scene=bool(beat),
+                locked_videos=locked_background_videos,
+            )
             visual_video_asset = resolve_scene_background_video(
                 visual_video_asset, scene_index=index, locked_videos=locked_background_videos
             )
@@ -1537,15 +1653,29 @@ async def build_remotion_scene_manifest(
             visual_asset = pick_asset(
                 active_assets,
                 kind="visual_image",
-                scene_text=caption,
+                scene_text=scene_match_text,
                 suite_id=suite.id,
                 variety_seed=variety_seed,
                 user_match_required=allow_generated_backgrounds,
             )
-            if not visual_asset and db and index < 4 and allow_generated_backgrounds:
+            # Generation fill: beats that prefer an image get one from their
+            # literal visual prompt (cost-capped per render); sentence scenes
+            # keep the previous first-4-scenes behaviour.
+            should_generate_image = (
+                str(beat.get("prefer") or "image") == "image" and generated_image_count < max_generated_images
+                if beat
+                else index < 4
+            )
+            if not visual_asset and db and allow_generated_backgrounds and should_generate_image:
                 try:
-                    visual_asset = await generate_visual_asset_for_scene(db, suite=suite, scene_text=caption)
+                    visual_asset = await generate_visual_asset_for_scene(
+                        db,
+                        suite=suite,
+                        scene_text=scene_match_text,
+                        visual_prompt=(beat.get("visual_prompt") if beat else None),
+                    )
                     if visual_asset:
+                        generated_image_count += 1
                         active_assets.append(visual_asset)
                 except Exception:
                     visual_asset = None
@@ -1588,7 +1718,14 @@ async def build_remotion_scene_manifest(
                 "behindText": behind_text,
                 "generatedCaption": generated_caption,
                 "generatedBehindText": generated_title,
-                "backgroundPrompt": f"Vertical editorial background inspired by this spoken line: {caption}",
+                "beatType": (str(beat.get("beat_type")) if beat else None),
+                "beatKeyword": (str(beat.get("keyword") or "") or None) if beat else None,
+                "beatPrefer": (str(beat.get("prefer")) if beat else None),
+                "backgroundPrompt": (
+                    f"Literal visual beat: {beat['visual_prompt']}"
+                    if beat
+                    else f"Vertical editorial background inspired by this spoken line: {caption}"
+                ),
                 "palette": palette,
                 "backgroundImagePublicPath": background_public_path,
                 "backgroundVideoPublicPath": background_video_public_path,
@@ -1772,6 +1909,16 @@ async def build_remotion_scene_manifest(
         "durationSeconds": round(edited_duration, 3),
         "diagnostics": {
             "sceneCount": len(scenes),
+            "sceneSource": scene_source,
+            "shotListBeatTypes": (
+                {
+                    beat_type: sum(1 for scene in scenes if scene.get("beatType") == beat_type)
+                    for beat_type in sorted({scene.get("beatType") for scene in scenes if scene.get("beatType")})
+                }
+                if scene_source == "shot_list_beats"
+                else None
+            ),
+            "generatedImageCount": generated_image_count,
             "soundEffectCount": len(sound_effects),
             "musicBed": bool(background_music),
             "musicEnabled": music_enabled,
@@ -1852,6 +1999,14 @@ async def _render_remotion_montage_impl(
         else await asyncio.to_thread(transcribe_video_segments, transparent_source_path, output_path.parent)
     )
     warnings = [transcript_warning] if transcript_warning else []
+    # LLM shot list: the transcript becomes literal visual beats that replace
+    # sentence granularity. Any failure logs and keeps the previous behaviour.
+    shot_list_beats = await generate_shot_list(
+        transcript_segments,
+        suite=suite,
+        notes=str(input_data.get("notes") or ""),
+        max_beats=MAX_MONTAGE_SCENES,
+    )
     work_dir = remotion_work_dir(output_path)
     manifest_path, scenes = await build_remotion_scene_manifest(
         db=db,
@@ -1862,6 +2017,7 @@ async def _render_remotion_montage_impl(
         duration=duration,
         transcript_segments=transcript_segments,
         subject_has_alpha=subject_has_alpha,
+        shot_list_beats=shot_list_beats,
     )
     public_dir = work_dir / "public"
     entry = work_dir / "src" / "remotion" / "index.ts"
@@ -1924,6 +2080,8 @@ async def _render_remotion_montage_impl(
         capabilities.append("sound_effect_transitions")
     if manifest_diagnostics.get("voiceCleanupApplied"):
         capabilities.append("audio_cleanup")
+    if manifest_diagnostics.get("sceneSource") == "shot_list_beats":
+        capabilities.append("llm_shot_list_beats")
 
     return {
         "rendered": output_path.exists(),
@@ -1940,6 +2098,7 @@ async def _render_remotion_montage_impl(
                 "end": scene.get("sourceEnd"),
                 "caption": scene.get("caption"),
                 "behindText": scene.get("behindText"),
+                "beatType": scene.get("beatType"),
             }
             for scene in scenes
         ],

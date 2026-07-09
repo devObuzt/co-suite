@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # extra montage jobs wait for a slot while non-montage jobs keep flowing.
     montage_render_slots: int = 1
 
+    # Cost cap: how many shot-list beat backgrounds one montage render may
+    # generate with the image model; beats past the cap fall back to
+    # library/locked media instead of minting more images.
+    montage_max_generated_images_per_render: int = 6
+
     @field_validator("database_url", mode="before")
     @classmethod
     def fix_db_url(cls, v: str) -> str:
