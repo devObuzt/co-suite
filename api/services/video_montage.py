@@ -56,6 +56,7 @@ REQUEST_TIMEOUT_SECONDS = 45
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
 MAX_DISTINCT_BACKGROUND_VIDEOS = 2
 MAX_MONTAGE_SCENES = 24
+TRANSITION_FRAMES = 7
 FAL_VEED_MODEL = "veed/video-background-removal"
 # Speech cleanup chain shared by the V1 mixer and the Remotion audio extract.
 VOICE_CLEANUP_AUDIO_FILTER = "highpass=f=80,lowpass=f=12000,afftdn,loudnorm=I=-16:LRA=11:TP=-1.5"
@@ -1243,6 +1244,40 @@ def beat_scene_segments(
             }
         )
     return segments if len(segments) >= 2 else []
+
+
+def _scene_is_high_energy(scene: dict[str, Any]) -> bool:
+    beat_type = str(scene.get("beatType") or "").lower()
+    duration = float(scene.get("sourceEnd") or 0) - float(scene.get("sourceStart") or 0)
+    return beat_type == "enumeration" or duration < 1.5
+
+
+def pick_scene_transition(
+    from_scene: dict[str, Any],
+    to_scene: dict[str, Any],
+    seed: int,
+) -> dict[str, Any]:
+    """Choose a geometric transition for one scene boundary by energy.
+
+    High-energy boundaries (fast enumeration beats or a short incoming scene)
+    get flip/zoom; a closing cta gets zoom for emphasis; calm narrative
+    boundaries get fade/slide. Within a tier the seed parity alternates the two
+    choices so the same transition never repeats back-to-back.
+    """
+    incoming_beat = str(to_scene.get("beatType") or "").lower()
+    parity = seed % 2
+    if incoming_beat == "cta":
+        transition_type = "zoom"
+    elif _scene_is_high_energy(to_scene) or _scene_is_high_energy(from_scene):
+        transition_type = ("flip", "zoom")[parity]
+    else:
+        transition_type = ("fade", "slide")[parity]
+    direction = "from-left" if parity == 0 else "from-right"
+    return {
+        "type": transition_type,
+        "durationInFrames": TRANSITION_FRAMES,
+        "direction": direction if transition_type == "slide" else None,
+    }
 
 
 def enforce_short_beat_video_rule(
