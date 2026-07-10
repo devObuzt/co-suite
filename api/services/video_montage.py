@@ -1318,6 +1318,14 @@ def split_scenes_at_joins(
     return result
 
 
+def build_scene_transitions(scenes: list[dict[str, Any]], seed: int) -> list[dict[str, Any]]:
+    """One transition per interior boundary, chosen by energy (seeded)."""
+    return [
+        pick_scene_transition(scenes[i], scenes[i + 1], seed=seed + i)
+        for i in range(len(scenes) - 1)
+    ]
+
+
 def enforce_short_beat_video_rule(
     visual_video_asset: CreativeAsset | None,
     *,
@@ -1504,6 +1512,7 @@ async def build_remotion_scene_manifest(
     fps: int = 30,
     subject_has_alpha: bool = True,
     shot_list_beats: list[dict[str, Any]] | None = None,
+    dead_air_joins: list[float] | None = None,
 ) -> tuple[Path, list[dict[str, Any]]]:
     src_dir, public_dir = copy_remotion_runtime(work_dir)
     inputs_dir = public_dir / "inputs"
@@ -1832,6 +1841,8 @@ async def build_remotion_scene_manifest(
             scenes[index]["sourceEnd"] = boundary
             scenes[index + 1]["sourceStart"] = boundary
 
+    scenes = split_scenes_at_joins(scenes, dead_air_joins or [], fps)
+
     edited_duration = sum(max(0.1, scene["sourceEnd"] - scene["sourceStart"]) for scene in scenes)
     music_asset = None
     if music_enabled:
@@ -1841,17 +1852,9 @@ async def build_remotion_scene_manifest(
         music_query = f"{music_mood} {suite.name} {' '.join(scene['caption'] for scene in scenes[:3])}".strip()
         music_asset = pick_asset(active_assets, kind="music", scene_text=music_query)
     transition_assets = [asset for asset in active_assets if asset.kind == "transition"] if music_enabled else []
-    transition_video_assets = [
-        asset for asset in active_assets
-        if asset.kind == "transition_video" and ("portrait" in [str(tag).lower() for tag in (asset.tags or [])] or "9:16" in str(asset.metadata_json or {}))
-    ] or [asset for asset in active_assets if asset.kind == "transition_video"]
     # Deterministic per-render shuffle: without it every video walks the same
     # usage-ordered transition sequence and reads as "the same transition".
     render_shuffle_seed = zlib.crc32(str(work_dir).encode("utf-8"))
-    transition_video_assets = sorted(
-        transition_video_assets,
-        key=lambda asset: zlib.crc32(f"{render_shuffle_seed}-{asset.id}".encode("utf-8")),
-    )
     sfx_assets = [asset for asset in active_assets if asset.kind == "sfx"] if music_enabled else []
     music_path = sound_dir / "marketing-upbeat-bed.wav"
     whoosh_path = sound_dir / "soft-whoosh.wav"
@@ -1871,30 +1874,8 @@ async def build_remotion_scene_manifest(
         cursor += scene["sourceEnd"] - scene["sourceStart"]
 
     sound_effects: list[dict[str, Any]] = []
-    visual_transitions: list[dict[str, Any]] = []
     for index, start in enumerate(starts[1:]):
-        # Library transition clips carry their own embedded sound, so a
-        # boundary that gets a visual transition needs no extra audio layer.
-        visual_transition_added = False
-        visual_asset = transition_video_assets[index % len(transition_video_assets)] if transition_video_assets else None
-        if visual_asset:
-            public_path = remotion_public_asset_path(visual_asset.storage_url, work_dir, visual_asset.id)
-            if public_path:
-                selected_asset_ids.append(visual_asset.id)
-                visual_transitions.append(
-                    {
-                        "publicPath": public_path,
-                        "at": round(start, 3),
-                        "duration": min(0.9, max(0.35, float(visual_asset.duration_seconds or 0.7))),
-                        # Music/SFX off keeps the visual transition but mutes
-                        # the clip's embedded sound.
-                        "volume": 0.35 if music_enabled else 0.0,
-                        "assetId": visual_asset.id,
-                        "kind": "transition_video",
-                    }
-                )
-                visual_transition_added = True
-        if visual_transition_added or not music_enabled:
+        if not music_enabled:
             continue
         asset = transition_assets[index % len(transition_assets)] if transition_assets else None
         if asset:
@@ -1983,7 +1964,7 @@ async def build_remotion_scene_manifest(
             "backgroundMusic": background_music,
             "soundEffects": sound_effects,
         },
-        "visualTransitions": visual_transitions,
+        "sceneTransitions": build_scene_transitions(scenes, seed=render_shuffle_seed),
         "creativeAssets": serialized_creative_assets,
         "selectedCreativeAssetIds": sorted(set(selected_asset_ids)),
         "style": {
@@ -2036,6 +2017,7 @@ async def render_remotion_montage(
     input_data: dict[str, Any],
     transcript: tuple[list[dict[str, Any]], str | None] | None = None,
     subject_has_alpha: bool = True,
+    dead_air_joins: list[float] | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     result = await _render_remotion_montage_impl(
@@ -2046,6 +2028,7 @@ async def render_remotion_montage(
         input_data=input_data,
         transcript=transcript,
         subject_has_alpha=subject_has_alpha,
+        dead_air_joins=dead_air_joins,
     )
     elapsed = round(time.monotonic() - started, 2)
     result["render_duration_seconds"] = elapsed
@@ -2075,6 +2058,7 @@ async def _render_remotion_montage_impl(
     input_data: dict[str, Any],
     transcript: tuple[list[dict[str, Any]], str | None] | None = None,
     subject_has_alpha: bool = True,
+    dead_air_joins: list[float] | None = None,
 ) -> dict[str, Any]:
     if not ffmpeg_available():
         return {"rendered": False, "reason": "FFmpeg/FFprobe are not installed in this runtime."}
@@ -2108,6 +2092,7 @@ async def _render_remotion_montage_impl(
         transcript_segments=transcript_segments,
         subject_has_alpha=subject_has_alpha,
         shot_list_beats=shot_list_beats,
+        dead_air_joins=dead_air_joins,
     )
     public_dir = work_dir / "public"
     entry = work_dir / "src" / "remotion" / "index.ts"
@@ -2162,7 +2147,7 @@ async def _render_remotion_montage_impl(
         capabilities.append("behind_person_3d_title")
     if manifest_data.get("showCaptions"):
         capabilities.append("rtl_text_overlay")
-    if manifest_data.get("visualTransitions"):
+    if manifest_data.get("sceneTransitions"):
         capabilities.append("visual_transitions")
     if manifest_audio.get("backgroundMusic"):
         capabilities.append("music_bed")
@@ -2931,6 +2916,7 @@ async def _generate_video_montage_impl(
                     suite=suite,
                     input_data=input_data,
                     transcript=pretranscribed,
+                    dead_air_joins=dead_air_joins,
                 )
             )
             render_result["engine"] = "remotion_veed_fal"
@@ -2983,6 +2969,7 @@ async def _generate_video_montage_impl(
                     output_path=output_path,
                     suite=suite,
                     input_data=input_data,
+                    dead_air_joins=dead_air_joins,
                 )
             )
             render_result["engine"] = "remotion_local_chromakey"
@@ -3036,6 +3023,7 @@ async def _generate_video_montage_impl(
                     suite=suite,
                     input_data=input_data,
                     subject_has_alpha=False,
+                    dead_air_joins=dead_air_joins,
                 )
             )
             render_result["engine"] = "remotion_fullframe"

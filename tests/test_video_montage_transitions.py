@@ -1,4 +1,5 @@
 from api.services.video_montage import (
+    build_scene_transitions,
     dead_air_join_times,
     pick_scene_transition,
     split_scenes_at_joins,
@@ -80,3 +81,14 @@ def test_no_joins_returns_scenes_unchanged():
     scenes = [_full_scene(1, 0.0, 4.0)]
     out = split_scenes_at_joins(scenes, [], fps=30)
     assert out == scenes
+
+
+def test_build_scene_transitions_length_is_boundaries():
+    scenes = [_full_scene(1, 0, 2), _full_scene(2, 2, 4), _full_scene(3, 4, 6)]
+    out = build_scene_transitions(scenes, seed=0)
+    assert len(out) == 2
+    assert all(set(t) == {"type", "durationInFrames", "direction"} for t in out)
+
+
+def test_build_scene_transitions_single_scene_is_empty():
+    assert build_scene_transitions([_full_scene(1, 0, 2)], seed=0) == []
