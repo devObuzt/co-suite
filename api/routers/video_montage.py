@@ -296,6 +296,7 @@ async def create_video_montage_job(
     notes: str = Form(""),
     backgrounds_mode: str = Form("blend"),
     background_asset_ids_json: str = Form("[]"),
+    bg_removal_quality: str = Form("auto"),
     zoom: str = Form("1"),
     subject_offset_x: str = Form("0"),
     subject_offset_y: str = Form("0"),
@@ -324,6 +325,7 @@ async def create_video_montage_job(
         # as backgrounds; [] means generated/library backgrounds only.
         "background_asset_ids": background_asset_ids,
         "zoom": parse_zoom(zoom),
+        "bg_removal_quality": ("ai" if str(bg_removal_quality).strip().lower() == "ai" else "auto"),
         "subject_offset_x": parse_offset(subject_offset_x),
         "subject_offset_y": parse_offset(subject_offset_y),
     }

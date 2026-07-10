@@ -2771,8 +2771,10 @@ async def _generate_video_montage_impl(
     veed_source_url = None
     veed_stage_path: Path | None = None
     green_screen_detected = False
+    force_ai_removal = str(input_data.get("bg_removal_quality") or "auto").strip().lower() == "ai"
     if (
         settings.montage_smart_bg_routing
+        and not force_ai_removal
         and "background" in options
         and source_path
         and ffmpeg_filter_available("chromakey")
