@@ -1280,6 +1280,44 @@ def pick_scene_transition(
     }
 
 
+def split_scenes_at_joins(
+    scenes: list[dict[str, Any]],
+    joins: list[float],
+    fps: int,
+) -> list[dict[str, Any]]:
+    """Split any scene that strictly contains a dead-air join into two scenes.
+
+    Sub-scenes inherit every non-timing field (palette, caption, beatType,
+    background) from the parent; only sourceStart/sourceEnd change and
+    captionChunks are recomputed for each half's time window. Joins that land
+    on an existing scene boundary (within one frame) are ignored. Ids are
+    re-sequenced scene-01.. after all splits.
+    """
+    if not joins:
+        return scenes
+    epsilon = 1.0 / max(1, fps)
+    result: list[dict[str, Any]] = []
+    for scene in scenes:
+        start = float(scene["sourceStart"])
+        end = float(scene["sourceEnd"])
+        inner = sorted(t for t in joins if start + epsilon < t < end - epsilon)
+        if not inner:
+            result.append(scene)
+            continue
+        cut_points = [start, *inner, end]
+        for lo, hi in zip(cut_points, cut_points[1:]):
+            piece = dict(scene)
+            piece["sourceStart"] = round(lo, 3)
+            piece["sourceEnd"] = round(hi, 3)
+            piece["captionChunks"] = build_caption_chunks(
+                scene.get("caption") or "", lo, hi, None
+            )
+            result.append(piece)
+    for index, scene in enumerate(result):
+        scene["id"] = f"scene-{index + 1:02d}"
+    return result
+
+
 def enforce_short_beat_video_rule(
     visual_video_asset: CreativeAsset | None,
     *,
