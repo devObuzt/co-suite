@@ -18,6 +18,7 @@
 - `transition_video` creative-asset kind is NOT removed from the DB or `ALL_KINDS`; it simply stops being consumed by the montage.
 - Preserve existing behaviour when `dead_spaces` is off and when there is a single scene (no transitions).
 - Load env before any manual render/test that touches the service: `set -a; source api/.env; set +a`.
+- **`web/` is an embedded git repo** (gitlink `160000`, no `.gitmodules`): its `web/src/**` changes commit INSIDE `web/` (`cd web && git commit`), then the outer repo records the pointer bump (`cd .. && git add web && git commit`). The web working tree already carries unrelated pre-existing dirty files (a prior feature) — web tasks MUST `git add` only their own named files, NEVER `git add -A`/`git add .`.
 
 ---
 
@@ -487,69 +488,15 @@ git commit -m "feat(montage): emit sceneTransitions, drop visualTransitions, thr
 
 ---
 
-## Task 6: Remotion — custom `zoom` presentation (+ any others the spike flagged)
+## Task 6: SKIPPED — `zoom` is a built-in transition
 
-**Files:**
-- Create: `web/src/remotion/transitions/zoom.tsx`
-- Test: `web/src/remotion/transitions/zoom.test.tsx` (or a type-check-only assertion if the project has no RTL setup — see Step 1)
-
-**Interfaces:**
-- Consumes: `TransitionPresentation`, `TransitionPresentationComponentProps` from `@remotion/transitions` (paths confirmed in Task 1).
-- Produces: `export const zoom = (): TransitionPresentation<Record<string, never>>` — a springy scale/opacity cross-zoom usable as `presentation={zoom()}`.
-
-- [ ] **Step 1: Decide the test harness**
-
-Run:
-```bash
-cd web && cat package.json | grep -iE "vitest|jest|@testing-library" || echo "NO_RTL"
-```
-If `NO_RTL`, skip a runtime test and rely on the type-check + prototype render in Task 8; the "test" for this task is `npm exec tsc --noEmit`. If a runner exists, write the render test in Step 2.
-
-- [ ] **Step 2: Implement the zoom presentation**
-
-Create `web/src/remotion/transitions/zoom.tsx`:
-```tsx
-import type {
-  TransitionPresentation,
-  TransitionPresentationComponentProps,
-} from '@remotion/transitions';
-import React, {useMemo} from 'react';
-import {AbsoluteFill} from 'remotion';
-
-type ZoomProps = Record<string, never>;
-
-const ZoomPresentation: React.FC<
-  TransitionPresentationComponentProps<ZoomProps>
-> = ({children, presentationDirection, presentationProgress}) => {
-  const isEntering = presentationDirection === 'entering';
-  const style = useMemo<React.CSSProperties>(() => {
-    // Entering scene zooms in from 1.15 -> 1 and fades in; exiting scene
-    // zooms out to 0.9 and fades out. Fast (spring/linear driven by progress).
-    const scale = isEntering
-      ? 1.15 - 0.15 * presentationProgress
-      : 1 - 0.1 * presentationProgress;
-    const opacity = isEntering ? presentationProgress : 1 - presentationProgress;
-    return {transform: `scale(${scale})`, opacity};
-  }, [isEntering, presentationProgress]);
-  return <AbsoluteFill style={style}>{children}</AbsoluteFill>;
-};
-
-export const zoom = (): TransitionPresentation<ZoomProps> => {
-  return {component: ZoomPresentation, props: {}};
-};
-```
-
-- [ ] **Step 3: Type-check**
-
-Run: `cd web && npm exec tsc -- --noEmit`
-Expected: no type errors from `zoom.tsx` (the `TransitionPresentation`/`...ComponentProps` names must match Task 1's findings; adjust the import path if the spike found a different sub-path).
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add web/src/remotion/transitions/zoom.tsx
-git commit -m "feat(remotion): custom zoom transition presentation"
-```
+**Status: dropped after the Task 1 spike.** The spike
+(`docs/superpowers/plans/2026-07-10-spike-findings.md`) found that all five
+transitions this plan uses are built into `@remotion/transitions` — no custom
+`TransitionPresentation` is needed. In particular `zoom` ships as **`zoomInOut`**
+from `@remotion/transitions/zoom-in-out` (the sub-path is `zoom-in-out`, not
+`zoom`). Task 8 imports the built-in directly; there is no `zoom.tsx` to create.
+No work in this task.
 
 ---
 
@@ -600,17 +547,17 @@ git commit -m "feat(remotion): single continuous audio track independent of tran
 - Consumes: `manifest.sceneTransitions` (from Task 5), `zoom` (Task 6), built-in presentations (Task 1), `SceneLayer`.
 - Produces: the montage renders each scene as a `TransitionSeries.Sequence` with a `TransitionSeries.Transition` per boundary; the three overlay layers are gone.
 
-- [ ] **Step 1: Add imports (paths per Task 1 findings)**
+- [ ] **Step 1: Add imports (confirmed built-in by the Task 1 spike)**
 
-At the top of `AiMontage.tsx`:
+At the top of `AiMontage.tsx` (all five are built-in — the spike verified `flip`
+is built-in and `zoom` ships as `zoomInOut` at sub-path `zoom-in-out`):
 ```tsx
 import {TransitionSeries, linearTiming} from '@remotion/transitions';
 import {slide} from '@remotion/transitions/slide';
 import {fade} from '@remotion/transitions/fade';
 import {flip} from '@remotion/transitions/flip';
-import {zoom} from './transitions/zoom';
+import {zoomInOut} from '@remotion/transitions/zoom-in-out';
 ```
-(If Task 1 found `flip` is NOT built-in, implement it as a custom presentation in `web/src/remotion/transitions/flip.tsx` mirroring Task 6 using `rotateY(${(isEntering?1:0 - progress)*180}deg)` on a `preserve-3d` wrapper, and import from there instead.)
 
 - [ ] **Step 2: Add the presentation + timing resolver**
 
@@ -629,7 +576,7 @@ Inside `AiMontage`, before the return, add:
     if (t.type === 'slide')
       return slide({direction: t.direction === 'from-right' ? 'from-right' : 'from-left'});
     if (t.type === 'flip') return flip();
-    if (t.type === 'zoom') return zoom();
+    if (t.type === 'zoom') return zoomInOut();
     return fade();
   };
 ```
