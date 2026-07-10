@@ -887,7 +887,7 @@ async def test_dead_space_cut_runs_before_remotion_render(tmp_path, monkeypatch)
         assert Path(source_path) == normalized
         assert duration == 10.0
         Path(output_path).write_bytes(b"tight")
-        return Path(output_path), True, None
+        return Path(output_path), True, None, [2.0, 5.0]
 
     captured: dict = {}
 

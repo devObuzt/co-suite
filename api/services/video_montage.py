@@ -968,6 +968,23 @@ def non_silent_segments(path: Path, duration: float) -> list[tuple[float, float]
     return segments[:28] or [(0.0, duration)]
 
 
+def dead_air_join_times(segments: list[tuple[float, float]]) -> list[float]:
+    """Cumulative tightened-timeline offsets at each internal segment join.
+
+    After concatenating the retained non-silent segments, the k-th internal
+    boundary sits at the sum of the first k segment durations. The final
+    segment's end is the clip end, not a join, so it is excluded.
+    """
+    if len(segments) <= 1:
+        return []
+    joins: list[float] = []
+    cursor = 0.0
+    for start, end in segments[:-1]:
+        cursor += max(0.0, end - start)
+        joins.append(round(cursor, 3))
+    return joins
+
+
 def extract_audio_for_transcription(video_path: Path, audio_path: Path) -> Path | None:
     if not ffprobe_has_audio(video_path):
         return None
@@ -2105,12 +2122,14 @@ async def _render_remotion_montage_impl(
     }
 
 
-def cut_dead_spaces(source_path: Path, output_path: Path, duration: float) -> tuple[Path, bool, str | None]:
+def cut_dead_spaces(
+    source_path: Path, output_path: Path, duration: float
+) -> tuple[Path, bool, str | None, list[float]]:
     if not ffprobe_has_audio(source_path):
-        return source_path, False, "No audio stream was found, so silence cutting was skipped."
+        return source_path, False, "No audio stream was found, so silence cutting was skipped.", []
     segments = non_silent_segments(source_path, duration)
     if len(segments) <= 1:
-        return source_path, False, None
+        return source_path, False, None, []
     parts: list[str] = []
     concat_inputs: list[str] = []
     for index, (start, end) in enumerate(segments):
@@ -2143,8 +2162,8 @@ def cut_dead_spaces(source_path: Path, output_path: Path, duration: float) -> tu
             ]
         )
     except subprocess.CalledProcessError as exc:
-        return source_path, False, (exc.stderr or exc.stdout or str(exc))[-500:]
-    return output_path, True, None
+        return source_path, False, (exc.stderr or exc.stdout or str(exc))[-500:], []
+    return output_path, True, None, dead_air_join_times(segments)
 
 
 def finalise_audio(
@@ -2321,7 +2340,7 @@ def _render_v1_video_impl(*, source_path: Path, output_path: Path, suite: Suite,
     timing_segments: list[tuple[float, float]] | None = None
     if "dead_spaces" in options:
         timing_segments = non_silent_segments(source_path, duration)
-        working_source, cut_applied, cut_warning = cut_dead_spaces(
+        working_source, cut_applied, cut_warning, _dead_air_joins = cut_dead_spaces(
             source_path,
             output_path.with_name("cut-source.mp4"),
             duration,
@@ -2726,12 +2745,13 @@ async def _generate_video_montage_impl(
     # downstream pipeline (VEED, transcription, Remotion render) works on the
     # tightened video. Previously only the V1 fallback ever cut silences.
     dead_space_seconds_cut: float | None = None
+    dead_air_joins: list[float] = []
     if source_path and "dead_spaces" in options and ffmpeg_available():
         emit("preparing_source", "Cutting silent gaps from the source.", 22)
         normalized_for_cut = await asyncio.to_thread(normalize_montage_source, source_path, output_dir)
         if normalized_for_cut:
             pre_cut_duration = await asyncio.to_thread(probe_duration_seconds, normalized_for_cut)
-            tight_path, cut_applied, cut_warning = await asyncio.to_thread(
+            tight_path, cut_applied, cut_warning, dead_air_joins = await asyncio.to_thread(
                 cut_dead_spaces,
                 normalized_for_cut,
                 output_dir / "tight-source.mp4",
