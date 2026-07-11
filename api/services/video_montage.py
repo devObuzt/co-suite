@@ -1529,6 +1529,41 @@ def generate_soft_whoosh(path: Path) -> None:
     write_mono_pcm_wav(path, samples, sample_rate)
 
 
+# Tags that read as a scene-cut accent rather than a mid-scene ping. Boundaries
+# prefer these; a camera-shutter or notification at a hard cut feels off.
+TRANSITION_SFX_TAGS = {"transition", "whoosh", "swoosh", "impact", "pop", "energy", "hit"}
+
+
+def transition_sound_pool(sfx_assets: list) -> list:
+    """Scene-boundary accents drawn from the sfx library.
+
+    There is no dedicated audio ``transition`` asset kind in the library (only
+    visual ``transition_video``), so boundary sounds come from ``sfx``. Prefer
+    transition-flavoured sfx, but fall back to the whole library when fewer than
+    two are tagged that way — anything beats replaying one whoosh forever.
+    """
+    flavoured = [
+        asset
+        for asset in sfx_assets
+        if TRANSITION_SFX_TAGS & {str(tag).lower() for tag in (getattr(asset, "tags", None) or [])}
+    ]
+    return flavoured if len(flavoured) >= 2 else list(sfx_assets)
+
+
+def varied_index_sequence(count: int, length: int, seed: int) -> list[int]:
+    """A seed-shuffled walk over ``range(length)`` repeated to ``count`` items.
+
+    Consecutive picks differ (within a cycle) and the whole order changes with
+    the render seed, so boundary sounds vary both within a video and between
+    renders. Returns ``[]`` for degenerate inputs.
+    """
+    if count <= 0 or length <= 0:
+        return []
+    order = list(range(length))
+    random.Random(seed).shuffle(order)
+    return [order[position % length] for position in range(count)]
+
+
 async def build_remotion_scene_manifest(
     *,
     db: AsyncSession | None,
@@ -1880,7 +1915,6 @@ async def build_remotion_scene_manifest(
         music_mood = re.sub(r"\s+", " ", str(input_data.get("music_mood") or "")).strip()
         music_query = f"{music_mood} {suite.name} {' '.join(scene['caption'] for scene in scenes[:3])}".strip()
         music_asset = pick_asset(active_assets, kind="music", scene_text=music_query)
-    transition_assets = [asset for asset in active_assets if asset.kind == "transition"] if music_enabled else []
     # Deterministic per-render shuffle: without it every video walks the same
     # usage-ordered transition sequence and reads as "the same transition".
     render_shuffle_seed = zlib.crc32(str(work_dir).encode("utf-8"))
@@ -1903,15 +1937,20 @@ async def build_remotion_scene_manifest(
         cursor += scene["sourceEnd"] - scene["sourceStart"]
 
     sound_effects: list[dict[str, Any]] = []
-    for index, start in enumerate(starts[1:]):
+    boundary_starts = starts[1:]
+    # Boundary accents come from the sfx library (there is no audio "transition"
+    # kind), shuffled per render so each scene cut gets a different sound instead
+    # of the same whoosh every time.
+    transition_pool = transition_sound_pool(sfx_assets) if music_enabled else []
+    boundary_indices = varied_index_sequence(len(boundary_starts), len(transition_pool), render_shuffle_seed ^ 0x9E3779B9)
+    for index, start in enumerate(boundary_starts):
         if not music_enabled:
             continue
-        asset = transition_assets[index % len(transition_assets)] if transition_assets else None
-        if asset:
-            public_path = remotion_public_asset_path(asset.storage_url, work_dir, asset.id)
-            if public_path:
-                selected_asset_ids.append(asset.id)
-                sound_effects.append({"publicPath": public_path, "at": round(start, 3), "volume": 0.3, "assetId": asset.id, "kind": "transition"})
+        asset = transition_pool[boundary_indices[index]] if transition_pool else None
+        public_path = remotion_public_asset_path(asset.storage_url, work_dir, asset.id) if asset else None
+        if asset and public_path:
+            selected_asset_ids.append(asset.id)
+            sound_effects.append({"publicPath": public_path, "at": round(start, 3), "volume": 0.3, "assetId": asset.id, "kind": "transition"})
         elif whoosh_path.exists():
             sound_effects.append({"publicPath": "/remotion/sound/soft-whoosh.wav", "at": round(start, 3), "volume": 0.3, "kind": "transition"})
 

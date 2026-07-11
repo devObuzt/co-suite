@@ -1,6 +1,6 @@
 {
   "source": "Videos Assets.zip",
-  "asset_count": 44,
+  "asset_count": 57,
   "assets": [
     {
       "library_key": "a68fb2c5e9dcfc0b0e13a5d73eed62f3f0e0712c",
@@ -557,6 +557,156 @@
       "active": true
     },
     {
+      "library_key": "a311a0fe559856e479a475dcc29e0e47fc7625a4",
+      "kind": "sfx",
+      "title": "Click Tick",
+      "storage_url": "/static/creative_assets/library/sfx/click-tick-376759e1a2.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.035,
+      "tags": [
+        "click",
+        "tick"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "click",
+          "tick"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/click-tick-376759e1a2.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
+      "library_key": "cf0c54b139a7f299d7587c6189c3c8e5a8415b97",
+      "kind": "sfx",
+      "title": "Ding Bright",
+      "storage_url": "/static/creative_assets/library/sfx/ding-bright-a8a6272ad7.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.6,
+      "tags": [
+        "ding",
+        "notification"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "ding",
+          "notification"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/ding-bright-a8a6272ad7.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
+      "library_key": "40b868ad08cffae799ea6c9b86971ca850c5bf33",
+      "kind": "sfx",
+      "title": "Impact Boom",
+      "storage_url": "/static/creative_assets/library/sfx/impact-boom-e219321d0c.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.6,
+      "tags": [
+        "impact",
+        "hit",
+        "boom"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "impact",
+          "hit",
+          "boom"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/impact-boom-e219321d0c.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
+      "library_key": "8de5d954ced7225c7269b86e8df938ef65e74723",
+      "kind": "sfx",
+      "title": "Impact Hit",
+      "storage_url": "/static/creative_assets/library/sfx/impact-hit-55eabec6dd.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.4,
+      "tags": [
+        "impact",
+        "hit"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "impact",
+          "hit"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/impact-hit-55eabec6dd.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
       "library_key": "b73191cd00be6ae9b34c6c4469ad14c7d2b4a92e",
       "kind": "sfx",
       "title": "Long Shutter",
@@ -737,6 +887,80 @@
       "active": true
     },
     {
+      "library_key": "69b98cfca306558dcd407208b2ccf2d4610415cd",
+      "kind": "sfx",
+      "title": "Pop Bubble",
+      "storage_url": "/static/creative_assets/library/sfx/pop-bubble-912bac5388.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.14,
+      "tags": [
+        "pop",
+        "energy"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "pop",
+          "energy"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/pop-bubble-912bac5388.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
+      "library_key": "1fca3257d2c68fbcdab82108004783d0555ac6d4",
+      "kind": "sfx",
+      "title": "Pop Soft",
+      "storage_url": "/static/creative_assets/library/sfx/pop-soft-a7079283c9.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.12,
+      "tags": [
+        "pop",
+        "energy"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "pop",
+          "energy"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/pop-soft-a7079283c9.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
       "library_key": "73569a79c9fbafab8e918a24d8bd36f51150fb9c",
       "kind": "sfx",
       "title": "Pop sounds",
@@ -805,6 +1029,88 @@
         "original_path": "Videos Assets/Sfx/Ringtone Scifi.mp3",
         "orientation": null,
         "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "675125aba4bfbeeebf68f7f0cbca7df7ab52dde1",
+      "kind": "sfx",
+      "title": "Riser Sweep",
+      "storage_url": "/static/creative_assets/library/sfx/riser-sweep-641f064a81.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 1.0,
+      "tags": [
+        "riser",
+        "build",
+        "transition",
+        "energy"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "riser",
+          "build",
+          "transition",
+          "energy"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/riser-sweep-641f064a81.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
+      "library_key": "7ed2045d1af796890ea9e9e53438b56af84f5b57",
+      "kind": "sfx",
+      "title": "Riser Tension",
+      "storage_url": "/static/creative_assets/library/sfx/riser-tension-39c520930b.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 1.2,
+      "tags": [
+        "riser",
+        "build",
+        "transition",
+        "energy"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "riser",
+          "build",
+          "transition",
+          "energy"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/riser-tension-39c520930b.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
       },
       "active": true
     },
@@ -951,6 +1257,47 @@
       "active": true
     },
     {
+      "library_key": "280b816329383a8b5af5bcc78029fec6d6721b21",
+      "kind": "sfx",
+      "title": "Sub Drop",
+      "storage_url": "/static/creative_assets/library/sfx/sub-drop-8618c3ebde.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.8,
+      "tags": [
+        "impact",
+        "drop",
+        "sub",
+        "transition"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "impact",
+          "drop",
+          "sub",
+          "transition"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/sub-drop-8618c3ebde.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
       "library_key": "b1229e5e7ef71073d588267a9ce2838db5d28c63",
       "kind": "sfx",
       "title": "Swoosh + sound",
@@ -985,6 +1332,162 @@
         "original_path": "Videos Assets/Sfx/Swoosh + sound.mp3",
         "orientation": null,
         "library": "Videos Assets"
+      },
+      "active": true
+    },
+    {
+      "library_key": "2c8d75187769e18eb5c307077ad8d00c615b3e52",
+      "kind": "sfx",
+      "title": "Swoosh Fast",
+      "storage_url": "/static/creative_assets/library/sfx/swoosh-fast-1a3469e5d5.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.28,
+      "tags": [
+        "swoosh",
+        "whoosh",
+        "transition"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "swoosh",
+          "whoosh",
+          "transition"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/swoosh-fast-1a3469e5d5.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
+      "library_key": "4707a8ebe9c1430f255ead8ee284c0460853e588",
+      "kind": "sfx",
+      "title": "Swoosh Reverse",
+      "storage_url": "/static/creative_assets/library/sfx/swoosh-reverse-f5bd837b8c.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.3,
+      "tags": [
+        "swoosh",
+        "whoosh",
+        "transition"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "swoosh",
+          "whoosh",
+          "transition"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/swoosh-reverse-f5bd837b8c.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
+      "library_key": "4966141b62b5279097096ecbe3899a423b08e7d1",
+      "kind": "sfx",
+      "title": "Whoosh Down",
+      "storage_url": "/static/creative_assets/library/sfx/whoosh-down-55701b16aa.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.5,
+      "tags": [
+        "whoosh",
+        "swoosh",
+        "transition"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "whoosh",
+          "swoosh",
+          "transition"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/whoosh-down-55701b16aa.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
+      },
+      "active": true
+    },
+    {
+      "library_key": "b03dc53fbfacfce02b7e803118d497cf548f2eaf",
+      "kind": "sfx",
+      "title": "Whoosh Up",
+      "storage_url": "/static/creative_assets/library/sfx/whoosh-up-269c2e7551.wav",
+      "content_type": "audio/wav",
+      "duration_seconds": 0.5,
+      "tags": [
+        "whoosh",
+        "swoosh",
+        "transition"
+      ],
+      "use_cases": [
+        "attention_beat",
+        "title_pop",
+        "visual_accent"
+      ],
+      "classification": {
+        "tags": [
+          "whoosh",
+          "swoosh",
+          "transition"
+        ],
+        "use_cases": [
+          "attention_beat",
+          "title_pop",
+          "visual_accent"
+        ],
+        "auto_classified": false,
+        "source_folder": "generated/sfx"
+      },
+      "metadata": {
+        "original_path": "generated/sfx/whoosh-up-269c2e7551.wav",
+        "orientation": null,
+        "library": "Generated SFX",
+        "generated": true
       },
       "active": true
     },
