@@ -1378,6 +1378,35 @@ def copy_remotion_runtime(work_dir: Path) -> tuple[Path, Path]:
     for filename in ("AiMontage.tsx", "Root.tsx", "index.ts"):
         shutil.copy2(WEB_ROOT / "src" / "remotion" / filename, src_dir / filename)
 
+    # Copy the custom transition presentations AiMontage imports via
+    # `./transitions/*` (relative import — resolved next to AiMontage.tsx).
+    source_transitions = WEB_ROOT / "src" / "remotion" / "transitions"
+    if source_transitions.exists():
+        target_transitions = src_dir / "transitions"
+        target_transitions.mkdir(parents=True, exist_ok=True)
+        for tsx in source_transitions.iterdir():
+            if tsx.is_file():
+                shutil.copy2(tsx, target_transitions / tsx.name)
+
+    # The Remotion bundler resolves bare imports (e.g. `@remotion/transitions`)
+    # by walking up from the entry file's dir for a node_modules. This isolated
+    # work dir has none, so link web/node_modules in — otherwise
+    # `@remotion/transitions` fails to resolve and the WHOLE Remotion render
+    # errors out, silently falling back to the bare ffmpeg montage (no captions,
+    # titles, backgrounds, or transitions). `remotion` core alone resolved before
+    # because the bundler injects it itself; a separate package like
+    # @remotion/transitions must be reachable on disk from the entry.
+    node_modules_link = work_dir / "node_modules"
+    if not node_modules_link.exists():
+        try:
+            node_modules_link.symlink_to(WEB_ROOT / "node_modules", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            log.warning(
+                "Could not link node_modules into montage work dir %s; "
+                "@remotion/transitions may not resolve and the render will fall back.",
+                work_dir,
+            )
+
     source_fonts = WEB_ROOT / "public" / "remotion" / "fonts"
     target_fonts = public_dir / "fonts"
     target_fonts.mkdir(parents=True, exist_ok=True)

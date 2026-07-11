@@ -92,3 +92,18 @@ def test_build_scene_transitions_length_is_boundaries():
 
 def test_build_scene_transitions_single_scene_is_empty():
     assert build_scene_transitions([_full_scene(1, 0, 2)], seed=0) == []
+
+
+def test_copy_remotion_runtime_links_node_modules_and_transitions(tmp_path):
+    # Regression guard: the per-job render work dir must expose web/node_modules
+    # (so `@remotion/transitions` resolves) and the custom `./transitions/*`
+    # presentations, or the whole Remotion render fails and falls back to the
+    # bare ffmpeg montage (no captions/titles/backgrounds/transitions).
+    from api.services.video_montage import copy_remotion_runtime, WEB_ROOT
+
+    src_dir, _public_dir = copy_remotion_runtime(tmp_path)
+    node_modules = tmp_path / "node_modules"
+    assert node_modules.is_symlink()
+    assert node_modules.resolve() == (WEB_ROOT / "node_modules").resolve()
+    assert (src_dir / "AiMontage.tsx").exists()
+    assert (src_dir / "transitions" / "zoom.tsx").exists()
