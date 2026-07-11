@@ -1059,6 +1059,32 @@ def transcribe_video_segments(video_path: Path, output_dir: Path) -> tuple[list[
     return segments[:64], None
 
 
+def pad_subject_frames(frames_dir: Path, min_count: int) -> int:
+    """Hold the final subject frame so indices up to ``min_count`` all exist.
+
+    ffmpeg's ``fps=`` filter can emit one or two fewer frames than the Remotion
+    composition requests at the tail (it maps scene ends with ``round(t*fps)``).
+    A single missing ``frame_%05d.png`` 404s the compositor and collapses the
+    whole render to the basic ``ffmpeg_local_fallback`` engine, so we duplicate
+    the last real frame to cover the rounding gap. Returns the number added.
+    """
+    frames = sorted(frames_dir.glob("frame_*.png"))
+    if not frames:
+        return 0
+    last = frames[-1]
+    try:
+        last_index = int(last.stem.split("_")[-1])
+    except ValueError:
+        return 0
+    padded = 0
+    for index in range(last_index + 1, min_count):
+        target = frames_dir / f"frame_{index:05d}.png"
+        if not target.exists():
+            shutil.copy2(last, target)
+            padded += 1
+    return padded
+
+
 def detect_subject_top_rel(frames_dir: Path) -> float | None:
     """Top edge of the transparent subject (0..1 of frame height) from alpha."""
     frames = sorted(frames_dir.glob("frame_*.png"))
@@ -1619,6 +1645,10 @@ async def build_remotion_scene_manifest(
                     str(frames_dir / "frame_%05d.png"),
                 ]
             )
+        # The composition runs to ceil(duration*fps) frames; ffmpeg's fps filter
+        # can land a couple short, so hold the last frame across the gap rather
+        # than let a single 404 collapse the render to the ffmpeg fallback.
+        pad_subject_frames(frames_dir, int(math.ceil(duration * fps)) + 4)
 
     has_source_audio = ffprobe_has_audio(transparent_source_path)
     audio_path = inputs_dir / f"{transparent_source_path.stem}-audio.m4a"
