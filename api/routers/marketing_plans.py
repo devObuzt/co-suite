@@ -41,6 +41,7 @@ from ..services.marketing_plan_generator import (
     normalize_marketing_intelligence,
     suite_research_payload,
 )
+from ..services.social_ideas_generator import generate_social_ideas
 from ..services.marketing_plan_pdf import build_marketing_plan_pdf
 from ..services.marketing_plan_visuals import deck_visuals, ensure_marketing_plan_visuals
 from ..services.meta_interests import match_meta_interests
@@ -89,6 +90,18 @@ class GenerateSocialContentItemsRequest(BaseModel):
 
 class SocialContentPlanSelectionRequest(BaseModel):
     selected_ids: list[str] = Field(default_factory=list, max_length=80)
+
+
+class GenerateSocialIdeasRequest(BaseModel):
+    period: str = Field(pattern=r"^\d{4}-\d{2}$")   # e.g. "2026-08"
+    target_count: int = Field(default=12, ge=1, le=31)
+    language: str | None = None
+
+
+class SocialIdeasSelectionRequest(BaseModel):
+    selected_ids: list[str] = Field(default_factory=list, max_length=80)
+    notes: dict[str, str] = Field(default_factory=dict)              # idea_id -> note
+    assets: dict[str, list[str]] = Field(default_factory=dict)       # idea_id -> chosen asset_types
 
 
 class GeneratePaidContentPlanRequest(BaseModel):
@@ -290,6 +303,51 @@ def _save_social_content_plan(suite: Suite, plan: dict[str, Any]) -> dict[str, A
     action_plan["status"] = "ready"
     strategy["marketing_action_plan"] = action_plan
     suite.strategy = strategy
+    return plan
+
+
+def _save_social_ideas_plan(suite: Suite, plan: dict[str, Any]) -> dict[str, Any]:
+    strategy = dict(_strategy(suite))
+    existing_action = strategy.get("marketing_action_plan")
+    action_plan = dict(existing_action) if isinstance(existing_action, dict) else {}
+    action_plan["social_ideas_plan"] = plan
+    strategy["marketing_action_plan"] = action_plan
+    suite.strategy = strategy
+    return plan
+
+
+def _social_ideas_plan(suite: Suite) -> dict[str, Any]:
+    action = _strategy(suite).get("marketing_action_plan")
+    plan = action.get("social_ideas_plan") if isinstance(action, dict) else None
+    return plan if isinstance(plan, dict) else {}
+
+
+def _update_social_ideas_selection(
+    suite: Suite, selected_ids: list[str], notes: dict[str, str], assets: dict[str, list[str]]
+) -> dict[str, Any]:
+    plan = dict(_social_ideas_plan(suite))
+    candidates = plan.get("candidates") if isinstance(plan.get("candidates"), list) else []
+    chosen = set(selected_ids)
+    updated = []
+    for idea in candidates:
+        if not isinstance(idea, dict):
+            continue
+        idea = dict(idea)
+        idea_id = str(idea.get("id"))
+        idea["selected"] = idea_id in chosen
+        if idea_id in notes:
+            idea["user_notes"] = str(notes[idea_id])[:2000]
+        if idea_id in assets:
+            picked = set(assets[idea_id])
+            idea["apply_assets"] = [
+                {**a, "recommended": a.get("asset_type") in picked}
+                for a in (idea.get("apply_assets") or [])
+                if isinstance(a, dict)
+            ]
+        updated.append(idea)
+    plan["candidates"] = updated
+    plan["selected_ids"] = [i for i in selected_ids]
+    _save_social_ideas_plan(suite, plan)
     return plan
 
 
@@ -2886,6 +2944,74 @@ async def update_marketing_social_content_plan_selection(
     )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "action_plan_ready")
+
+
+@router.post("/suites/{suite_id}/marketing-plan/social-ideas/generate")
+async def generate_marketing_social_ideas(
+    suite_id: str,
+    payload: GenerateSocialIdeasRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    plan = await generate_social_ideas(
+        db,
+        suite,
+        period=payload.period,
+        target_count=payload.target_count,
+        requested_language=payload.language,
+    )
+    _save_social_ideas_plan(suite, plan)
+    warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
+    await record_provider_usage(
+        db,
+        provider=settings.ai_text_provider,
+        operation="marketing_social_ideas.generate",
+        model=settings.anthropic_text_model,
+        status="partial" if warnings else "success",
+        suite_id=suite.id,
+        user_id=current_user.id,
+        metadata={
+            "period": payload.period,
+            "target_count": plan.get("target_count"),
+            "candidate_count": len(plan.get("candidates") or []),
+            "occasion_count": len(plan.get("occasions") or []),
+            "warnings": warnings,
+        },
+    )
+    await record_audit_log(
+        db,
+        action="marketing.social_ideas.generate",
+        resource_type="marketing_action_plan",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"period": payload.period, "candidate_count": len(plan.get("candidates") or [])},
+    )
+    await db.commit()
+    return {"social_ideas_plan": plan}
+
+
+@router.post("/suites/{suite_id}/marketing-plan/social-ideas/selection")
+async def update_marketing_social_ideas_selection(
+    suite_id: str,
+    payload: SocialIdeasSelectionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await get_owned_suite(db, suite_id, current_user)
+    plan = _update_social_ideas_selection(suite, payload.selected_ids, payload.notes, payload.assets)
+    await record_audit_log(
+        db,
+        action="marketing.social_ideas.selection.update",
+        resource_type="marketing_action_plan",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"selected_count": len(plan.get("selected_ids") or [])},
+    )
+    await db.commit()
+    return {"social_ideas_plan": plan}
 
 
 @router.patch("/suites/{suite_id}/marketing-plan/social-content-plan/items/{item_id}")
