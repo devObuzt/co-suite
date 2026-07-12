@@ -23,6 +23,7 @@ from .billing import (
 from .admin import AppTextOverride, AuditLog, ProviderUsageEvent, CreativeAsset
 from .media_asset import MediaAsset
 from .services_catalog import ServiceItem, Lead, ServiceRequest
+from .research_cache import ResearchCache
 
 __all__ = [
     "User",
@@ -37,4 +38,5 @@ __all__ = [
     "AuditLog", "ProviderUsageEvent", "AppTextOverride", "CreativeAsset",
     "MediaAsset",
     "ServiceItem", "Lead", "ServiceRequest",
+    "ResearchCache",
 ]

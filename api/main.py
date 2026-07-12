@@ -109,6 +109,10 @@ async def startup():
                     "CREATE INDEX IF NOT EXISTS ix_leads_user_id ON leads (user_id)",
                     "CREATE TABLE IF NOT EXISTS service_requests (id VARCHAR PRIMARY KEY, lead_id VARCHAR REFERENCES leads(id) NOT NULL, items JSON NOT NULL, totals JSON NOT NULL, customer_notes TEXT, status VARCHAR DEFAULT 'new' NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT now())",
                     "CREATE INDEX IF NOT EXISTS ix_service_requests_lead_id ON service_requests (lead_id)",
+                    "CREATE TABLE IF NOT EXISTS research_cache (id VARCHAR PRIMARY KEY, kind VARCHAR(40) NOT NULL, country VARCHAR(80) NOT NULL, language VARCHAR(16) NOT NULL, period VARCHAR(16), data JSON, source VARCHAR(16) DEFAULT 'hybrid' NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT now(), refreshed_at TIMESTAMP WITH TIME ZONE DEFAULT now(), expires_at TIMESTAMP WITH TIME ZONE, CONSTRAINT uq_research_cache_kind_country_language_period UNIQUE (kind, country, language, period))",
+                    "CREATE INDEX IF NOT EXISTS ix_research_cache_kind ON research_cache (kind)",
+                    "CREATE INDEX IF NOT EXISTS ix_research_cache_country ON research_cache (country)",
+                    "CREATE INDEX IF NOT EXISTS ix_research_cache_language ON research_cache (language)",
                 ):
                     await conn.execute(text(statement))
         except Exception as e:
