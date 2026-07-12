@@ -113,6 +113,13 @@ async def startup():
                     "CREATE INDEX IF NOT EXISTS ix_research_cache_kind ON research_cache (kind)",
                     "CREATE INDEX IF NOT EXISTS ix_research_cache_country ON research_cache (country)",
                     "CREATE INDEX IF NOT EXISTS ix_research_cache_language ON research_cache (language)",
+                    # Phone-only funnel auth: lead is captured before any user exists
+                    "ALTER TABLE leads ALTER COLUMN user_id DROP NOT NULL",
+                    "ALTER TABLE leads ALTER COLUMN full_name DROP NOT NULL",
+                    "ALTER TABLE leads ALTER COLUMN email DROP NOT NULL",
+                    "CREATE INDEX IF NOT EXISTS ix_leads_phone ON leads (phone)",
+                    "CREATE TABLE IF NOT EXISTS phone_otps (id VARCHAR PRIMARY KEY, phone VARCHAR NOT NULL, code VARCHAR NOT NULL, attempts INTEGER DEFAULT 0 NOT NULL, expires_at TIMESTAMP WITH TIME ZONE NOT NULL, verified_at TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE DEFAULT now())",
+                    "CREATE INDEX IF NOT EXISTS ix_phone_otps_phone ON phone_otps (phone)",
                 ):
                     await conn.execute(text(statement))
         except Exception as e:

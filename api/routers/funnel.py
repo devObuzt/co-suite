@@ -1,6 +1,8 @@
-"""Public startbyconnec funnel: register → suite → plans → services → request."""
+"""Public startbyconnec funnel: phone OTP → name → suite → plans → services → request."""
 import json
 import logging
+import secrets
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -10,9 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.config import settings
 from ..core.database import get_db
 from ..core.llm_client import call_text_ai
+from ..core.phone import normalize_phone
 from ..core.security import create_access_token, get_current_user, hash_password
 from ..models.services_catalog import (
     Lead,
+    PhoneOtp,
     ServiceItem,
     ServiceRequest,
     serialize_lead,
@@ -22,6 +26,7 @@ from ..models.services_catalog import (
 from ..models.suite import MemberRole, Suite, SuiteMember, SuiteStatus
 from ..models.user import User
 from ..services.admin_audit import record_audit_log, serialize_user_public
+from ..services.otp_sender import send_otp
 from ..services.service_pricing import compute_totals
 from ..services.telegram_notify import send_company_message
 from .suites import slugify
@@ -73,6 +78,232 @@ async def _require_lead(db: AsyncSession, user: User) -> Lead:
     return lead
 
 
+# ── Phone-only OTP auth ──────────────────────────────────────────────────────
+
+FUNNEL_STEPS = ["phone", "name", "suite", "plans", "services", "done"]
+
+
+class OtpRequestIn(BaseModel):
+    phone: str = Field(min_length=6, max_length=32)
+
+
+class OtpVerifyIn(BaseModel):
+    phone: str = Field(min_length=6, max_length=32)
+    code: str = Field(min_length=4, max_length=8)
+
+
+class FunnelProfileIn(BaseModel):
+    full_name: str = Field(min_length=1, max_length=200)
+
+
+class FunnelProgressIn(BaseModel):
+    step: str
+
+
+def _step_index(step: str | None) -> int:
+    try:
+        return FUNNEL_STEPS.index(step or "phone")
+    except ValueError:
+        return 0
+
+
+def resume_step_for(lead: Lead) -> str:
+    """Where a verified visitor should land: the stored step, floored by what
+    the data proves they already did."""
+    stored = (lead.progress or {}).get("step")
+    floor = "name"
+    if (lead.progress or {}).get("request_submitted"):
+        floor = "done"
+    elif lead.suite_id:
+        floor = "plans"
+    elif (lead.full_name or "").strip():
+        floor = "suite"
+    candidate = stored if stored in FUNNEL_STEPS else "name"
+    return candidate if _step_index(candidate) >= _step_index(floor) else floor
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+async def _lead_by_phone(db: AsyncSession, phone: str) -> Lead | None:
+    return (
+        await db.execute(select(Lead).where(Lead.phone == phone).order_by(Lead.created_at))
+    ).scalars().first()
+
+
+@router.post("/otp/request")
+async def otp_request(data: OtpRequestIn, db: AsyncSession = Depends(get_db)):
+    phone = normalize_phone(data.phone)
+    if not phone:
+        raise HTTPException(status_code=400, detail="invalid_phone")
+    now = datetime.now(timezone.utc)
+
+    # Lead is captured at first touch, before any verification.
+    lead = await _lead_by_phone(db, phone)
+    if not lead:
+        lead = Lead(phone=phone, progress={"step": "phone"})
+        db.add(lead)
+
+    last = (
+        await db.execute(
+            select(PhoneOtp)
+            .where(PhoneOtp.phone == phone, PhoneOtp.verified_at.is_(None))
+            .order_by(PhoneOtp.created_at.desc())
+        )
+    ).scalars().first()
+    if last is not None:
+        created = _as_utc(last.created_at)
+        expires = _as_utc(last.expires_at)
+        if created and expires and expires > now:
+            elapsed = (now - created).total_seconds()
+            if elapsed < settings.funnel_otp_resend_seconds:
+                await db.commit()  # still persist the lead
+                raise HTTPException(status_code=429, detail="resend_too_soon")
+
+    otp = PhoneOtp(
+        phone=phone,
+        code=settings.funnel_otp_code,
+        expires_at=now + timedelta(seconds=settings.funnel_otp_ttl_seconds),
+    )
+    db.add(otp)
+    await db.commit()
+    await send_otp(phone, otp.code)
+    return {"ok": True}
+
+
+@router.post("/otp/verify")
+async def otp_verify(data: OtpVerifyIn, request: Request, db: AsyncSession = Depends(get_db)):
+    phone = normalize_phone(data.phone)
+    if not phone:
+        raise HTTPException(status_code=400, detail="invalid_phone")
+    now = datetime.now(timezone.utc)
+
+    otp = (
+        await db.execute(
+            select(PhoneOtp)
+            .where(PhoneOtp.phone == phone, PhoneOtp.verified_at.is_(None))
+            .order_by(PhoneOtp.created_at.desc())
+        )
+    ).scalars().first()
+    if otp is None:
+        raise HTTPException(status_code=400, detail="otp_not_found")
+    expires = _as_utc(otp.expires_at)
+    if expires is None or expires < now:
+        raise HTTPException(status_code=400, detail="code_expired")
+    if otp.attempts >= settings.funnel_otp_max_attempts:
+        raise HTTPException(status_code=400, detail="too_many_attempts")
+    if data.code.strip() != otp.code:
+        otp.attempts += 1
+        await db.commit()
+        raise HTTPException(status_code=400, detail="invalid_code")
+
+    otp.verified_at = now
+
+    lead = await _lead_by_phone(db, phone)
+    if not lead:
+        lead = Lead(phone=phone, progress={"step": "phone"})
+        db.add(lead)
+        await db.flush()
+
+    user: User | None = None
+    if lead.user_id:
+        user = (await db.execute(select(User).where(User.id == lead.user_id))).scalar_one_or_none()
+    if user is None:
+        user = (await db.execute(select(User).where(User.phone == phone))).scalars().first()
+    if user is None:
+        digits = phone.lstrip("+")
+        email = f"p{digits}@lead.cosuite.app"
+        clash = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+        if clash is not None:
+            email = f"p{digits}.{secrets.token_hex(3)}@lead.cosuite.app"
+        user = User(
+            email=email,
+            hashed_password=hash_password(secrets.token_urlsafe(16)),
+            full_name=(lead.full_name or "").strip(),
+            phone=phone,
+            approval_status="funnel",
+        )
+        db.add(user)
+        await db.flush()
+    else:
+        if (user.approval_status or "frozen") != "approved":
+            user.approval_status = "funnel"
+        if not user.phone:
+            user.phone = phone
+
+    lead.user_id = user.id
+    progress = dict(lead.progress or {})
+    if _step_index(progress.get("step")) < _step_index("name"):
+        progress["step"] = "name"
+    lead.progress = progress
+
+    await record_audit_log(
+        db, action="funnel.otp_verify", resource_type="lead", resource_id=lead.id,
+        target_user_id=user.id, actor=user, request=request, metadata={"phone": phone},
+    )
+    await db.commit()
+    await db.refresh(user)
+    await db.refresh(lead)
+    return {
+        "access_token": create_access_token(user.id),
+        "token_type": "bearer",
+        "user": serialize_user_public(user),
+        "lead": serialize_lead(lead),
+        "resume_step": resume_step_for(lead),
+    }
+
+
+@router.post("/profile")
+async def set_profile(
+    data: FunnelProfileIn,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    name = data.full_name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name_required")
+    lead = await _require_lead(db, current_user)
+    lead.full_name = name
+    current_user.full_name = name
+    progress = dict(lead.progress or {})
+    if _step_index(progress.get("step")) < _step_index("suite"):
+        progress["step"] = "suite"
+    lead.progress = progress
+    await record_audit_log(
+        db, action="funnel.profile", resource_type="lead", resource_id=lead.id,
+        target_user_id=current_user.id, actor=current_user, request=request,
+    )
+    await db.commit()
+    await db.refresh(lead)
+    return {
+        "user": serialize_user_public(current_user),
+        "lead": serialize_lead(lead),
+        "resume_step": resume_step_for(lead),
+    }
+
+
+@router.post("/progress")
+async def set_progress(
+    data: FunnelProgressIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if data.step not in FUNNEL_STEPS:
+        raise HTTPException(status_code=400, detail="invalid_step")
+    lead = await _require_lead(db, current_user)
+    progress = dict(lead.progress or {})
+    if _step_index(data.step) > _step_index(progress.get("step")):
+        progress["step"] = data.step
+        lead.progress = progress
+        await db.commit()
+        await db.refresh(lead)
+    return {"resume_step": resume_step_for(lead)}
+
+
 def snapshot_selection(
     selections: list[dict], catalog: dict[str, ServiceItem]
 ) -> tuple[list[dict], dict]:
@@ -100,11 +331,12 @@ def lead_notification_text(lead: Lead, totals: dict, *, frontend_url: str) -> st
     cycle_labels = {"one_time": "لمرة واحدة", "monthly": "شهري", "yearly": "سنوي"}
     lines = [
         "🟢 <b>طلب خدمة جديد — startbyconnec</b>",
-        f"👤 {lead.full_name}",
+        f"👤 {lead.full_name or '—'}",
         f"📞 {lead.phone}",
-        f"✉️ {lead.email}",
-        "",
     ]
+    if lead.email:
+        lines.append(f"✉️ {lead.email}")
+    lines.append("")
     for cycle, bucket in totals.items():
         label = cycle_labels.get(cycle, cycle)
         if bucket["min"] == bucket["max"]:
@@ -194,7 +426,7 @@ async def enroll(
 async def state(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     lead = await _lead_for(db, current_user)
     if not lead:
-        return {"lead": None, "suite_id": None, "steps": {}}
+        return {"lead": None, "suite_id": None, "steps": {}, "resume_step": None}
     progress = dict(lead.progress or {})
     return {
         "lead": serialize_lead(lead),
@@ -203,6 +435,7 @@ async def state(current_user: User = Depends(get_current_user), db: AsyncSession
             "suite_created": bool(lead.suite_id),
             "request_submitted": bool(progress.get("request_submitted")),
         },
+        "resume_step": resume_step_for(lead),
     }
 
 
@@ -235,7 +468,10 @@ async def create_funnel_suite(
     await db.flush()
     db.add(SuiteMember(suite_id=suite.id, user_id=current_user.id, role=MemberRole.member, can_chat_ai=True))
     lead.suite_id = suite.id
-    lead.progress = {**(lead.progress or {}), "suite_created": True}
+    progress = {**(lead.progress or {}), "suite_created": True}
+    if _step_index(progress.get("step")) < _step_index("plans"):
+        progress["step"] = "plans"
+    lead.progress = progress
     await record_audit_log(
         db, action="funnel.suite_created", resource_type="suite", resource_id=suite.id,
         suite_id=suite.id, target_user_id=current_user.id, actor=current_user, request=request,
@@ -327,7 +563,7 @@ async def submit_service_request(
         existing.items = items
         existing.totals = totals
         existing.customer_notes = (data.customer_notes or "").strip() or None
-        lead.progress = {**(lead.progress or {}), "request_submitted": True}
+        lead.progress = {**(lead.progress or {}), "request_submitted": True, "step": "done"}
         await record_audit_log(
             db, action="funnel.service_request", resource_type="service_request",
             resource_id=existing.id, suite_id=lead.suite_id, target_user_id=current_user.id,
@@ -344,7 +580,7 @@ async def submit_service_request(
         customer_notes=(data.customer_notes or "").strip() or None,
     )
     db.add(req)
-    lead.progress = {**(lead.progress or {}), "request_submitted": True}
+    lead.progress = {**(lead.progress or {}), "request_submitted": True, "step": "done"}
     if lead.status == "new":
         lead.status = "in_progress"
     await record_audit_log(

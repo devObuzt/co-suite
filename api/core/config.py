@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     failed_job_alerts_enabled: bool = True
     admin_email: str = ""
     lead_owner_email: str = "w.sholy@gmail.com"
+    # Static funnel OTP until WhatsApp/SMS sending is wired in.
+    funnel_otp_code: str = "123456"
+    funnel_otp_ttl_seconds: int = 600
+    funnel_otp_resend_seconds: int = 60
+    funnel_otp_max_attempts: int = 5
 
     class Config:
         env_file = str(_here / ".env")

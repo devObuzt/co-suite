@@ -33,13 +33,15 @@ class Lead(Base):
     __tablename__ = "leads"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # Nullable: a lead is captured the moment a phone number is submitted,
+    # before any user exists or a name/email is known.
+    user_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("users.id"), nullable=True, index=True)
     suite_id: Mapped[Optional[str]] = mapped_column(
         String, ForeignKey("suites.id", ondelete="SET NULL"), nullable=True
     )
-    full_name: Mapped[str] = mapped_column(String, nullable=False)
-    email: Mapped[str] = mapped_column(String, nullable=False)
-    phone: Mapped[str] = mapped_column(String, nullable=False)
+    full_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    phone: Mapped[str] = mapped_column(String, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="new")
     source: Mapped[str] = mapped_column(String, nullable=False, default="startbyconnec")
     admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -60,6 +62,21 @@ class ServiceRequest(Base):
     totals: Mapped[dict] = mapped_column(JSON, nullable=False)
     customer_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="new")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PhoneOtp(Base):
+    """One-time code for phone-only funnel auth. Code is static until the
+    WhatsApp/SMS sender is wired in."""
+
+    __tablename__ = "phone_otps"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    phone: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
