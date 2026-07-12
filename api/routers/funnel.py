@@ -279,6 +279,7 @@ async def set_profile(
     )
     await db.commit()
     await db.refresh(lead)
+    await db.refresh(current_user)
     return {
         "user": serialize_user_public(current_user),
         "lead": serialize_lead(lead),
