@@ -34,8 +34,8 @@ APPLY_ASSET_TYPES = (
     "landing_page", "webinar", "website", "app", "digital_asset_other",
 )
 DEFAULT_TARGET = 12
-IDEAS_MAX_TOKENS = 4000
-IDEAS_TIMEOUT_SECONDS = 150
+IDEAS_MAX_TOKENS = 12000  # 24 detailed ideas overrun a small budget and truncate the JSON
+IDEAS_TIMEOUT_SECONDS = 180
 
 
 def _extract_json(raw: str) -> dict:
@@ -116,10 +116,55 @@ def normalize_idea(raw, index: int = 0):
     }
 
 
+def _salvage_idea_objects(raw: str) -> list[dict]:
+    """Recover complete idea objects even from a truncated ``"ideas":[...]`` array.
+
+    Scans for balanced top-level ``{...}`` objects after the ``ideas`` key,
+    string-aware (braces inside strings don't count), and json.loads each. A
+    trailing truncated object is simply skipped, so we keep every complete idea.
+    """
+    key = raw.find('"ideas"')
+    start = raw.find("[", key) if key >= 0 else -1
+    if start < 0:
+        return []
+    objects = []
+    depth = 0
+    in_str = False
+    escape = False
+    obj_start = -1
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and obj_start >= 0:
+                try:
+                    objects.append(json.loads(raw[obj_start:i + 1]))
+                except Exception:
+                    pass
+                obj_start = -1
+        elif ch == "]" and depth == 0:
+            break
+    return objects
+
+
 def parse_ideas(raw_text: str) -> list[dict]:
-    data = _extract_json(raw_text)
+    items = (_extract_json(raw_text).get("ideas") or []) or _salvage_idea_objects(raw_text)
     out = []
-    for i, item in enumerate(data.get("ideas") or []):
+    for i, item in enumerate(items):
         idea = normalize_idea(item, i)
         if idea:
             out.append(idea)
@@ -146,24 +191,34 @@ def fallback_ideas(target_count: int, occasions: list[dict], language: str) -> l
     return ideas
 
 
+def _objective_split(over: int) -> dict[str, int]:
+    """Concrete per-objective counts for the ~70/20/10 mix (model ignores ratios)."""
+    attraction = round(over * 0.7)
+    sales = max(1, round(over * 0.1))
+    trust = max(0, over - attraction - sales)
+    return {"attraction": attraction, "trust": trust, "sales": sales}
+
+
 def build_ideas_prompt(context: dict, occasions: list[dict], market: dict, target_count: int, period: str, language: str) -> str:
     occ_lines = "\n".join(
         f"- {o.get('title')} ({o.get('type')}, {o.get('date_or_window', '')})" for o in occasions
     ) or "(none — use evergreen ideas)"
     asset_list = ", ".join(APPLY_ASSET_TYPES)
     over = target_count * 2
+    split = _objective_split(over)
+    occasion_tied = min(len(occasions), max(1, round(over * 0.4))) if occasions else 0
     return (
         f"You are a senior social media strategist for a marketing agency. Generate exactly {over} social media "
         f"CONTENT IDEAS (NOT finished posts/captions) for the brand below, for the period {period}. "
         f"Output language: {context.get('audience_language')} (dialect: {context.get('dialect') or 'natural'}).\n\n"
         f"BRAND: {json.dumps({k: context.get(k) for k in ('name','products_services','target_audience','marketing_offer','marketing_message')}, ensure_ascii=False)[:2500]}\n\n"
-        f"RELEVANT OCCASIONS this period (tie some ideas to these; the rest evergreen):\n{occ_lines}\n\n"
+        f"RELEVANT OCCASIONS this period:\n{occ_lines}\n\n"
         f"MARKET CONTEXT: {json.dumps(market, ensure_ascii=False)[:800]}\n\n"
         f"RULES:\n"
         f"- Each item is an IDEA + how to apply it, NOT a ready caption or script.\n"
-        f"- Keep the objective mix ~70% attraction, ~20% trust, ~10% sales across the {over} ideas.\n"
-        f"- Tie strongly-relevant occasions to at least one idea each (set occasion_ref); the rest evergreen.\n"
-        f"- For each idea recommend a BALANCED 'middle' set of assets (mark recommended=true) — not the cheapest single asset, not everything. Choose asset_type ONLY from: {asset_list}.\n"
+        f"- OBJECTIVE COUNTS — return EXACTLY these: {split['attraction']} attraction, {split['trust']} trust, {split['sales']} sales ideas (total {over}).\n"
+        f"- OCCASIONS — tie about {occasion_tied} ideas to the occasions above (set occasion_ref); the remaining ideas MUST be evergreen (occasion_ref=null). Do not tie every idea to an occasion.\n"
+        f"- ASSETS — for each idea recommend a BALANCED 'middle' set (recommended=true) that FITS THAT idea and VARIES across ideas: a store tour → talking_head+ai_video; a testimonial → ugc; an offer → banner+landing_page; an educational idea → carousel; a launch → website/app. Do NOT put the same assets on every idea. Also list 1-3 non-recommended optional assets. Choose asset_type ONLY from: {asset_list}.\n"
         f"- client_story is an ILLUSTRATIVE example (no fabricated real metrics presented as fact).\n\n"
         f'Return ONLY JSON: {{"ideas":[{{"objective_type":"attraction|trust|sales","title":"...",'
         f'"short_description":"1-2 sentences","occasion_ref":{{"title":"...","date_or_window":"..."}}|null,'

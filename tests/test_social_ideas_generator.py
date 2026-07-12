@@ -44,12 +44,29 @@ def test_parse_ideas_extracts_and_normalizes():
     assert ideas[0]["objective_type"] == "trust"
 
 
+def test_parse_ideas_salvages_truncated_json():
+    # A response cut off mid-array (no closing ] or }) — must keep the complete ones.
+    truncated = ('{"ideas":[{"title":"A","objective_type":"attraction"},'
+                 '{"title":"B با قوسين } جوا نص","objective_type":"trust"},'
+                 '{"title":"C","short_desc')  # last object truncated
+    ideas = parse_ideas(truncated)
+    assert [i["title"] for i in ideas] == ["A", "B با قوسين } جوا نص"]
+
+
 def test_fallback_ideas_shapes_and_uses_occasions():
     occ = [{"title": "عيد الأضحى", "type": "religious", "date_or_window": "2026-08"}]
     ideas = fallback_ideas(3, occ, "ar")
     assert len(ideas) == 3
     assert ideas[0]["occasion_ref"]["title"] == "عيد الأضحى"
     assert all(any(a["recommended"] for a in i["apply_assets"]) for i in ideas)
+
+
+def test_objective_split_is_70_20_10():
+    from api.services.social_ideas_generator import _objective_split
+    s = _objective_split(24)
+    assert s == {"attraction": 17, "trust": 5, "sales": 2}
+    assert sum(s.values()) == 24
+    assert _objective_split(6)["sales"] >= 1   # sales never zero
 
 
 def test_build_ideas_prompt_requests_ideas_not_content_and_lists_occasions():
