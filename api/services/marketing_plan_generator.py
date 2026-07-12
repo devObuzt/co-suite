@@ -1264,6 +1264,7 @@ def normalize_marketing_action_plan(
     warnings = _text_list(raw.get("warnings"), 8)
     social_content_plan = _dict(raw.get("social_content_plan"))
     paid_content_plan = _dict(raw.get("paid_content_plan"))
+    social_ideas_plan = _dict(raw.get("social_ideas_plan"))
     has_selected_work_plan = bool(_list(social_content_plan.get("selected_ids")) or _list(paid_content_plan.get("selected_ids")))
     if not social_items and not ad_funnel_items and not has_selected_work_plan:
         warnings.append("Action plan is not ready yet; generate or refresh the marketing plan first.")
@@ -1277,6 +1278,7 @@ def normalize_marketing_action_plan(
         "ad_funnel_items": ad_funnel_items,
         "social_content_plan": social_content_plan,
         "paid_content_plan": paid_content_plan,
+        "social_ideas_plan": social_ideas_plan,
         "planning_questions": planning_questions,
         "warnings": warnings,
     }

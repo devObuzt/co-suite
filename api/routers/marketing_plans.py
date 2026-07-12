@@ -2989,7 +2989,7 @@ async def generate_marketing_social_ideas(
         metadata={"period": payload.period, "candidate_count": len(plan.get("candidates") or [])},
     )
     await db.commit()
-    return {"social_ideas_plan": plan}
+    return _marketing_plan_response(suite, suite_id, None, "action_plan_ready")
 
 
 @router.post("/suites/{suite_id}/marketing-plan/social-ideas/selection")
@@ -3011,7 +3011,7 @@ async def update_marketing_social_ideas_selection(
         metadata={"selected_count": len(plan.get("selected_ids") or [])},
     )
     await db.commit()
-    return {"social_ideas_plan": plan}
+    return _marketing_plan_response(suite, suite_id, None, "action_plan_ready")
 
 
 @router.patch("/suites/{suite_id}/marketing-plan/social-content-plan/items/{item_id}")
