@@ -178,7 +178,13 @@ async def generate_strategy_endpoint(
     db: AsyncSession = Depends(get_db),
 ):
     suite = await require_suite_access(db, data.suite_id, current_user)
-    block_funnel_regeneration(current_user, already_generated=bool(suite.strategy))
+    # suite.strategy is a shared JSON container (plan deck, intelligence, social
+    # plans...). "Already generated" must mean the marketing MESSAGE itself,
+    # not any plan artifact that happens to live in the same column.
+    block_funnel_regeneration(
+        current_user,
+        already_generated=bool((suite.strategy or {}).get("marketing_message")),
+    )
 
     brand = dict(suite.brand or {})
 
@@ -216,9 +222,11 @@ async def generate_strategy_endpoint(
             raise HTTPException(status_code=503, detail="The AI service is temporarily busy. Please try again in a few seconds.")
         raise HTTPException(status_code=500, detail="Strategy generation failed. Please try again.")
 
-    suite.strategy = strategy
+    # MERGE — never replace: the strategy column also holds the generated
+    # marketing plan sections; overwriting it would wipe the whole plan.
+    suite.strategy = {**(suite.strategy or {}), **strategy}
     await db.commit()
-    return {"strategy": strategy}
+    return {"strategy": suite.strategy}
 
 
 @router.post("/save-brand-step")
