@@ -30,3 +30,6 @@ api/.env
 
 # Telegram owner-feedback poll state (local offset, not shared)
 docs/software-company/owner-feedback/state.json
+
+# Superpowers brainstorming (visual companion) scratch
+.superpowers/
