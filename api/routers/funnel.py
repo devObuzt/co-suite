@@ -143,6 +143,7 @@ async def otp_request(data: OtpRequestIn, db: AsyncSession = Depends(get_db)):
 
     # Lead is captured at first touch, before any verification.
     lead = await _lead_by_phone(db, phone)
+    new_lead = lead is None
     if not lead:
         lead = Lead(phone=phone, progress={"step": "phone"})
         db.add(lead)
@@ -171,6 +172,16 @@ async def otp_request(data: OtpRequestIn, db: AsyncSession = Depends(get_db)):
     db.add(otp)
     await db.commit()
     await send_otp(phone, otp.code)
+    if new_lead:
+        # The owner hears about every captured phone immediately, even if the
+        # visitor never finishes. Send failure must not fail the request.
+        try:
+            base = (settings.frontend_url.split(",")[0] or "").strip().rstrip("/")
+            await send_company_message(
+                f"🟡 <b>ليد جديد — startbyconnec</b>\n📞 {phone}\n🔗 {base}/admin/leads"
+            )
+        except Exception:
+            log.warning("new-lead telegram notification failed", exc_info=True)
     return {"ok": True}
 
 
@@ -280,6 +291,13 @@ async def set_profile(
     await db.commit()
     await db.refresh(lead)
     await db.refresh(current_user)
+    try:
+        base = (settings.frontend_url.split(",")[0] or "").strip().rstrip("/")
+        await send_company_message(
+            f"🟢 <b>الليد سجّل اسمه — startbyconnec</b>\n👤 {name}\n📞 {lead.phone}\n🔗 {base}/admin/leads?lead={lead.id}"
+        )
+    except Exception:
+        log.warning("lead-profile telegram notification failed", exc_info=True)
     return {
         "user": serialize_user_public(current_user),
         "lead": serialize_lead(lead),

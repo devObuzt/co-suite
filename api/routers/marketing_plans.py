@@ -2955,6 +2955,68 @@ async def update_marketing_social_content_plan_selection(
     return _marketing_plan_response(suite, suite_id, None, "action_plan_ready")
 
 
+async def _run_social_ideas_generation(suite_id: str, user_id: str, payload: "GenerateSocialIdeasRequest") -> None:
+    """Server-side social-ideas run: keeps going even if the visitor navigates
+    away or closes the app. Result (or a failed marker) lands on the suite; the
+    client just polls the plan until status leaves "generating"."""
+    from ..core.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        suite = (await db.execute(select(Suite).where(Suite.id == suite_id))).scalar_one_or_none()
+        if suite is None:
+            return
+        try:
+            plan = await generate_social_ideas(
+                db,
+                suite,
+                period=payload.period,
+                target_count=payload.target_count,
+                requested_language=payload.language,
+            )
+        except Exception as e:
+            log.exception("Background social-ideas generation failed for suite %s", suite_id)
+            _save_social_ideas_plan(suite, {
+                "status": "failed",
+                "period": payload.period,
+                "target_count": payload.target_count,
+                "error": str(e)[:300],
+            })
+            await db.commit()
+            return
+
+        plan["status"] = "ready"
+        _save_social_ideas_plan(suite, plan)
+        warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
+        await record_provider_usage(
+            db,
+            provider=settings.ai_text_provider,
+            operation="marketing_social_ideas.generate",
+            model=settings.anthropic_text_model,
+            status="partial" if warnings else "success",
+            suite_id=suite.id,
+            user_id=user_id,
+            metadata={
+                "period": payload.period,
+                "target_count": plan.get("target_count"),
+                "candidate_count": len(plan.get("candidates") or []),
+                "occasion_count": len(plan.get("occasions") or []),
+                "warnings": warnings,
+            },
+        )
+        actor = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if actor is not None:
+            await record_audit_log(
+                db,
+                action="marketing.social_ideas.generate",
+                resource_type="marketing_action_plan",
+                resource_id=suite.id,
+                suite_id=suite.id,
+                actor=actor,
+                metadata={"period": payload.period, "candidate_count": len(plan.get("candidates") or [])},
+            )
+        await db.commit()
+
+
 @router.post("/suites/{suite_id}/marketing-plan/social-ideas/generate")
 async def generate_marketing_social_ideas(
     suite_id: str,
@@ -2963,42 +3025,28 @@ async def generate_marketing_social_ideas(
     db: AsyncSession = Depends(get_db),
 ):
     suite = await get_owned_suite(db, suite_id, current_user)
-    plan = await generate_social_ideas(
-        db,
-        suite,
-        period=payload.period,
-        target_count=payload.target_count,
-        requested_language=payload.language,
-    )
-    _save_social_ideas_plan(suite, plan)
-    warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
-    await record_provider_usage(
-        db,
-        provider=settings.ai_text_provider,
-        operation="marketing_social_ideas.generate",
-        model=settings.anthropic_text_model,
-        status="partial" if warnings else "success",
-        suite_id=suite.id,
-        user_id=current_user.id,
-        metadata={
-            "period": payload.period,
-            "target_count": plan.get("target_count"),
-            "candidate_count": len(plan.get("candidates") or []),
-            "occasion_count": len(plan.get("occasions") or []),
-            "warnings": warnings,
-        },
-    )
-    await record_audit_log(
-        db,
-        action="marketing.social_ideas.generate",
-        resource_type="marketing_action_plan",
-        resource_id=suite.id,
-        suite_id=suite.id,
-        actor=current_user,
-        metadata={"period": payload.period, "candidate_count": len(plan.get("candidates") or [])},
-    )
+
+    # A run is already in flight server-side — don't start a second one.
+    existing = _social_ideas_plan(suite)
+    if existing.get("status") == "generating":
+        try:
+            started = datetime.fromisoformat(str(existing.get("started_at")))
+            still_fresh = (datetime.now(timezone.utc) - started).total_seconds() < 600
+        except Exception:
+            still_fresh = False
+        if still_fresh:
+            return _marketing_plan_response(suite, suite_id, None, "generating")
+
+    _save_social_ideas_plan(suite, {
+        "status": "generating",
+        "period": payload.period,
+        "target_count": payload.target_count,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    })
     await db.commit()
-    return _marketing_plan_response(suite, suite_id, None, "action_plan_ready")
+    await db.refresh(suite)
+    asyncio.create_task(_run_social_ideas_generation(suite_id, current_user.id, payload))
+    return _marketing_plan_response(suite, suite_id, None, "generating")
 
 
 @router.post("/suites/{suite_id}/marketing-plan/social-ideas/selection")
