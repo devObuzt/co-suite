@@ -51,12 +51,9 @@ def test_funnel_user_reaches_wizard_paths_but_not_billing():
     assert not frozen_path_allowed("funnel", "POST", "/api/v1/connections/meta/connect")
 
 
-def test_funnel_user_cannot_create_suites_directly_or_generate_more():
+def test_funnel_user_cannot_create_suites_directly():
     assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/")
     assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites")
-    assert not frozen_path_allowed(
-        "funnel", "POST", "/api/v1/suites/abc/marketing-plan/competitors/generate-more"
-    )
     # GET on the suites collection stays allowed
     assert frozen_path_allowed("funnel", "GET", "/api/v1/suites/")
 
@@ -160,19 +157,41 @@ def test_funnel_user_allowed_first_time_and_approved_always():
 
 def test_funnel_explicit_allowlist_blocks_cost_holes():
     assert not frozen_path_allowed("funnel", "DELETE", "/api/v1/suites/abc/marketing-plan")
-    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/keywords/generate-more")
-    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/competitors/generate-more")
-    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/demand-supply/generate-more")
-    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/social-content-plan/generate-items")
-    # visuals/generate is allowed at the gate but budget-capped to 1 call per lead
     assert not frozen_path_allowed("funnel", "POST", "/api/v1/onboarding/anything-else")
+    assert not frozen_path_allowed("funnel", "PATCH", "/api/v1/suites/abc")
+    assert not frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/content/generate")
 
 
 def test_funnel_allowlist_opens_marketing_plan_sections():
-    # The marketing-plan step generates section by section; each endpoint is
-    # cost-capped per lead via enforce_funnel_call_limit.
+    # The marketing-plan page generates section by section (and offers
+    # generate-more); cost control lives in enforce_funnel_call_limit, not the
+    # path gate — blocking at the gate reads as "account_frozen" to the visitor.
     for section in ("keywords", "competitors", "demand-supply", "personas"):
         assert frozen_path_allowed("funnel", "POST", f"/api/v1/suites/abc/marketing-plan/{section}/generate")
+        assert frozen_path_allowed("funnel", "POST", f"/api/v1/suites/abc/marketing-plan/{section}/generate-more")
+
+
+def test_funnel_allowlist_opens_work_plan_endpoints():
+    # خطة العمل is part of the funnel journey: social ideas, the social
+    # content plan, item generation, and the paid plan.
+    base = "/api/v1/suites/abc/marketing-plan"
+    for path in (
+        f"{base}/social-ideas/generate",
+        f"{base}/social-ideas/selection",
+        f"{base}/social-plan/generate",
+        f"{base}/social-content-plan/generate",
+        f"{base}/social-content-plan/generate-items",
+        f"{base}/social-content-plan/items/item-1/generate",
+        f"{base}/paid-content-plan/generate",
+    ):
+        assert frozen_path_allowed("funnel", "POST", path)
+    for path in (
+        f"{base}/keywords",
+        f"{base}/competitors",
+        f"{base}/competitors/comp-1",
+        f"{base}/social-content-plan/items/item-1",
+    ):
+        assert frozen_path_allowed("funnel", "PATCH", path)
 
 
 def test_funnel_explicit_allowlist_keeps_wizard_open():

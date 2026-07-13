@@ -66,14 +66,33 @@ _FUNNEL_POST_PATTERNS = [
         r"^/api/v1/suites/[^/]+/marketing-plan/visuals/generate$",
         # Marketing-plan page generates section by section; each endpoint is
         # additionally cost-capped for funnel leads via enforce_funnel_call_limit.
-        r"^/api/v1/suites/[^/]+/marketing-plan/keywords/generate$",
-        r"^/api/v1/suites/[^/]+/marketing-plan/competitors/generate$",
-        r"^/api/v1/suites/[^/]+/marketing-plan/demand-supply/generate$",
-        r"^/api/v1/suites/[^/]+/marketing-plan/personas/generate$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/keywords/generate(-more)?$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/competitors/generate(-more)?$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/demand-supply/generate(-more)?$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/personas/generate(-more)?$",
+        # خطة العمل (the work-plans page) is part of the funnel journey too:
+        # social ideas, the social content plan, and the paid plan.
+        r"^/api/v1/suites/[^/]+/marketing-plan/social-ideas/generate$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/social-ideas/selection$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/social-plan/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/generate$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/generate-items$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/items/[^/]+/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/paid-content-plan/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/selection$",
         r"^/api/v1/suites/[^/]+/marketing-plan/paid-content-plan/selection$",
+    )
+]
+
+# Plan-page edits (save keywords/competitors, tag a competitor, tweak a plan
+# item) are cheap DB writes the funnel visitor needs while reviewing the plan.
+_FUNNEL_PATCH_PATTERNS = [
+    re.compile(p)
+    for p in (
+        r"^/api/v1/suites/[^/]+/marketing-plan/keywords$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/competitors$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/competitors/[^/]+$",
+        r"^/api/v1/suites/[^/]+/marketing-plan/social-content-plan/items/[^/]+$",
     )
 ]
 
@@ -94,6 +113,9 @@ def _funnel_path_allowed(method: str, path: str) -> bool:
         if path in _FUNNEL_POST_EXACT:
             return True
         return any(pattern.match(path) for pattern in _FUNNEL_POST_PATTERNS)
+
+    if method == "PATCH":
+        return any(pattern.match(path) for pattern in _FUNNEL_PATCH_PATTERNS)
 
     return False
 
