@@ -2129,10 +2129,10 @@ DEFAULT_PAID_CONTENT_PLAN_PROMPTS = {
 - الرسالة التسويقية
 
 اكتب النتيجة بلغة الجمهور الأولى، وباللهجة المحددة إن وجدت.""",
-    "paid.stage": """لكل مرحلة من مراحل القمع التسويقي، ولّد فكرة إعلان واحدة قابلة للتنفيذ.
-الإعلان يمكن أن يكون: video أو image_banner أو carousel.
-اكتب الفكرة كإعلان ممول واضح: hook، الفكرة البصرية، النص/الكابشن، CTA، والاحتياجات الإضافية إن وجدت مثل ورشة، صفحة هبوط، صور منتج، فيديو عميل، أو كود خصم.
-لا تجعل الإعلان بيعًا مباشرًا في مرحلة الوعي، واجعل نبرة البيع أقوى تدريجيًا في التحويل.""",
+    "paid.stage": """لكل مرحلة من مراحل القمع التسويقي، ولّد فكرة إعلان مختصرة قابلة للاختيار.
+الصيغة الموصى بها يمكن أن تكون: video أو image_banner أو carousel أو ai_video.
+اكتب عنوانًا واضحًا ووصفًا موجزًا للفكرة فقط. لا تكتب نص الإعلان الكامل أو السكربت أو hook أو CTA أو تعليمات إنتاج مفصلة.
+اجعل الفكرة مناسبة لهدف المرحلة: لا تجعلها بيعًا مباشرًا في الوعي، وارفع نية الشراء تدريجيًا حتى التحويل، ثم ركّز على العودة والتوصية.""",
 }
 
 
@@ -2187,22 +2187,17 @@ Return this exact shape:
     {{
       "stage": "awareness|consideration|conversion|loyalty|advocacy",
       "title": "short ad idea title",
-      "ad_format": "video|image_banner|carousel",
+      "description": "concise idea description in 1-3 sentences",
+      "recommended_format": "video|image_banner|carousel|ai_video",
       "channel": "Facebook|Instagram|YouTube|Google|Meta|TikTok|Search|Remarketing",
-      "hook": "opening hook",
-      "visual_idea": "what the video/banner/carousel shows",
-      "copy": "ready ad copy/caption in the audience language",
-      "cta": "call to action",
-      "required_assets": ["optional assets or empty array"],
-      "extra_requirements": ["landing page/workshop/coupon/customer testimonial/etc if needed"],
-      "prompt": "ready-to-generate creative prompt",
-      "rationale": "why this fits the funnel stage and audience need"
+      "provider_note": "optional short reason this fits the stage"
     }}
   ]
 }}
 
 Required count from this provider:
 - exactly 1 idea for each stage.
+- Do not write full ad copy, scripts, hooks, CTAs, or detailed production instructions.
 
 Base business definition:
 {prompts["paid.base"]}
@@ -2274,16 +2269,10 @@ def _fallback_paid_content_items(payload: dict[str, Any], language: str, provide
                 {
                     "stage": key,
                     "title": rendered_title,
-                    "ad_format": ad_format if variant == 0 else "image_banner",
+                    "description": f"{rendered_visual} {rendered_copy}",
+                    "recommended_format": ad_format if variant == 0 else "image_banner",
                     "channel": "Meta",
-                    "hook": title.format(service=service),
-                    "visual_idea": rendered_visual,
-                    "copy": rendered_copy,
-                    "cta": cta,
-                    "required_assets": ["صورة/فيديو للمنتج أو الخدمة"] if variant == 0 else ["تصميم بانر واضح"],
-                    "extra_requirements": [],
-                    "prompt": f"{rendered_title}. {rendered_visual}. نص الإعلان: {rendered_copy}. CTA: {cta}",
-                    "rationale": "Fallback idea built from suite profile because the provider did not return usable JSON.",
+                    "provider_note": "فكرة احتياطية مبنية على ملف السوت وهدف المرحلة.",
                     "provider": provider,
                 }
             )
@@ -2298,17 +2287,27 @@ def _normalize_paid_content_candidate(raw: Any, index: int, provider: str, stage
     stage_key = _paid_stage_key(raw.get("stage") or raw.get("funnel_stage") or stage_hint)
     stage_meta = _paid_stage_by_key().get(stage_key) or PAID_CONTENT_FUNNEL_STAGES[0]
     title = str(raw.get("title") or raw.get("headline") or raw.get("hook") or f"{stage_meta['stage']} ad idea {index}").strip()
-    prompt = str(raw.get("prompt") or raw.get("generation_prompt") or raw.get("copy") or raw.get("visual_idea") or title).strip()
+    description = str(
+        raw.get("description")
+        or raw.get("short_description")
+        or raw.get("visual_idea")
+        or raw.get("rationale")
+        or raw.get("copy")
+        or ""
+    ).strip()
+    prompt = str(raw.get("prompt") or raw.get("generation_prompt") or description or title).strip()
     if not title or not prompt:
         return None
     visible_text = " ".join(
         str(raw.get(field) or "")
-        for field in ("title", "headline", "hook", "visual_idea", "copy", "caption", "body", "cta", "prompt")
+        for field in ("title", "headline", "description", "short_description", "visual_idea", "copy", "caption", "body", "prompt")
     ).strip()
     if _looks_like_placeholder_paid_idea(visible_text):
         return None
-    ad_format = str(raw.get("ad_format") or raw.get("format") or raw.get("recommended_output") or "video").strip().lower().replace(" ", "_")
-    if ad_format not in {"video", "image_banner", "carousel"}:
+    ad_format = str(
+        raw.get("recommended_format") or raw.get("ad_format") or raw.get("format") or raw.get("recommended_output") or "video"
+    ).strip().lower().replace(" ", "_")
+    if ad_format not in {"video", "image_banner", "carousel", "ai_video"}:
         if "image" in ad_format or "banner" in ad_format:
             ad_format = "image_banner"
         elif "carousel" in ad_format:
@@ -2324,6 +2323,8 @@ def _normalize_paid_content_candidate(raw: Any, index: int, provider: str, stage
         "idea": stage_meta["idea_ar"],
         "activities": list(stage_meta["activities_ar"]),
         "title": title[:240],
+        "description": description[:1200],
+        "recommended_format": ad_format,
         "ad_format": ad_format,
         "channel": str(raw.get("channel") or raw.get("platform") or "Meta").strip()[:120],
         "hook": str(raw.get("hook") or "").strip(),
@@ -2333,7 +2334,7 @@ def _normalize_paid_content_candidate(raw: Any, index: int, provider: str, stage
         "required_assets": _text_list(raw.get("required_assets"), 8),
         "extra_requirements": _text_list(raw.get("extra_requirements") or raw.get("requirements"), 8),
         "prompt": prompt,
-        "rationale": str(raw.get("rationale") or raw.get("reason") or "").strip(),
+        "rationale": str(raw.get("provider_note") or raw.get("rationale") or raw.get("reason") or "").strip(),
         "provider": provider,
     }
 
@@ -2354,7 +2355,7 @@ def _paid_candidate_matches_language(item: dict[str, Any], language: str) -> boo
     lang = str(language or "")[:2]
     if lang not in {"ar", "he"}:
         return True
-    text = " ".join(str(item.get(field) or "") for field in ("title", "hook", "visual_idea", "copy", "cta", "prompt"))
+    text = " ".join(str(item.get(field) or "") for field in ("title", "description", "hook", "visual_idea", "copy", "cta", "prompt"))
     contains_script = _contains_arabic if lang == "ar" else _contains_hebrew
     return contains_script(text)
 
@@ -2404,7 +2405,7 @@ def normalize_paid_content_plan(
     for group in grouped.values():
         for item in group:
             apply_replace_rules_to_item(
-                item, content_rules, ("title", "hook", "visual_idea", "copy", "cta", "prompt", "rationale")
+                item, content_rules, ("title", "description", "hook", "visual_idea", "copy", "cta", "prompt", "rationale")
             )
 
     selected_ids: list[str] = []
@@ -2428,7 +2429,7 @@ def normalize_paid_content_plan(
         )
 
     return {
-        "version": "paid_content_work_plan_v1",
+        "version": "paid_content_work_plan_v2",
         "status": "ready" if selected_ids else "missing",
         "language": language,
         "dialect": _dict(payload.get("brand")).get("dialect") or "",

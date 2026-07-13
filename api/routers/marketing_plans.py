@@ -516,20 +516,29 @@ def _update_paid_content_selection(suite: Suite, selected_ids: list[str]) -> dic
     plan = dict(action_plan.get("paid_content_plan") or {})
     if not plan:
         raise HTTPException(status_code=404, detail="Generate the paid content work plan first.")
-    valid_ids = {
-        str(item.get("id"))
-        for group in (plan.get("candidates") or {}).values()
+    valid_items = {
+        str(item.get("id")): str(item.get("stage") or stage_key)
+        for stage_key, group in (plan.get("candidates") or {}).items()
         if isinstance(group, list)
         for item in group
         if isinstance(item, dict) and item.get("id")
     }
+    stage_limits = {
+        str(stage.get("key")): max(0, int(stage.get("required_count") or 1))
+        for stage in (plan.get("stages") or [])
+        if isinstance(stage, dict) and stage.get("key")
+    }
     clean_ids = []
     seen = set()
+    selected_per_stage: dict[str, int] = {}
     for item_id in selected_ids:
         value = str(item_id or "").strip()
-        if value and value in valid_ids and value not in seen:
+        stage = valid_items.get(value)
+        limit = stage_limits.get(str(stage), 1)
+        if value and stage and value not in seen and selected_per_stage.get(stage, 0) < limit:
             clean_ids.append(value)
             seen.add(value)
+            selected_per_stage[stage] = selected_per_stage.get(stage, 0) + 1
     plan["selected_ids"] = clean_ids
     action_plan["paid_content_plan"] = plan
     action_plan["status"] = "ready" if clean_ids else "draft"

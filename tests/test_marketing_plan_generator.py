@@ -1057,6 +1057,41 @@ def test_build_paid_content_plan_prompt_includes_full_funnel_and_formats():
     assert "exactly 1 idea for each stage" in prompt
 
 
+def test_build_paid_content_plan_prompt_requests_concise_ideas_not_full_ads():
+    payload = mpg.suite_research_payload(make_suite())
+
+    prompt = mpg.build_paid_content_plan_prompt(payload, "ar", "openai")
+
+    assert '"description": "concise idea description' in prompt
+    assert '"recommended_format": "video|image_banner|carousel|ai_video"' in prompt
+    assert '"copy": "ready ad copy' not in prompt
+    assert '"hook": "opening hook"' not in prompt
+    assert '"cta": "call to action"' not in prompt
+    assert "Do not write full ad copy" in prompt
+
+
+def test_paid_content_candidate_normalizes_concise_idea_contract():
+    idea = mpg._normalize_paid_content_candidate(
+        {
+            "stage": "awareness",
+            "title": "قصة البداية الغريبة",
+            "description": "فكرة فيديو قصيرة تلفت النظر إلى المشكلة قبل تقديم الحل.",
+            "recommended_format": "ai_video",
+            "channel": "Instagram",
+        },
+        1,
+        "openai",
+    )
+
+    assert idea is not None
+    assert idea["description"] == "فكرة فيديو قصيرة تلفت النظر إلى المشكلة قبل تقديم الحل."
+    assert idea["recommended_format"] == "ai_video"
+    assert idea["ad_format"] == "ai_video"
+    assert idea["copy"] == ""
+    assert idea["hook"] == ""
+    assert idea["cta"] == ""
+
+
 def test_social_content_plan_replaces_placeholder_english_with_local_fallback():
     plan = mpg.normalize_social_content_plan(
         [
@@ -1139,13 +1174,9 @@ async def test_generate_paid_content_work_plan_uses_provider_batches(monkeypatch
                     {
                         "stage": stage["key"],
                         "title": f"{provider} {stage['stage']}",
-                        "ad_format": "carousel" if stage["key"] == "consideration" else "video",
+                        "description": "وصف مختصر للفكرة يناسب هدف المرحلة.",
+                        "recommended_format": "carousel" if stage["key"] == "consideration" else "video",
                         "channel": "Meta",
-                        "hook": "عنوان جذاب",
-                        "visual_idea": "مشهد واضح",
-                        "copy": "نص إعلان جاهز",
-                        "cta": "تواصلوا معنا",
-                        "prompt": "prompt جاهز",
                     }
                     for stage in mpg.PAID_CONTENT_FUNNEL_STAGES
                 ]
@@ -1183,9 +1214,10 @@ def test_paid_content_plan_replaces_placeholder_english_with_local_fallback():
 
     assert len(plan["selected_ids"]) == 5
     assert all(
-        any("\u0600" <= char <= "\u06ff" for char in item["title"] + item["hook"] + item["visual_idea"] + item["copy"] + item["cta"])
+        any("\u0600" <= char <= "\u06ff" for char in item["title"] + item["description"])
         for group in plan["candidates"].values()
         for item in group
     )
     assert not any("ad idea 1" in item["title"].lower() for group in plan["candidates"].values() for item in group)
-    assert all(item["visual_idea"] and item["copy"] and item["cta"] for group in plan["candidates"].values() for item in group)
+    assert all(item["description"] and item["recommended_format"] for group in plan["candidates"].values() for item in group)
+    assert all(not item["copy"] and not item["hook"] and not item["cta"] for group in plan["candidates"].values() for item in group)

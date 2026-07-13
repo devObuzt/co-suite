@@ -16,6 +16,90 @@ class FakeDb:
 
 
 @pytest.mark.asyncio
+async def test_paid_plan_routes_generate_save_and_refetch_without_erasing_social_data(monkeypatch):
+    suite = Suite(
+        id="suite-paid-route",
+        owner_id="user-paid-route",
+        name="Connec",
+        slug="connec-paid-route",
+        brand={"name": "Connec", "audience_languages": ["ar"]},
+        strategy={"marketing_action_plan": {"social_ideas_plan": {"selected_ids": ["social-1"]}}},
+    )
+    user = User(
+        id="user-paid-route",
+        email="paid@example.com",
+        hashed_password="hash",
+        full_name="Paid Owner",
+    )
+    db = FakeDb()
+    provider_calls = []
+
+    async def fake_get_owned_suite(*_args, **_kwargs):
+        return suite
+
+    async def fake_generate_paid_content_work_plan(*_args, **_kwargs):
+        return {
+            "version": "paid_content_work_plan_v2",
+            "status": "ready",
+            "stages": [{"key": "awareness", "required_count": 1}],
+            "candidates": {
+                "awareness": [
+                    {
+                        "id": "awareness-1",
+                        "stage": "awareness",
+                        "title": "فكرة الوعي",
+                        "description": "وصف مختصر",
+                        "recommended_format": "ai_video",
+                        "provider": "openai",
+                    },
+                    {
+                        "id": "awareness-2",
+                        "stage": "awareness",
+                        "title": "فكرة وعي ثانية",
+                        "description": "وصف مختصر ثانٍ",
+                        "recommended_format": "carousel",
+                        "provider": "anthropic",
+                    },
+                ]
+            },
+            "selected_ids": ["awareness-1"],
+            "warnings": [],
+        }
+
+    async def fake_record_provider_usage(_db, **kwargs):
+        provider_calls.append(kwargs)
+
+    async def fake_record_audit_log(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans, "generate_paid_content_work_plan", fake_generate_paid_content_work_plan)
+    monkeypatch.setattr(marketing_plans, "record_provider_usage", fake_record_provider_usage)
+    monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
+
+    generated = await marketing_plans.generate_marketing_paid_content_plan(
+        suite.id,
+        marketing_plans.GeneratePaidContentPlanRequest(language="ar"),
+        user,
+        db,
+    )
+    saved = await marketing_plans.update_marketing_paid_content_plan_selection(
+        suite.id,
+        marketing_plans.PaidContentPlanSelectionRequest(selected_ids=["awareness-2"]),
+        user,
+        db,
+    )
+    refetched = marketing_plans._marketing_plan_response(suite, suite.id, None, "action_plan_ready")
+
+    assert generated["action_plan"]["paid_content_plan"]["version"] == "paid_content_work_plan_v2"
+    assert saved["action_plan"]["paid_content_plan"]["selected_ids"] == ["awareness-2"]
+    assert refetched["action_plan"]["paid_content_plan"]["selected_ids"] == ["awareness-2"]
+    assert refetched["action_plan"]["social_ideas_plan"] == {"selected_ids": ["social-1"]}
+    assert provider_calls[0]["metadata"]["candidate_count"] == 2
+    assert db.committed is True
+
+
+@pytest.mark.asyncio
 async def test_download_marketing_plan_pdf_returns_attachment(monkeypatch):
     suite = Suite(
         id="suite-1",
@@ -82,6 +166,43 @@ def test_clear_marketing_plan_removes_generated_plan_data_only():
     assert "marketing_plan_deck" not in suite.strategy
     assert "marketing_intelligence" not in suite.strategy
     assert "marketing_action_plan" not in suite.strategy
+
+
+def test_paid_selection_keeps_one_idea_per_stage_and_preserves_social_plan():
+    suite = Suite(
+        id="suite-paid-selection",
+        owner_id="user-1",
+        name="Connec",
+        slug="connec-paid-selection",
+        brand={"name": "Connec"},
+        strategy={
+            "marketing_action_plan": {
+                "social_ideas_plan": {"selected_ids": ["social-1"]},
+                "paid_content_plan": {
+                    "stages": [
+                        {"key": "awareness", "required_count": 1},
+                        {"key": "conversion", "required_count": 1},
+                    ],
+                    "candidates": {
+                        "awareness": [
+                            {"id": "awareness-1", "stage": "awareness"},
+                            {"id": "awareness-2", "stage": "awareness"},
+                        ],
+                        "conversion": [{"id": "conversion-1", "stage": "conversion"}],
+                    },
+                    "selected_ids": [],
+                },
+            }
+        },
+    )
+
+    plan = marketing_plans._update_paid_content_selection(
+        suite,
+        ["awareness-1", "awareness-2", "conversion-1"],
+    )
+
+    assert plan["selected_ids"] == ["awareness-1", "conversion-1"]
+    assert suite.strategy["marketing_action_plan"]["social_ideas_plan"] == {"selected_ids": ["social-1"]}
 
 
 def test_empty_marketing_intelligence_has_no_generated_market_data():
