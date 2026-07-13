@@ -13,6 +13,7 @@ from pathlib import Path
 
 import httpx
 
+from ..core.external_calls import external_call
 from .config import (
     ELEVENLABS_API_KEY,
     ELEVENLABS_MODEL,
@@ -40,13 +41,15 @@ def _headers() -> dict:
 
 def list_voices() -> list[dict]:
     """Fetch all voices available on the account (built-in + custom clones)."""
-    r = httpx.get(
-        f"{API_BASE}/voices",
-        headers={"xi-api-key": ELEVENLABS_API_KEY},
-        timeout=HTTP_TIMEOUT,
-    )
-    r.raise_for_status()
-    return r.json().get("voices", [])
+    with external_call("elevenlabs", "list_voices") as call:
+        r = httpx.get(
+            f"{API_BASE}/voices",
+            headers={"xi-api-key": ELEVENLABS_API_KEY},
+            timeout=HTTP_TIMEOUT,
+        )
+        call.note(status_code=r.status_code)
+        r.raise_for_status()
+        return r.json().get("voices", [])
 
 
 def _adjust_speed(input_path: Path, output_path: Path, speed: float) -> Path:
@@ -112,15 +115,19 @@ def synthesize(
         voice_id, model, len(text), speed,
     )
 
-    r = httpx.post(
-        f"{API_BASE}/text-to-speech/{voice_id}",
-        headers=_headers(),
-        json=payload,
-        params={"output_format": DEFAULT_OUTPUT_FORMAT},
-        timeout=HTTP_TIMEOUT,
-    )
-    if r.status_code >= 400:
-        raise RuntimeError(f"ElevenLabs TTS failed [{r.status_code}]: {r.text}")
+    with external_call(
+        "elevenlabs", "tts_synthesize", voice_id=voice_id, model=model, chars=len(text)
+    ) as call:
+        r = httpx.post(
+            f"{API_BASE}/text-to-speech/{voice_id}",
+            headers=_headers(),
+            json=payload,
+            params={"output_format": DEFAULT_OUTPUT_FORMAT},
+            timeout=HTTP_TIMEOUT,
+        )
+        call.note(status_code=r.status_code)
+        if r.status_code >= 400:
+            raise RuntimeError(f"ElevenLabs TTS failed [{r.status_code}]: {r.text}")
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

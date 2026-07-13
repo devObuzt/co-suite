@@ -8,6 +8,7 @@ from typing import Optional
 import httpx
 
 from ..core.config import settings
+from ..core.external_calls import external_call
 from ..models.content import ContentPost, PostFormat
 
 log = logging.getLogger(__name__)
@@ -102,11 +103,15 @@ async def test_public_storage() -> dict:
         }
 
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            response = await client.head(stored.url)
-            if response.status_code in (405, 403):
-                response = await client.get(stored.url)
-        public_ok = 200 <= response.status_code < 300
+        async with external_call("r2", "verify_public_url", key=stored.key) as call:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                response = await client.head(stored.url)
+                if response.status_code in (405, 403):
+                    response = await client.get(stored.url)
+            call.note(status_code=response.status_code)
+            public_ok = 200 <= response.status_code < 300
+            if not public_ok:
+                call.fail(f"Public URL returned HTTP {response.status_code}")
         return {
             **status,
             "ok": public_ok,
@@ -149,12 +154,13 @@ def _public_url(key: str) -> str:
 
 
 def upload_bytes(key: str, data: bytes, content_type: str = "application/octet-stream") -> StoredMedia:
-    _r2_client().put_object(
-        Bucket=settings.r2_bucket_name,
-        Key=key,
-        Body=data,
-        ContentType=content_type,
-    )
+    with external_call("r2", "upload_object", key=key, size_bytes=len(data)):
+        _r2_client().put_object(
+            Bucket=settings.r2_bucket_name,
+            Key=key,
+            Body=data,
+            ContentType=content_type,
+        )
     return StoredMedia(
         url=_public_url(key),
         backend="r2",

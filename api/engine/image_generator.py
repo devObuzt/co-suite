@@ -11,6 +11,7 @@ from google import genai
 from google.genai import types as gtypes
 from PIL import Image
 
+from ..core.external_calls import external_call
 from .config import (
     ASSETS_DIR,
     BRAND,
@@ -72,11 +73,12 @@ def _call_nano_banana(prompt: str, extra_images: list[Image.Image] | None = None
     if extra_images:
         contents.extend(extra_images)
 
-    response = _client.models.generate_content(
-        model=IMAGE_MODEL,
-        contents=contents,
-        config=gtypes.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
-    )
+    with external_call("gemini", "generate_image", model=IMAGE_MODEL):
+        response = _client.models.generate_content(
+            model=IMAGE_MODEL,
+            contents=contents,
+            config=gtypes.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
+        )
 
     for part in response.candidates[0].content.parts:
         if getattr(part, "inline_data", None) and part.inline_data.data:

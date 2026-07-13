@@ -5,6 +5,7 @@ import re
 
 from anthropic import Anthropic
 
+from ..core.external_calls import external_call
 from . import dialect_corpus
 from .config import (
     ANTHROPIC_API_KEY,
@@ -70,12 +71,15 @@ def generate_ideas(
     data = None
     for attempt in range(3):
         try:
-            resp = _client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=16000,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-            )
+            with external_call(
+                "anthropic", "generate_ideas", model=CLAUDE_MODEL, attempt=attempt + 1
+            ):
+                resp = _client.messages.create(
+                    model=CLAUDE_MODEL,
+                    max_tokens=16000,
+                    system=system,
+                    messages=[{"role": "user", "content": user}],
+                )
             raw = "".join(block.text for block in resp.content if hasattr(block, "text"))
             cleaned = _strip_json_fences(raw)
             data = json.loads(cleaned)

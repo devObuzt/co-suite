@@ -19,6 +19,7 @@ from pathlib import Path
 from google import genai
 from google.genai import types as gtypes
 
+from ..core.external_calls import external_call
 from . import audio_mixer, tts, video_overlay
 from .config import (
     GOOGLE_API_KEY,
@@ -155,28 +156,33 @@ def generate_video(idea: dict, out_dir: Path, brand: dict | None = None) -> tupl
         idea.get("id", "?"), subtype, idea.get("topic", ""),
     )
 
-    operation = _client.models.generate_videos(
-        model=model,
-        prompt=prompt,
-        config=gtypes.GenerateVideosConfig(aspect_ratio=aspect),
-    )
+    with external_call("gemini", "generate_video", model=model) as call:
+        operation = _client.models.generate_videos(
+            model=model,
+            prompt=prompt,
+            config=gtypes.GenerateVideosConfig(aspect_ratio=aspect),
+        )
 
-    waited = 0
-    while not operation.done:
-        if waited >= MAX_WAIT_SEC:
-            raise TimeoutError(f"Veo 3 generation timed out after {MAX_WAIT_SEC}s")
-        time.sleep(POLL_INTERVAL_SEC)
-        waited += POLL_INTERVAL_SEC
-        operation = _client.operations.get(operation)
-        log.info("…still generating (waited %ds)", waited)
+        waited = 0
+        polls = 0
+        while not operation.done:
+            if waited >= MAX_WAIT_SEC:
+                call.note(polls=polls)
+                raise TimeoutError(f"Veo 3 generation timed out after {MAX_WAIT_SEC}s")
+            time.sleep(POLL_INTERVAL_SEC)
+            waited += POLL_INTERVAL_SEC
+            operation = _client.operations.get(operation)
+            polls += 1
+            log.info("…still generating (waited %ds)", waited)
+        call.note(polls=polls)
 
-    if not operation.response or not operation.response.generated_videos:
-        raise RuntimeError(f"Veo 3 returned no video. Operation: {operation}")
+        if not operation.response or not operation.response.generated_videos:
+            raise RuntimeError(f"Veo 3 returned no video. Operation: {operation}")
 
-    generated = operation.response.generated_videos[0]
-    raw_video_path = out_dir / "video_raw.mp4"
-    _client.files.download(file=generated.video)
-    generated.video.save(str(raw_video_path))
+        generated = operation.response.generated_videos[0]
+        raw_video_path = out_dir / "video_raw.mp4"
+        _client.files.download(file=generated.video)
+        generated.video.save(str(raw_video_path))
 
     veo_cost = COST_PER_SECOND.get(model, 0.40) * DEFAULT_DURATION_SEC
     log.info("Veo 3 raw video saved (cost ≈ $%.2f)", veo_cost)

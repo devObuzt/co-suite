@@ -13,6 +13,7 @@ import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
+from ..core.external_calls import external_call
 from .config import (
     R2_ACCESS_KEY_ID,
     R2_ACCOUNT_ID,
@@ -49,7 +50,8 @@ def ensure_bucket(bucket: str = R2_BUCKET) -> None:
         code = e.response.get("Error", {}).get("Code", "")
         if code in ("404", "NoSuchBucket"):
             log.info("Creating bucket '%s'…", bucket)
-            c.create_bucket(Bucket=bucket)
+            with external_call("r2", "create_bucket", bucket=bucket):
+                c.create_bucket(Bucket=bucket)
         else:
             raise
 
@@ -75,12 +77,13 @@ def upload(local_path: Path | str, key: str | None = None) -> str:
     content_type = content_type or "application/octet-stream"
 
     log.info("Uploading %s → r2://%s/%s", local_path, R2_BUCKET, key)
-    _client().upload_file(
-        Filename=str(local_path),
-        Bucket=R2_BUCKET,
-        Key=key,
-        ExtraArgs={"ContentType": content_type},
-    )
+    with external_call("r2", "upload_object", key=key, size_bytes=local_path.stat().st_size):
+        _client().upload_file(
+            Filename=str(local_path),
+            Bucket=R2_BUCKET,
+            Key=key,
+            ExtraArgs={"ContentType": content_type},
+        )
 
     url = R2_PUBLIC_URL_PREFIX.rstrip("/") + "/" + key
     log.info("Public URL: %s", url)

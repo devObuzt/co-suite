@@ -16,6 +16,7 @@ from typing import Optional
 import httpx
 
 from ..core.config import settings
+from ..core.external_calls import ExternalCall, external_call
 from ..models.content import ContentPost, PostFormat, PostStatus
 from .media_storage import platform_media_for_post, upload_static_path
 
@@ -69,39 +70,47 @@ def _resolve_url(local_or_remote: str) -> Optional[str]:
 # ── Facebook ──────────────────────────────────────────────────────────────────
 
 def _fb_image(page_id: str, token: str, url: str, caption: str) -> str:
-    data = _api_post(f"{page_id}/photos", {"url": url, "caption": caption, "access_token": token, "published": "true"})
-    return data.get("post_id") or data.get("id", "")
+    with external_call("meta", "publish_photo", page_id=page_id):
+        data = _api_post(f"{page_id}/photos", {"url": url, "caption": caption, "access_token": token, "published": "true"})
+        return data.get("post_id") or data.get("id", "")
 
 
 def _fb_text(page_id: str, token: str, caption: str) -> str:
-    data = _api_post(f"{page_id}/feed", {"message": caption, "access_token": token})
-    return data.get("id", "")
+    with external_call("meta", "publish_text", page_id=page_id):
+        data = _api_post(f"{page_id}/feed", {"message": caption, "access_token": token})
+        return data.get("id", "")
 
 
 def _fb_album(page_id: str, token: str, urls: list[str], caption: str) -> str:
-    fbids = []
-    for url in urls:
-        d = _api_post(f"{page_id}/photos", {"url": url, "access_token": token, "published": "false"})
-        fbids.append(d["id"])
-    data = _api_post(f"{page_id}/feed", {
-        "message": caption,
-        "attached_media": json.dumps([{"media_fbid": fid} for fid in fbids]),
-        "access_token": token,
-    })
-    return data.get("id", "")
+    with external_call("meta", "publish_carousel", page_id=page_id, media_count=len(urls)):
+        fbids = []
+        for url in urls:
+            d = _api_post(f"{page_id}/photos", {"url": url, "access_token": token, "published": "false"})
+            fbids.append(d["id"])
+        data = _api_post(f"{page_id}/feed", {
+            "message": caption,
+            "attached_media": json.dumps([{"media_fbid": fid} for fid in fbids]),
+            "access_token": token,
+        })
+        return data.get("id", "")
 
 
 def _fb_video(page_id: str, token: str, url: str, caption: str) -> str:
-    data = _api_post(f"{page_id}/videos", {"file_url": url, "description": caption, "access_token": token})
-    return data.get("id", "")
+    with external_call("meta", "publish_video", page_id=page_id):
+        data = _api_post(f"{page_id}/videos", {"file_url": url, "description": caption, "access_token": token})
+        return data.get("id", "")
 
 
 # ── Instagram ─────────────────────────────────────────────────────────────────
 
-def _ig_wait(container_id: str, token: str) -> None:
+def _ig_wait(container_id: str, token: str, call: Optional[ExternalCall] = None) -> None:
     waited = 0
+    polls = 0
     while waited < IG_MAX_WAIT:
         d = _api_get(container_id, {"fields": "status_code", "access_token": token})
+        polls += 1
+        if call is not None:
+            call.note(polls=polls)
         status = d.get("status_code", "")
         if status == "FINISHED":
             return
@@ -118,28 +127,31 @@ def _ig_publish(ig_user_id: str, container_id: str, token: str) -> str:
 
 
 def _ig_image(ig_user_id: str, token: str, url: str, caption: str) -> str:
-    d = _api_post(f"{ig_user_id}/media", {"image_url": url, "caption": caption, "access_token": token})
-    return _ig_publish(ig_user_id, d["id"], token)
+    with external_call("meta", "publish_instagram_media", ig_user_id=ig_user_id, media_type="IMAGE"):
+        d = _api_post(f"{ig_user_id}/media", {"image_url": url, "caption": caption, "access_token": token})
+        return _ig_publish(ig_user_id, d["id"], token)
 
 
 def _ig_carousel(ig_user_id: str, token: str, urls: list[str], caption: str) -> str:
-    child_ids = []
-    for url in urls:
-        d = _api_post(f"{ig_user_id}/media", {"image_url": url, "is_carousel_item": "true", "access_token": token})
-        child_ids.append(d["id"])
-    d = _api_post(f"{ig_user_id}/media", {
-        "media_type": "CAROUSEL",
-        "children": ",".join(child_ids),
-        "caption": caption,
-        "access_token": token,
-    })
-    return _ig_publish(ig_user_id, d["id"], token)
+    with external_call("meta", "publish_instagram_media", ig_user_id=ig_user_id, media_type="CAROUSEL", media_count=len(urls)):
+        child_ids = []
+        for url in urls:
+            d = _api_post(f"{ig_user_id}/media", {"image_url": url, "is_carousel_item": "true", "access_token": token})
+            child_ids.append(d["id"])
+        d = _api_post(f"{ig_user_id}/media", {
+            "media_type": "CAROUSEL",
+            "children": ",".join(child_ids),
+            "caption": caption,
+            "access_token": token,
+        })
+        return _ig_publish(ig_user_id, d["id"], token)
 
 
 def _ig_reel(ig_user_id: str, token: str, url: str, caption: str) -> str:
-    d = _api_post(f"{ig_user_id}/media", {"media_type": "REELS", "video_url": url, "caption": caption, "access_token": token})
-    _ig_wait(d["id"], token)
-    return _ig_publish(ig_user_id, d["id"], token)
+    with external_call("meta", "publish_instagram_media", ig_user_id=ig_user_id, media_type="REELS") as call:
+        d = _api_post(f"{ig_user_id}/media", {"media_type": "REELS", "video_url": url, "caption": caption, "access_token": token})
+        _ig_wait(d["id"], token, call=call)
+        return _ig_publish(ig_user_id, d["id"], token)
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────

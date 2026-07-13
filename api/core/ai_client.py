@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 from .config import settings
+from .external_calls import external_call
 
 log = logging.getLogger(__name__)
 
@@ -37,9 +38,11 @@ def _call_sync(
     if system:
         payload["system"] = system
 
-    resp = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    return resp.json()
+    with external_call("anthropic", "messages", model=model) as call:
+        resp = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=timeout)
+        call.note(status_code=resp.status_code)
+        resp.raise_for_status()
+        return resp.json()
 
 
 async def call_claude(

@@ -7,6 +7,7 @@ import requests
 
 from .ai_client import call_claude
 from .config import settings
+from .external_calls import external_call
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
@@ -54,12 +55,14 @@ def _call_openai_sync(
         "max_output_tokens": max_tokens,
     }
 
-    resp = requests.post(OPENAI_RESPONSES_URL, headers=headers, json=body, timeout=timeout)
-    resp.raise_for_status()
-    text = _openai_extract_text(resp.json())
-    if not text:
-        raise RuntimeError("OpenAI returned no text output")
-    return text
+    with external_call("openai", "responses", model=model) as call:
+        resp = requests.post(OPENAI_RESPONSES_URL, headers=headers, json=body, timeout=timeout)
+        call.note(status_code=resp.status_code)
+        resp.raise_for_status()
+        text = _openai_extract_text(resp.json())
+        if not text:
+            raise RuntimeError("OpenAI returned no text output")
+        return text
 
 
 async def call_text_ai(

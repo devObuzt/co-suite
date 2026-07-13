@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 
+from ..core.external_calls import ExternalCall, external_call
 from . import posts_bank, r2_uploader
 from .config import (
     META_IG_USER_ID,
@@ -84,71 +85,80 @@ def _upload_media_files(post: dict) -> list[str]:
 
 def publish_fb_image(media_url: str, caption: str) -> str:
     """Post a single photo to the Facebook Page."""
-    data = _api_post(
-        f"{META_PAGE_ID}/photos",
-        {
-            "url": media_url,
-            "caption": caption,
-            "access_token": META_PAGE_ACCESS_TOKEN,
-            "published": "true",
-        },
-    )
-    return data.get("post_id") or data.get("id", "")
+    with external_call("meta", "publish_photo", page_id=META_PAGE_ID):
+        data = _api_post(
+            f"{META_PAGE_ID}/photos",
+            {
+                "url": media_url,
+                "caption": caption,
+                "access_token": META_PAGE_ACCESS_TOKEN,
+                "published": "true",
+            },
+        )
+        return data.get("post_id") or data.get("id", "")
 
 
 def publish_fb_album(media_urls: list[str], caption: str) -> str:
     """Post a multi-photo album (carousel) to the Facebook Page."""
-    # Step 1: upload each photo as unpublished, get its fbid
-    fbids = []
-    for url in media_urls:
+    with external_call(
+        "meta", "publish_carousel", page_id=META_PAGE_ID, media_count=len(media_urls)
+    ):
+        # Step 1: upload each photo as unpublished, get its fbid
+        fbids = []
+        for url in media_urls:
+            data = _api_post(
+                f"{META_PAGE_ID}/photos",
+                {
+                    "url": url,
+                    "access_token": META_PAGE_ACCESS_TOKEN,
+                    "published": "false",
+                },
+            )
+            fbids.append(data["id"])
+
+        # Step 2: create a feed post with attached_media
+        attached = [{"media_fbid": fbid} for fbid in fbids]
         data = _api_post(
-            f"{META_PAGE_ID}/photos",
+            f"{META_PAGE_ID}/feed",
             {
-                "url": url,
+                "message": caption,
+                "attached_media": json.dumps(attached),
                 "access_token": META_PAGE_ACCESS_TOKEN,
-                "published": "false",
             },
         )
-        fbids.append(data["id"])
-
-    # Step 2: create a feed post with attached_media
-    attached = [{"media_fbid": fbid} for fbid in fbids]
-    data = _api_post(
-        f"{META_PAGE_ID}/feed",
-        {
-            "message": caption,
-            "attached_media": json.dumps(attached),
-            "access_token": META_PAGE_ACCESS_TOKEN,
-        },
-    )
-    return data.get("id", "")
+        return data.get("id", "")
 
 
 def publish_fb_video(media_url: str, caption: str) -> str:
     """Post a video / reel to the Facebook Page."""
-    data = _api_post(
-        f"{META_PAGE_ID}/videos",
-        {
-            "file_url": media_url,
-            "description": caption,
-            "access_token": META_PAGE_ACCESS_TOKEN,
-        },
-    )
-    return data.get("id", "")
+    with external_call("meta", "publish_video", page_id=META_PAGE_ID):
+        data = _api_post(
+            f"{META_PAGE_ID}/videos",
+            {
+                "file_url": media_url,
+                "description": caption,
+                "access_token": META_PAGE_ACCESS_TOKEN,
+            },
+        )
+        return data.get("id", "")
 
 
 # ---------------------------------------------------------------------------
 # Instagram publishers
 # ---------------------------------------------------------------------------
 
-def _ig_wait_for_ready(container_id: str) -> None:
+def _ig_wait_for_ready(container_id: str, call: ExternalCall | None = None) -> None:
     """Poll an IG media container until it's FINISHED (mostly for videos)."""
     waited = 0
+    polls = 0
     while waited < IG_VIDEO_MAX_WAIT:
         data = _api_get(
             container_id,
             {"fields": "status_code,status", "access_token": META_PAGE_ACCESS_TOKEN},
         )
+        polls += 1
+        if call is not None:
+            call.note(polls=polls)
         status = data.get("status_code", "")
         if status == "FINISHED":
             return
@@ -169,56 +179,69 @@ def _ig_publish(container_id: str) -> str:
 
 
 def publish_ig_image(media_url: str, caption: str) -> str:
-    data = _api_post(
-        f"{META_IG_USER_ID}/media",
-        {
-            "image_url": media_url,
-            "caption": caption,
-            "access_token": META_PAGE_ACCESS_TOKEN,
-        },
-    )
-    return _ig_publish(data["id"])
-
-
-def publish_ig_carousel(media_urls: list[str], caption: str) -> str:
-    # Step 1: create a container for each slide
-    child_ids = []
-    for url in media_urls:
-        d = _api_post(
+    with external_call(
+        "meta", "publish_instagram_media", ig_user_id=META_IG_USER_ID, media_type="IMAGE"
+    ):
+        data = _api_post(
             f"{META_IG_USER_ID}/media",
             {
-                "image_url": url,
-                "is_carousel_item": "true",
+                "image_url": media_url,
+                "caption": caption,
                 "access_token": META_PAGE_ACCESS_TOKEN,
             },
         )
-        child_ids.append(d["id"])
+        return _ig_publish(data["id"])
 
-    # Step 2: create the carousel container
-    d = _api_post(
-        f"{META_IG_USER_ID}/media",
-        {
-            "media_type": "CAROUSEL",
-            "children": ",".join(child_ids),
-            "caption": caption,
-            "access_token": META_PAGE_ACCESS_TOKEN,
-        },
-    )
-    return _ig_publish(d["id"])
+
+def publish_ig_carousel(media_urls: list[str], caption: str) -> str:
+    with external_call(
+        "meta",
+        "publish_instagram_media",
+        ig_user_id=META_IG_USER_ID,
+        media_type="CAROUSEL",
+        media_count=len(media_urls),
+    ):
+        # Step 1: create a container for each slide
+        child_ids = []
+        for url in media_urls:
+            d = _api_post(
+                f"{META_IG_USER_ID}/media",
+                {
+                    "image_url": url,
+                    "is_carousel_item": "true",
+                    "access_token": META_PAGE_ACCESS_TOKEN,
+                },
+            )
+            child_ids.append(d["id"])
+
+        # Step 2: create the carousel container
+        d = _api_post(
+            f"{META_IG_USER_ID}/media",
+            {
+                "media_type": "CAROUSEL",
+                "children": ",".join(child_ids),
+                "caption": caption,
+                "access_token": META_PAGE_ACCESS_TOKEN,
+            },
+        )
+        return _ig_publish(d["id"])
 
 
 def publish_ig_reel(media_url: str, caption: str) -> str:
-    d = _api_post(
-        f"{META_IG_USER_ID}/media",
-        {
-            "media_type": "REELS",
-            "video_url": media_url,
-            "caption": caption,
-            "access_token": META_PAGE_ACCESS_TOKEN,
-        },
-    )
-    _ig_wait_for_ready(d["id"])
-    return _ig_publish(d["id"])
+    with external_call(
+        "meta", "publish_instagram_media", ig_user_id=META_IG_USER_ID, media_type="REELS"
+    ) as call:
+        d = _api_post(
+            f"{META_IG_USER_ID}/media",
+            {
+                "media_type": "REELS",
+                "video_url": media_url,
+                "caption": caption,
+                "access_token": META_PAGE_ACCESS_TOKEN,
+            },
+        )
+        _ig_wait_for_ready(d["id"], call=call)
+        return _ig_publish(d["id"])
 
 
 # ---------------------------------------------------------------------------

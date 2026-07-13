@@ -84,17 +84,21 @@ async def send_telegram_alert(message: str) -> bool:
     if not settings.telegram_bot_token or not _telegram_recipients():
         return False
 
+    from .external_calls import external_call
+
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
-    async with httpx.AsyncClient(timeout=8) as client:
-        for chat_id in _telegram_recipients():
-            await client.post(
-                url,
-                json={
-                    "chat_id": chat_id,
-                    "text": message,
-                    "disable_web_page_preview": True,
-                },
-            )
+    async with external_call("telegram", "send_alert", recipients=len(_telegram_recipients())) as call:
+        async with httpx.AsyncClient(timeout=8) as client:
+            for chat_id in _telegram_recipients():
+                response = await client.post(
+                    url,
+                    json={
+                        "chat_id": chat_id,
+                        "text": message,
+                        "disable_web_page_preview": True,
+                    },
+                )
+                call.note(status_code=response.status_code)
     return True
 
 

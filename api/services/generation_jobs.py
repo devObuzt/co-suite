@@ -224,7 +224,7 @@ async def update_job(db: AsyncSession, job_id: str, **fields) -> Optional[Genera
 
 
 async def mark_running(db: AsyncSession, job_id: str, message: str = "Generation started.") -> Optional[GenerationJob]:
-    return await update_job(
+    updated = await update_job(
         db,
         job_id,
         status=GenerationJobStatus.running,
@@ -233,6 +233,18 @@ async def mark_running(db: AsyncSession, job_id: str, message: str = "Generation
         progress=5,
         started_at=utcnow(),
     )
+    log_event(
+        log,
+        logging.INFO,
+        "Generation job started.",
+        event="generation_job_started",
+        job_id=job_id,
+        suite_id=updated.suite_id if updated else None,
+        job_type=updated.type.value if updated and updated.type else None,
+        attempt=updated.retry_count if updated else None,
+        queue_wait_seconds=_elapsed_seconds(updated.created_at, updated.started_at) if updated else None,
+    )
+    return updated
 
 
 async def mark_progress(db: AsyncSession, job_id: str, event: dict) -> Optional[GenerationJob]:
@@ -339,8 +351,17 @@ async def mark_provider_limit(
     return updated
 
 
+def _elapsed_seconds(start, end) -> Optional[float]:
+    if not start or not end:
+        return None
+    try:
+        return round((end - start).total_seconds(), 2)
+    except Exception:
+        return None
+
+
 async def mark_completed(db: AsyncSession, job_id: str, result: dict) -> Optional[GenerationJob]:
-    return await update_job(
+    updated = await update_job(
         db,
         job_id,
         status=GenerationJobStatus.completed,
@@ -350,6 +371,22 @@ async def mark_completed(db: AsyncSession, job_id: str, result: dict) -> Optiona
         result=result,
         finished_at=utcnow(),
     )
+    log_event(
+        log,
+        logging.INFO,
+        "Generation job completed.",
+        event="generation_job_completed",
+        job_id=job_id,
+        suite_id=updated.suite_id if updated else None,
+        job_type=updated.type.value if updated and updated.type else None,
+        provider=updated.provider if updated else None,
+        model=updated.model if updated else None,
+        attempt=updated.retry_count if updated else None,
+        status=GenerationJobStatus.completed.value,
+        duration_seconds=_elapsed_seconds(updated.started_at, updated.finished_at) if updated else None,
+        queue_wait_seconds=_elapsed_seconds(updated.created_at, updated.started_at) if updated else None,
+    )
+    return updated
 
 
 async def mark_failed(
@@ -378,10 +415,13 @@ async def mark_failed(
         event="generation_job_failed",
         job_id=job_id,
         suite_id=updated.suite_id if updated else None,
+        job_type=updated.type.value if updated and updated.type else None,
         provider=updated.provider if updated else None,
         model=updated.model if updated else None,
         attempt=updated.retry_count if updated else None,
         status=GenerationJobStatus.failed.value,
+        duration_seconds=_elapsed_seconds(updated.started_at, updated.finished_at) if updated else None,
+        error=str(error)[:500] if error else None,
         safe_error_class="generation_failure",
     )
     await notify_generation_job_alert(updated, "failed_job")
