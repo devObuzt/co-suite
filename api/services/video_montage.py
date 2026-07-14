@@ -1817,10 +1817,10 @@ async def build_remotion_scene_manifest(
                 scene_text=f"{suite.name} brand stage backdrop",
                 kind="visual_image",
                 visual_prompt=(
-                    "an ultra-clean minimal vertical studio backdrop: one smooth "
-                    "wall in the brand color with a soft gradient, a few subtle "
-                    "thin glowing accent lines, a dark reflective floor, calm and "
-                    "uncluttered with generous empty space"
+                    "a flat seamless empty studio backdrop: one smooth solid wall "
+                    "in the brand color with a soft vertical gradient and a dark "
+                    "reflective floor line — absolutely minimal, no furniture, no "
+                    "room, no objects, no decorations, just the clean wall"
                 ),
             )
             if stage_asset:
@@ -1955,12 +1955,15 @@ async def build_remotion_scene_manifest(
         # Cap distinct background-video decoders; past the cap, scenes rotate
         # among the locked videos instead of dropping to a static image.
         if subject_has_alpha and allow_scene_video:
-            visual_video_asset = enforce_short_beat_video_rule(
-                visual_video_asset,
-                scene_seconds=segment_seconds,
-                is_beat_scene=bool(beat),
-                locked_videos=locked_background_videos,
-            )
+            # The Magic hero keeps its freshly minted video even under 2s —
+            # stripping it here discarded a paid Veo clip before it ever aired.
+            if not (is_magic and index == 0):
+                visual_video_asset = enforce_short_beat_video_rule(
+                    visual_video_asset,
+                    scene_seconds=segment_seconds,
+                    is_beat_scene=bool(beat),
+                    locked_videos=locked_background_videos,
+                )
             visual_video_asset = resolve_scene_background_video(
                 visual_video_asset,
                 scene_index=index,
@@ -1971,14 +1974,41 @@ async def build_remotion_scene_manifest(
             )
         visual_asset = None
         if subject_has_alpha and allow_scene_image:
-            visual_asset = pick_asset(
-                active_assets,
-                kind="visual_image",
-                scene_text=scene_match_text,
-                suite_id=suite.id,
-                variety_seed=variety_seed,
-                user_match_required=allow_generated_backgrounds,
-            )
+            # Magic image frames mint their OWN literal visual FIRST — a
+            # library pick would return the same old suite asset for every
+            # frame and the whole montage collapses into one look. The pick
+            # is only the fallback when generation fails or the budget is out.
+            if (
+                magic
+                # A video frame the decoder cap left dry still deserves its
+                # own literal image instead of a recycled library asset.
+                and magic_background in ("image", "video")
+                and not visual_video_asset
+                and db
+                and allow_generated_backgrounds
+                and generated_image_count < max_generated_images
+            ):
+                try:
+                    visual_asset = await generate_visual_asset_for_scene(
+                        db,
+                        suite=suite,
+                        scene_text=scene_match_text,
+                        visual_prompt=(beat.get("visual_prompt") if beat else None),
+                    )
+                    if visual_asset:
+                        generated_image_count += 1
+                        active_assets.append(visual_asset)
+                except Exception:
+                    visual_asset = None
+            if not visual_asset:
+                visual_asset = pick_asset(
+                    active_assets,
+                    kind="visual_image",
+                    scene_text=scene_match_text,
+                    suite_id=suite.id,
+                    variety_seed=variety_seed,
+                    user_match_required=allow_generated_backgrounds,
+                )
             # Generation fill: beats that prefer an image get one from their
             # literal visual prompt (cost-capped per render); sentence scenes
             # keep the previous first-4-scenes behaviour.
@@ -1986,11 +2016,7 @@ async def build_remotion_scene_manifest(
                 str(beat.get("prefer") or "image") == "image" and generated_image_count < max_generated_images
                 if beat
                 else index < 4
-            )
-            # Magic image scenes always deserve their own literal visual, even
-            # when the shot list preferred motion (the decoder cap ate it).
-            if magic and magic_background == "image":
-                should_generate_image = generated_image_count < max_generated_images
+            ) and not magic
             if not visual_asset and db and allow_generated_backgrounds and should_generate_image:
                 try:
                     visual_asset = await generate_visual_asset_for_scene(
