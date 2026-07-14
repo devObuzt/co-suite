@@ -28,6 +28,13 @@ from ..core.observability import log_event
 from ..models.admin import CreativeAsset
 from ..models.suite import Suite
 from .media_storage import r2_configured, upload_bytes
+from .montage_magic_director import (
+    MAGIC_SFX_QUERIES,
+    MAGIC_TEMPLATE,
+    apply_magic_directions,
+    heuristic_magic_direction,
+    montage_template,
+)
 from .montage_notes_analyzer import analyze_and_apply_montage_notes
 from .montage_shot_list import generate_shot_list
 from .creative_assets import (
@@ -1404,15 +1411,17 @@ def copy_remotion_runtime(work_dir: Path) -> tuple[Path, Path]:
     for filename in ("AiMontage.tsx", "Root.tsx", "index.ts"):
         shutil.copy2(WEB_ROOT / "src" / "remotion" / filename, src_dir / filename)
 
-    # Copy the custom transition presentations AiMontage imports via
-    # `./transitions/*` (relative import — resolved next to AiMontage.tsx).
-    source_transitions = WEB_ROOT / "src" / "remotion" / "transitions"
-    if source_transitions.exists():
-        target_transitions = src_dir / "transitions"
-        target_transitions.mkdir(parents=True, exist_ok=True)
-        for tsx in source_transitions.iterdir():
-            if tsx.is_file():
-                shutil.copy2(tsx, target_transitions / tsx.name)
+    # Copy the modules AiMontage imports via relative paths (resolved next to
+    # AiMontage.tsx): custom transition presentations and the OneShare Magic
+    # scene components.
+    for module_dir in ("transitions", "magic"):
+        source_module = WEB_ROOT / "src" / "remotion" / module_dir
+        if source_module.exists():
+            target_module = src_dir / module_dir
+            target_module.mkdir(parents=True, exist_ok=True)
+            for tsx in source_module.iterdir():
+                if tsx.is_file():
+                    shutil.copy2(tsx, target_module / tsx.name)
 
     # The Remotion bundler resolves bare imports (e.g. `@remotion/transitions`)
     # by walking up from the entry file's dir for a node_modules. This isolated
@@ -1603,6 +1612,7 @@ async def build_remotion_scene_manifest(
     subject_has_alpha: bool = True,
     shot_list_beats: list[dict[str, Any]] | None = None,
     dead_air_joins: list[float] | None = None,
+    magic_direction_source: str | None = None,
 ) -> tuple[Path, list[dict[str, Any]]]:
     src_dir, public_dir = copy_remotion_runtime(work_dir)
     inputs_dir = public_dir / "inputs"
@@ -1613,6 +1623,8 @@ async def build_remotion_scene_manifest(
     sound_dir.mkdir(parents=True, exist_ok=True)
 
     options = requested_options(input_data)
+    template = montage_template(input_data)
+    is_magic = template == MAGIC_TEMPLATE
     # Honest options: a toggle the user switched off must leave zero trace in
     # the manifest, so the render cannot silently apply it anyway.
     show_captions = "captions" in options
@@ -1750,6 +1762,23 @@ async def build_remotion_scene_manifest(
         capped_segments = capped_segments[: MAX_MONTAGE_SCENES - 1] + [merged]
     for index, segment in enumerate(capped_segments):
         beat = segment.get("beat") if isinstance(segment.get("beat"), dict) else None
+        # OneShare Magic: every scene carries its own staging. Beats the
+        # director staged keep their LLM direction; sentence scenes (or a
+        # failed director) get the heuristic grammar so Magic never renders
+        # as a plain default montage.
+        magic: dict[str, Any] | None = None
+        if is_magic:
+            candidate = beat.get("magic") if beat else None
+            magic = (
+                candidate
+                if isinstance(candidate, dict)
+                else heuristic_magic_direction(index=index, beat=beat, scene_count=len(capped_segments))
+            )
+        # Solid scenes let the 3D typography carry the frame: no background
+        # media is picked or generated for them; image scenes skip video.
+        magic_background = str(magic.get("background")) if magic else None
+        allow_scene_video = magic_background in (None, "video")
+        allow_scene_image = magic_background != "solid"
         segment_seconds = max(0.0, float(segment.get("end") or 0) - float(segment.get("start") or 0))
         start = max(0.0, float(segment.get("start") or 0) - 0.12)
         end = min(duration, float(segment.get("end") or duration) + 0.12)
@@ -1778,6 +1807,7 @@ async def build_remotion_scene_manifest(
         visual_video_asset = None
         if (
             subject_has_alpha
+            and allow_scene_video
             and db
             and index == 0
             and allow_generated_backgrounds
@@ -1800,7 +1830,7 @@ async def build_remotion_scene_manifest(
                     active_assets.append(visual_video_asset)
             except Exception:
                 visual_video_asset = None
-        if subject_has_alpha and not visual_video_asset:
+        if subject_has_alpha and allow_scene_video and not visual_video_asset:
             visual_video_asset = pick_asset(
                 active_assets,
                 kind="visual_video",
@@ -1811,6 +1841,7 @@ async def build_remotion_scene_manifest(
             )
         if (
             subject_has_alpha
+            and allow_scene_video
             and not visual_video_asset
             and db
             and index < 2
@@ -1831,7 +1862,7 @@ async def build_remotion_scene_manifest(
                 visual_video_asset = None
         # Cap distinct background-video decoders; past the cap, scenes rotate
         # among the locked videos instead of dropping to a static image.
-        if subject_has_alpha:
+        if subject_has_alpha and allow_scene_video:
             visual_video_asset = enforce_short_beat_video_rule(
                 visual_video_asset,
                 scene_seconds=segment_seconds,
@@ -1842,7 +1873,7 @@ async def build_remotion_scene_manifest(
                 visual_video_asset, scene_index=index, locked_videos=locked_background_videos
             )
         visual_asset = None
-        if subject_has_alpha:
+        if subject_has_alpha and allow_scene_image:
             visual_asset = pick_asset(
                 active_assets,
                 kind="visual_image",
@@ -1874,8 +1905,11 @@ async def build_remotion_scene_manifest(
                     visual_asset = None
         background_path = backgrounds_dir / f"scene-{index + 1:02d}.png"
         # An opaque full-frame subject covers the whole canvas, so scene
-        # backgrounds are skipped entirely (no generation, no assets).
-        background_public_path = f"/remotion/backgrounds/{background_path.name}" if subject_has_alpha else None
+        # backgrounds are skipped entirely (no generation, no assets). Magic
+        # solid scenes draw their stage in the compositor — no PNG either.
+        background_public_path = (
+            f"/remotion/backgrounds/{background_path.name}" if subject_has_alpha and allow_scene_image else None
+        )
         background_video_public_path = None
         background_asset_id = None
         background_video_asset_id = None
@@ -1894,7 +1928,7 @@ async def build_remotion_scene_manifest(
                 background_image_asset_id = visual_asset.id
                 background_asset_id = background_asset_id or visual_asset.id
                 selected_asset_ids.append(visual_asset.id)
-        if subject_has_alpha and not background_image_asset_id and not background_path.exists():
+        if subject_has_alpha and allow_scene_image and not background_image_asset_id and not background_path.exists():
             create_montage_background(background_path, suite)
         scenes.append(
             {
@@ -1925,7 +1959,8 @@ async def build_remotion_scene_manifest(
                 "backgroundAssetId": background_asset_id,
                 "backgroundVideoAssetId": background_video_asset_id,
                 "backgroundImageAssetId": background_image_asset_id,
-                "backgroundAssetKind": "visual_video" if background_video_public_path else ("visual_image" if background_asset_id else ("generated_static" if subject_has_alpha else "none")),
+                "backgroundAssetKind": "visual_video" if background_video_public_path else ("visual_image" if background_asset_id else ("generated_static" if subject_has_alpha and allow_scene_image else "none")),
+                **({"magic": magic} if magic else {}),
             }
         )
 
@@ -1976,6 +2011,11 @@ async def build_remotion_scene_manifest(
     for index, start in enumerate(boundary_starts):
         if not music_enabled:
             continue
+        # A Magic scene that stages its own sound owns its cut — the generic
+        # boundary transition sfx would double up on the same instant.
+        next_magic = scenes[index + 1].get("magic") if index + 1 < len(scenes) else None
+        if isinstance(next_magic, dict) and next_magic.get("sfx") in MAGIC_SFX_QUERIES:
+            continue
         asset = transition_pool[boundary_indices[index]] if transition_pool else None
         public_path = remotion_public_asset_path(asset.storage_url, work_dir, asset.id) if asset else None
         if asset and public_path:
@@ -1987,6 +2027,32 @@ async def build_remotion_scene_manifest(
     beat_cursor = 0.0
     for scene_index, scene in enumerate(scenes):
         duration_for_scene = max(0.1, scene["sourceEnd"] - scene["sourceStart"])
+        # Magic staged sound: the director's per-scene sfx keyword picks a
+        # matching library sound at the scene's first frame.
+        magic_sfx_key = str((scene.get("magic") or {}).get("sfx") or "")
+        if music_enabled and magic_sfx_key in MAGIC_SFX_QUERIES:
+            magic_sfx_asset = pick_asset(
+                active_assets,
+                kind="sfx",
+                scene_text=MAGIC_SFX_QUERIES[magic_sfx_key],
+                variety_seed=render_shuffle_seed + scene_index,
+            )
+            magic_sfx_path = (
+                remotion_public_asset_path(magic_sfx_asset.storage_url, work_dir, magic_sfx_asset.id)
+                if magic_sfx_asset
+                else None
+            )
+            if magic_sfx_asset and magic_sfx_path:
+                selected_asset_ids.append(magic_sfx_asset.id)
+                sound_effects.append(
+                    {
+                        "publicPath": magic_sfx_path,
+                        "at": round(beat_cursor + 0.04, 3),
+                        "volume": 0.34,
+                        "assetId": magic_sfx_asset.id,
+                        "kind": "magic_sfx",
+                    }
+                )
         beat_count = max(1, int(duration_for_scene // 2.7))
         for beat_index in range(beat_count):
             if not sfx_assets:
@@ -2054,6 +2120,7 @@ async def build_remotion_scene_manifest(
         "fps": fps,
         "width": 1080,
         "height": 1920,
+        "template": template,
         "showCaptions": show_captions,
         "showTitles": show_titles,
         "source": source_manifest,
@@ -2079,6 +2146,16 @@ async def build_remotion_scene_manifest(
         "diagnostics": {
             "sceneCount": len(scenes),
             "sceneSource": scene_source,
+            "template": template,
+            "magicDirectionSource": (magic_direction_source or "heuristic") if is_magic else None,
+            "magicLayouts": (
+                {
+                    layout: sum(1 for scene in scenes if (scene.get("magic") or {}).get("layout") == layout)
+                    for layout in sorted({(scene.get("magic") or {}).get("layout") for scene in scenes if scene.get("magic")})
+                }
+                if is_magic
+                else None
+            ),
             "shotListBeatTypes": (
                 {
                     beat_type: sum(1 for scene in scenes if scene.get("beatType") == beat_type)
@@ -2179,6 +2256,14 @@ async def _render_remotion_montage_impl(
         notes=str(input_data.get("notes") or ""),
         max_beats=MAX_MONTAGE_SCENES,
     )
+    # OneShare Magic: a second LLM pass stages every beat individually
+    # (layout, solid/video background, 3D title, icons, camera, sfx). Scenes
+    # without a staged beat get heuristic directions in the manifest loop.
+    magic_direction_source: str | None = None
+    if montage_template(input_data) == MAGIC_TEMPLATE and shot_list_beats:
+        magic_direction_source = await apply_magic_directions(
+            shot_list_beats, suite=suite, notes=str(input_data.get("notes") or "")
+        )
     work_dir = remotion_work_dir(output_path)
     manifest_path, scenes = await build_remotion_scene_manifest(
         db=db,
@@ -2191,6 +2276,7 @@ async def _render_remotion_montage_impl(
         subject_has_alpha=subject_has_alpha,
         shot_list_beats=shot_list_beats,
         dead_air_joins=dead_air_joins,
+        magic_direction_source=magic_direction_source,
     )
     public_dir = work_dir / "public"
     entry = work_dir / "src" / "remotion" / "index.ts"
@@ -2255,11 +2341,16 @@ async def _render_remotion_montage_impl(
         capabilities.append("audio_cleanup")
     if manifest_diagnostics.get("sceneSource") == "shot_list_beats":
         capabilities.append("llm_shot_list_beats")
+    if manifest_data.get("template") == MAGIC_TEMPLATE:
+        capabilities.append("oneshare_magic_template")
+        if manifest_diagnostics.get("magicDirectionSource") == "llm":
+            capabilities.append("magic_scene_direction")
 
     return {
         "rendered": output_path.exists(),
         "duration_seconds": duration,
         "output_url": public_static_url(output_path),
+        "template": str(manifest_data.get("template") or "default"),
         "capabilities_applied": capabilities,
         "warnings": warnings,
         "manifest_path": str(manifest_path),

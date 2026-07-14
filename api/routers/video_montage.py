@@ -64,6 +64,7 @@ def job_input_summary(job: GenerationJob) -> dict[str, Any]:
     return {
         "source_url": str(input_data.get("source_url") or "") or None,
         "source_file_name": str(input_data.get("source_file_name") or "") or None,
+        "template": str(input_data.get("template") or "default"),
         "notes": str(input_data.get("notes") or "") or None,
         "options": input_data.get("options") if isinstance(input_data.get("options"), list) else [],
         "backgrounds_mode": str(input_data.get("backgrounds_mode") or "") or None,
@@ -285,10 +286,21 @@ def parse_zoom(raw: str) -> float:
     return max(1.0, min(3.0, round(value * 4) / 4))
 
 
+MONTAGE_TEMPLATES = {"default", "oneshare_magic"}
+
+
+def parse_template(raw: str) -> str:
+    """Unknown template names degrade to the default pipeline, never a 4xx —
+    an older client must still be able to queue montages after a rename."""
+    value = str(raw or "").strip().lower()
+    return value if value in MONTAGE_TEMPLATES else "default"
+
+
 @router.post("/jobs")
 async def create_video_montage_job(
     suite_id: str,
     mode: str = Form("talking_head"),
+    template: str = Form("default"),
     source_url: str = Form(""),
     options_json: str = Form("[]"),
     caption_overrides_json: str = Form("[]"),
@@ -315,6 +327,7 @@ async def create_video_montage_job(
     )
     input_data: dict[str, Any] = {
         "mode": mode[:80],
+        "template": parse_template(template),
         "source_url": source_url.strip()[:1500],
         "options": options,
         "caption_overrides": caption_overrides,
