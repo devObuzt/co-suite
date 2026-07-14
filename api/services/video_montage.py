@@ -1749,6 +1749,11 @@ async def build_remotion_scene_manifest(
     locked_background_videos: list[CreativeAsset] = []
     generated_image_count = 0
     max_generated_images = max(0, int(settings.montage_max_generated_images_per_render))
+    if is_magic:
+        # Magic stages every beat with its own literal visual ("منتج كل فريم"):
+        # per-word generated IMAGES are the safe way to cover fast enumeration
+        # (each distinct background VIDEO costs an OffthreadVideo decoder).
+        max_generated_images = max(max_generated_images, 12)
     scenes: list[dict[str, Any]] = []
     # Never drop the tail of long videos: segments beyond the scene cap are
     # merged into the last scene instead of being cut from the montage.
@@ -1870,7 +1875,12 @@ async def build_remotion_scene_manifest(
                 locked_videos=locked_background_videos,
             )
             visual_video_asset = resolve_scene_background_video(
-                visual_video_asset, scene_index=index, locked_videos=locked_background_videos
+                visual_video_asset,
+                scene_index=index,
+                locked_videos=locked_background_videos,
+                # Magic leans harder on motion; one extra decoder stays inside
+                # the 8GB container's budget.
+                max_distinct=MAX_DISTINCT_BACKGROUND_VIDEOS + 1 if is_magic else MAX_DISTINCT_BACKGROUND_VIDEOS,
             )
         visual_asset = None
         if subject_has_alpha and allow_scene_image:
@@ -1890,6 +1900,10 @@ async def build_remotion_scene_manifest(
                 if beat
                 else index < 4
             )
+            # Magic image scenes always deserve their own literal visual, even
+            # when the shot list preferred motion (the decoder cap ate it).
+            if magic and magic_background == "image":
+                should_generate_image = generated_image_count < max_generated_images
             if not visual_asset and db and allow_generated_backgrounds and should_generate_image:
                 try:
                     visual_asset = await generate_visual_asset_for_scene(

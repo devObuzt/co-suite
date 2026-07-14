@@ -29,7 +29,25 @@ MONTAGE_TEMPLATES = {"default", MAGIC_TEMPLATE}
 
 MAGIC_LAYOUTS = {"split", "full"}
 MAGIC_BACKGROUNDS = {"solid", "video", "image"}
-MAGIC_CAMERAS = {"zoom_in", "zoom_out", "punch_in", "none"}
+MAGIC_CAMERAS = {"zoom_in", "zoom_out", "zoom_in_out", "punch_in", "triple_punch", "none"}
+# Brand/contact icon vocabulary the Remotion side can draw as glyph badges
+# (anything else in "icons" must be an emoji). Matches the reference video's
+# contact-network moment: icons zoom out from behind the speaker's head.
+MAGIC_ICON_KEYWORDS = {
+    "instagram",
+    "facebook",
+    "tiktok",
+    "whatsapp",
+    "youtube",
+    "linkedin",
+    "x",
+    "snapchat",
+    "phone",
+    "email",
+    "location",
+    "web",
+    "people",
+}
 # Keys map onto the tag vocabulary of the built-in sfx library
 # (api/static/creative_assets/library/manifest.json).
 MAGIC_SFX_QUERIES = {
@@ -61,15 +79,28 @@ Per-beat direction fields:
 - "subtitle": optional short complement (max 6 words) shown at the opposite edge with a
   converging 3D perspective (top and bottom text lean toward a far vanishing point).
   "" when the scene needs none.
-- "icons": 0-3 emoji that LITERALLY depict the spoken idea (e.g. branding → 🎨,
-  photography → 📸). [] when none fit naturally.
+- "icons": 0-4 items that zoom out from behind the speaker's head. Each item is
+  EITHER an emoji that literally depicts the spoken idea (branding → 🎨,
+  photography → 📸) OR one of these exact keywords when the script mentions the
+  platform or a contact action: "instagram","facebook","tiktok","whatsapp",
+  "youtube","linkedin","x","snapchat","phone","email","location","web","people".
+  A "contact us" beat gets the contact network: ["phone","email","location"].
+  A beat that names Instagram gets ["instagram"]. [] when none fit naturally.
 - "emphasis": the single most important spoken word — the BRAND NAME whenever it is
   spoken — else "".
-- "camera": "zoom_in" for the hook/opening, "punch_in" (two quick zoom steps) for
-  fast enumeration items, "zoom_out" for the closing/CTA, "none" for calm narration.
+- "camera": zooms are hard snap cuts on EMPHASIZED words, used sparingly:
+  "zoom_in" hook/opening push; "zoom_out" closing settle; "zoom_in_out" push in on
+  the key word then settle back; "punch_in" two escalating snaps; "triple_punch"
+  three escalating snaps — reserve for THE single hardest emphasis moment of the
+  whole video, at most once. MOST scenes must be "none": never give two
+  consecutive scenes a camera move, and never zoom calm narration.
 - "sfx": one of "camera","whoosh","pop","impact","riser","ding","click" or null —
   "camera" when photography/filming is mentioned, "riser" on the opening build,
   "pop" on list items, "impact" on bold claims, null when silence serves the scene.
+
+Enumerated services each get their OWN scene with a literal background of that
+exact service (the pipeline renders a dedicated visual per item — do not merge
+items into one look).
 
 Return STRICT JSON only, no prose, no markdown fences:
 {"directions": [{"index": <beat index>, "layout": "...", "background": "...",
@@ -100,13 +131,17 @@ def _clean_icons(value: Any) -> list[str]:
     icons: list[str] = []
     for item in value:
         token = str(item or "").strip()
-        # Emoji only: any alphanumeric token would render as stray text.
-        if not token or len(token) > 8:
+        if not token:
             continue
-        if any(unicodedata.category(ch).startswith(("L", "N")) for ch in token):
-            continue
-        icons.append(token)
-        if len(icons) == 3:
+        keyword = token.lower()
+        if keyword in MAGIC_ICON_KEYWORDS:
+            icons.append(keyword)
+        elif len(token) <= 8 and not any(
+            unicodedata.category(ch).startswith(("L", "N")) for ch in token
+        ):
+            # Emoji only otherwise: a free-text token would render as stray text.
+            icons.append(token)
+        if len(icons) == 4:
             break
     return icons
 
@@ -139,12 +174,19 @@ def heuristic_magic_direction(*, index: int, beat: dict[str, Any] | None, scene_
             "sfx": "riser",
         }
     if beat_type == "cta" or index == scene_count - 1:
+        text = str(beat.get("text") or "")
         return {
             "layout": "split",
             "background": "solid",
             "title": title,
             "subtitle": "",
-            "icons": [],
+            # The reference CTA moment: contact icons zoom out from behind
+            # the speaker's head when the script invites people to reach out.
+            "icons": (
+                ["phone", "email", "location"]
+                if re.search(r"تواصل|اتصل|راسل|contact|كلمنا|احكيلنا|حكيلنا", text)
+                else []
+            ),
             "emphasis": "",
             "camera": "zoom_out",
             "sfx": "impact",
@@ -222,6 +264,38 @@ def validate_magic_directions(
     return directions, llm_count
 
 
+def apply_camera_restraint(directions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Enforce the reference video's zoom discipline in place.
+
+    Zooms land only on emphasized moments: never two camera moves in a row,
+    triple_punch at most once per video (later ones demote to punch_in), and
+    the total number of moved scenes stays at or below half the montage.
+    Mutates and returns ``directions``.
+    """
+    moved_budget = max(1, (len(directions) + 1) // 2)
+    moved = 0
+    previous_moved = False
+    triple_seen = False
+    for direction in directions:
+        camera = str(direction.get("camera") or "none")
+        if camera == "none":
+            previous_moved = False
+            continue
+        if camera == "triple_punch":
+            if triple_seen:
+                camera = "punch_in"
+            else:
+                triple_seen = True
+        if previous_moved or moved >= moved_budget:
+            direction["camera"] = "none"
+            previous_moved = False
+            continue
+        direction["camera"] = camera
+        moved += 1
+        previous_moved = True
+    return directions
+
+
 def _extract_json(text: str) -> dict[str, Any] | None:
     raw = str(text or "").strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
@@ -250,8 +324,13 @@ async def apply_magic_directions(
         return "no_beats"
 
     def _fallback(reason: str) -> str:
-        for index, beat in enumerate(beats):
-            beat["magic"] = heuristic_magic_direction(index=index, beat=beat, scene_count=len(beats))
+        fallback_directions = [
+            heuristic_magic_direction(index=index, beat=beat, scene_count=len(beats))
+            for index, beat in enumerate(beats)
+        ]
+        apply_camera_restraint(fallback_directions)
+        for beat, direction in zip(beats, fallback_directions):
+            beat["magic"] = direction
         log_event(
             log,
             logging.WARNING,
@@ -309,6 +388,7 @@ async def apply_magic_directions(
     if parsed is None:
         return _fallback("unparseable_response")
     directions, llm_count = validate_magic_directions(parsed.get("directions"), beats)
+    apply_camera_restraint(directions)
     for beat, direction in zip(beats, directions):
         beat["magic"] = direction
     log_event(
