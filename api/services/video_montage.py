@@ -1804,6 +1804,32 @@ async def build_remotion_scene_manifest(
             user_asset_count=len([asset for asset in active_assets if asset.kind in VISUAL_KINDS]),
         )
     selected_asset_ids: list[str] = []
+    # OneShare Magic bottom stage: ONE clean, uncluttered brand image behind
+    # the speaker and the bottom captions, constant across the whole video
+    # (the reference keeps a single designed stage under every scene). The
+    # TOP zone carries the per-frame video/animation.
+    magic_stage_public_path: str | None = None
+    if is_magic and subject_has_alpha and db and allow_generated_backgrounds:
+        try:
+            stage_asset = await generate_visual_asset_for_scene(
+                db,
+                suite=suite,
+                scene_text=f"{suite.name} brand stage backdrop",
+                kind="visual_image",
+                visual_prompt=(
+                    "an ultra-clean minimal vertical studio backdrop: one smooth "
+                    "wall in the brand color with a soft gradient, a few subtle "
+                    "thin glowing accent lines, a dark reflective floor, calm and "
+                    "uncluttered with generous empty space"
+                ),
+            )
+            if stage_asset:
+                stage_path = remotion_public_asset_path(stage_asset.storage_url, work_dir, stage_asset.id)
+                if stage_path:
+                    magic_stage_public_path = stage_path
+                    selected_asset_ids.append(stage_asset.id)
+        except Exception:
+            log.exception("Magic stage image generation failed; falling back to the gradient stage.")
     locked_background_videos: list[CreativeAsset] = []
     generated_image_count = 0
     max_generated_images = max(0, int(settings.montage_max_generated_images_per_render))
@@ -2200,6 +2226,7 @@ async def build_remotion_scene_manifest(
         "width": 1080,
         "height": 1920,
         "template": template,
+        "magicStagePublicPath": magic_stage_public_path,
         "showCaptions": show_captions,
         "showTitles": show_titles,
         "source": source_manifest,
