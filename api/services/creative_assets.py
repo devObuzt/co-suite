@@ -570,12 +570,24 @@ async def generate_visual_asset_for_scene(
             f"{scene_text}."
         )
     )
+    # The image model needs to know WHO the brand is, not just its name —
+    # without industry/offering context it invents unrelated settings
+    # (a living room behind a marketing agency's video).
+    brand_data = suite.brand if isinstance(suite.brand, dict) else {}
+    brand_context = f" Business name: {suite.name}."
+    industry = str(brand_data.get("industry") or "").strip()
+    niche = str(brand_data.get("niche") or "").strip()
+    if industry or niche:
+        brand_context += f" The business is: {', '.join(part for part in (industry, niche) if part)}."
+    offerings = [str(item).strip() for item in (brand_data.get("services") or brand_data.get("products") or []) if str(item).strip()]
+    if offerings:
+        brand_context += f" It offers: {', '.join(offerings[:6])}."
     base_prompt = (
         "Vertical 9:16 cinematic marketing background for a short social video. "
         "Background plate only: absolutely no people, faces, hands, bodies, or human silhouettes — "
         "a real person is composited on top and any generated human reads as a glitch. "
         "No readable text, no logos, no UI screenshots. Leave clean center space for a talking person. "
-        f"{scene_line} Business name: {suite.name}."
+        f"{scene_line}{brand_context}"
         f"{brand_stage_suffix(suite)}"
     )
     if kind == "visual_video":
