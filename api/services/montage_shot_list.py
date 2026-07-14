@@ -65,10 +65,11 @@ Return STRICT JSON only, no prose, no markdown fences:
 MAGIC_SHOT_LIST_ADDENDUM = """
 
 MICRO-BEAT MODE (this montage uses the OneShare Magic template):
-- Cut far finer than the rules above: enumeration items get 0.5-1.2 seconds
-  each (under a second is welcome), narrative speech is chopped into short
-  phrases of 1.0-2.5 seconds. NO beat may exceed 2.5 seconds — split long
-  sentences at natural phrase boundaries even mid-sentence.
+- Cut far finer than the rules above: EVERY beat lasts 0.8-2.3 seconds.
+  Enumeration items sit at the short end (0.8-1.2s), narrative phrases at
+  the long end (1.5-2.3s). NO beat may exceed 2.3 seconds — split long
+  sentences at natural phrase boundaries even mid-sentence — and none may
+  fall under 0.8 seconds.
 - EVERY beat gets its own distinct visual_prompt with its OWN mood — change
   the setting, lighting, or palette between adjacent beats; two consecutive
   beats must never describe the same-looking scene."""
@@ -97,15 +98,17 @@ def validate_shot_list_beats(
     range_start: float,
     range_end: float,
     max_beats: int,
+    min_beat_seconds: float = MIN_BEAT_SECONDS,
 ) -> list[dict[str, Any]] | None:
     """Sanitize LLM beats and repair the timeline so they exactly tile the range.
 
     Pure function — unit-testable with faked LLM output. Returns None when the
     beats are unusable (the caller then falls back to sentence scenes).
     """
+    min_beat_seconds = max(MIN_BEAT_SECONDS, float(min_beat_seconds))
     if not isinstance(raw_beats, list) or max_beats < 2:
         return None
-    if range_end - range_start < 2 * MIN_BEAT_SECONDS:
+    if range_end - range_start < 2 * min_beat_seconds:
         return None
 
     beats: list[dict[str, Any]] = []
@@ -163,7 +166,7 @@ def validate_shot_list_beats(
     for index, beat in enumerate(beats):
         is_last = index == len(beats) - 1
         end = range_end if is_last else min(max(float(beat["end"]), cursor), range_end)
-        if end - cursor < MIN_BEAT_SECONDS:
+        if end - cursor < min_beat_seconds:
             if is_last and tiled:
                 tiled[-1]["end"] = round(range_end, 3)
                 tiled[-1]["text"] = _clean_text(f"{tiled[-1]['text']} {beat['text']}", 500)
@@ -274,6 +277,9 @@ async def generate_shot_list(
         range_start=range_start,
         range_end=range_end,
         max_beats=max_beats,
+        # Owner-approved Magic frame range: 0.8-2.3s (ceiling enforced by
+        # split_long_beat_segments downstream).
+        min_beat_seconds=0.8 if style == "oneshare_magic" else MIN_BEAT_SECONDS,
     )
     if not beats:
         _fail("invalid_beats")

@@ -63,10 +63,10 @@ REQUEST_TIMEOUT_SECONDS = 45
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
 MAX_DISTINCT_BACKGROUND_VIDEOS = 2
 MAX_MONTAGE_SCENES = 24
-# Magic works in micro-frames (sometimes under a second, never over ~2.5s),
-# so it needs a much larger scene budget than the default template.
+# Magic works in micro-frames (owner-approved range: 0.8-2.3 seconds), so it
+# needs a much larger scene budget than the default template.
 MAGIC_MAX_MONTAGE_SCENES = 48
-MAGIC_MAX_BEAT_SECONDS = 3.0
+MAGIC_MAX_BEAT_SECONDS = 2.3
 TRANSITION_FRAMES = 7
 FAL_VEED_MODEL = "veed/video-background-removal"
 # Speech cleanup chain shared by the V1 mixer and the Remotion audio extract.
