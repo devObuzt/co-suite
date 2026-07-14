@@ -63,6 +63,10 @@ REQUEST_TIMEOUT_SECONDS = 45
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
 MAX_DISTINCT_BACKGROUND_VIDEOS = 2
 MAX_MONTAGE_SCENES = 24
+# Magic works in micro-frames (sometimes under a second, never over ~2.5s),
+# so it needs a much larger scene budget than the default template.
+MAGIC_MAX_MONTAGE_SCENES = 48
+MAGIC_MAX_BEAT_SECONDS = 3.0
 TRANSITION_FRAMES = 7
 FAL_VEED_MODEL = "veed/video-background-removal"
 # Speech cleanup chain shared by the V1 mixer and the Remotion audio extract.
@@ -1279,6 +1283,56 @@ def beat_scene_segments(
     return segments if len(segments) >= 2 else []
 
 
+def split_long_beat_segments(
+    segments: list[dict[str, Any]],
+    *,
+    max_seconds: float = MAGIC_MAX_BEAT_SECONDS,
+) -> list[dict[str, Any]]:
+    """Magic safety net: mechanically split any beat segment still longer
+    than ``max_seconds`` into even micro-frames.
+
+    The micro-beat shot list should already cut this fine; this guarantees it
+    when the LLM returns lazy long beats. Word timestamps are re-windowed so
+    karaoke captions keep real timing and each piece's text is its own words.
+    Only the first piece keeps the staged camera/sfx/icons — repeating a
+    zoom or a sound on every sub-frame would spam the cut.
+    """
+    result: list[dict[str, Any]] = []
+    for segment in segments:
+        start = float(segment.get("start") or 0)
+        end = float(segment.get("end") or 0)
+        seconds = end - start
+        if seconds <= max_seconds:
+            result.append(segment)
+            continue
+        pieces = int(math.ceil(seconds / max_seconds))
+        piece_seconds = seconds / pieces
+        words = [word for word in (segment.get("words") or []) if isinstance(word, dict)]
+        beat = segment.get("beat") if isinstance(segment.get("beat"), dict) else None
+        for piece_index in range(pieces):
+            piece_start = start + piece_index * piece_seconds
+            piece_end = end if piece_index == pieces - 1 else piece_start + piece_seconds
+            piece_words = [
+                word for word in words if piece_start - 0.05 <= float(word.get("start") or 0) < piece_end
+            ]
+            piece_text = " ".join(str(word.get("text") or word.get("word") or "").strip() for word in piece_words).strip()
+            piece_beat = beat
+            if beat is not None and piece_index > 0:
+                magic = beat.get("magic") if isinstance(beat.get("magic"), dict) else None
+                piece_beat = dict(beat)
+                if magic:
+                    piece_beat["magic"] = {**magic, "camera": "none", "sfx": None, "icons": []}
+            piece = dict(segment)
+            piece["start"] = round(piece_start, 3)
+            piece["end"] = round(piece_end, 3)
+            piece["words"] = piece_words
+            piece["text"] = piece_text or str(segment.get("text") or "")
+            if piece_beat is not None:
+                piece["beat"] = piece_beat
+            result.append(piece)
+    return result
+
+
 def _scene_is_high_energy(scene: dict[str, Any]) -> bool:
     beat_type = str(scene.get("beatType") or "").lower()
     duration = float(scene.get("sourceEnd") or 0) - float(scene.get("sourceStart") or 0)
@@ -1696,6 +1750,10 @@ async def build_remotion_scene_manifest(
     scene_source = "sentence_segments"
     if shot_list_beats:
         beat_segments = beat_scene_segments(shot_list_beats, transcript_segments, duration=duration)
+        if beat_segments and is_magic:
+            # Magic works in micro-frames: any beat the LLM left long is
+            # mechanically split so no frame exceeds ~MAGIC_MAX_BEAT_SECONDS.
+            beat_segments = split_long_beat_segments(beat_segments)
         if beat_segments:
             transcript_segments = beat_segments
             scene_source = "shot_list_beats"
@@ -1749,22 +1807,24 @@ async def build_remotion_scene_manifest(
     locked_background_videos: list[CreativeAsset] = []
     generated_image_count = 0
     max_generated_images = max(0, int(settings.montage_max_generated_images_per_render))
-    if is_magic:
-        # Magic stages every beat with its own literal visual ("منتج كل فريم"):
-        # per-word generated IMAGES are the safe way to cover fast enumeration
-        # (each distinct background VIDEO costs an OffthreadVideo decoder).
-        max_generated_images = max(max_generated_images, 12)
     scenes: list[dict[str, Any]] = []
     # Never drop the tail of long videos: segments beyond the scene cap are
     # merged into the last scene instead of being cut from the montage.
+    scene_cap = MAGIC_MAX_MONTAGE_SCENES if is_magic else MAX_MONTAGE_SCENES
     capped_segments = list(transcript_segments)
-    if len(capped_segments) > MAX_MONTAGE_SCENES:
-        tail = capped_segments[MAX_MONTAGE_SCENES - 1 :]
+    if len(capped_segments) > scene_cap:
+        tail = capped_segments[scene_cap - 1 :]
         merged = dict(tail[0])
         merged["end"] = tail[-1].get("end", merged.get("end"))
         merged["text"] = " ".join(str(seg.get("text") or "").strip() for seg in tail).strip()
         merged["words"] = [word for seg in tail for word in (seg.get("words") or [])]
-        capped_segments = capped_segments[: MAX_MONTAGE_SCENES - 1] + [merged]
+        capped_segments = capped_segments[: scene_cap - 1] + [merged]
+    if is_magic:
+        # Magic stages EVERY frame with its own visual ("منتج كل فريم"): the
+        # image budget scales with the frame count. Per-frame generated
+        # IMAGES are the safe way to cover micro-beats (each distinct
+        # background VIDEO costs an OffthreadVideo decoder).
+        max_generated_images = max(max_generated_images, min(32, len(capped_segments)))
     for index, segment in enumerate(capped_segments):
         beat = segment.get("beat") if isinstance(segment.get("beat"), dict) else None
         # OneShare Magic: every scene carries its own staging. Beats the
@@ -1808,7 +1868,8 @@ async def build_remotion_scene_manifest(
         variety_seed = zlib.crc32(str(work_dir).encode("utf-8")) + index
         # Short beats never mint a fresh Veo video: the clip could not even
         # register before the cut, and each distinct video costs a decoder.
-        beat_allows_new_video = not (beat and segment_seconds < 2.0)
+        # Exception: the Magic hero frame — its top-zone video IS the hook.
+        beat_allows_new_video = not (beat and segment_seconds < 2.0) or (is_magic and index == 0)
         visual_video_asset = None
         if (
             subject_has_alpha
@@ -2071,6 +2132,10 @@ async def build_remotion_scene_manifest(
         for beat_index in range(beat_count):
             if not sfx_assets:
                 continue
+            # Magic micro-frames already get a boundary sound per cut; the
+            # generic in-scene rhythm sfx on sub-second frames is just spam.
+            if is_magic and duration_for_scene < 1.2:
+                continue
             asset = sfx_assets[(scene_index + beat_index) % len(sfx_assets)]
             public_path = remotion_public_asset_path(asset.storage_url, work_dir, asset.id)
             if public_path:
@@ -2264,17 +2329,19 @@ async def _render_remotion_montage_impl(
     warnings = [transcript_warning] if transcript_warning else []
     # LLM shot list: the transcript becomes literal visual beats that replace
     # sentence granularity. Any failure logs and keeps the previous behaviour.
+    template = montage_template(input_data)
     shot_list_beats = await generate_shot_list(
         transcript_segments,
         suite=suite,
         notes=str(input_data.get("notes") or ""),
-        max_beats=MAX_MONTAGE_SCENES,
+        max_beats=MAGIC_MAX_MONTAGE_SCENES if template == MAGIC_TEMPLATE else MAX_MONTAGE_SCENES,
+        style=template,
     )
     # OneShare Magic: a second LLM pass stages every beat individually
     # (layout, solid/video background, 3D title, icons, camera, sfx). Scenes
     # without a staged beat get heuristic directions in the manifest loop.
     magic_direction_source: str | None = None
-    if montage_template(input_data) == MAGIC_TEMPLATE and shot_list_beats:
+    if template == MAGIC_TEMPLATE and shot_list_beats:
         magic_direction_source = await apply_magic_directions(
             shot_list_beats, suite=suite, notes=str(input_data.get("notes") or "")
         )

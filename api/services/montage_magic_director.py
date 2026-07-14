@@ -64,15 +64,21 @@ MAGIC_DIRECTOR_SYSTEM = """You are the ART DIRECTOR for "OneShare Magic", a prem
 talking-head montage template. The input is a list of visual beats (already cut from the
 transcript) plus brand info. For EACH beat, decide how to stage that single scene.
 
+THE MAGIC FRAME: every scene is a micro-frame (often under a second) with its OWN mood
+and its OWN background. The standard sandwich: 3D title on TOP, the background media
+BETWEEN the top title and the bottom captions, the speaker on the solid brand stage.
+Adjacent frames must never share the same look — a new frame means a new atmosphere.
+
 Per-beat direction fields:
-- "layout": "split" — background media fills the TOP HALF and blends down into a SOLID
-  brand-color stage behind the speaker (use for the hook/opening statement and bold
-  claims where the typography carries the scene); "full" — background media fills the
-  whole frame behind the speaker (use for enumerated services/features and rich visuals).
+- "layout": "split" — the STANDARD Magic frame: background media occupies the top zone,
+  blending into the solid brand stage behind the speaker, sandwiched between the top
+  title and the bottom captions. "full" — media fills the whole frame; reserve it for
+  immersive moments (fast enumerated services, rich establishing visuals).
 - "background": "video" when motion embodies the spoken meaning (services, actions,
   anything dynamic — e.g. the word "marketing" gets a related moving background),
-  "image" for calm narrative moments, "solid" when the 3D title IS the visual
-  (punchy one-liners, CTA). Use "video" generously on enumeration beats.
+  "image" for everything else — EVERY frame deserves its own literal image; "solid"
+  only when the 3D title IS the visual (punchy one-liners, CTA). Never let two
+  consecutive frames feel identical.
 - "title": the beat's headline in the transcript's language, 1-4 words, rendered as a
   huge 3D block title with a hard shadow. For the hook, use the core promise
   (e.g. "محل واحد"). Never punctuation, never a full sentence.
@@ -202,8 +208,10 @@ def heuristic_magic_direction(*, index: int, beat: dict[str, Any] | None, scene_
             "camera": "punch_in",
             "sfx": "pop",
         }
+    # Narrative micro-frames default to the standard Magic sandwich: media on
+    # top of the solid stage, each frame with its own generated image.
     return {
-        "layout": "full",
+        "layout": "split",
         "background": "image",
         "title": title,
         "subtitle": "",

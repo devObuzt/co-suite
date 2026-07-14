@@ -145,6 +145,36 @@ def test_heuristic_cta_contact_icons():
     assert direction["icons"] == ["phone", "email", "location"]
 
 
+def test_split_long_beat_segments_micro_frames():
+    from api.services.video_montage import split_long_beat_segments
+
+    words = [{"text": f"w{i}", "start": float(i)} for i in range(9)]
+    beat = {"keyword": "كلمة", "magic": {"camera": "punch_in", "sfx": "pop", "icons": ["🎯"], "title": "عنوان"}}
+    segments = [
+        {"start": 0.0, "end": 2.0, "text": "قصير", "words": [], "beat": {"keyword": "x"}},
+        {"start": 2.0, "end": 9.0, "text": "طويل كثير", "words": words[2:], "beat": beat},
+    ]
+    result = split_long_beat_segments(segments, max_seconds=3.0)
+    # Short segment untouched; 7s segment becomes 3 micro-frames.
+    assert len(result) == 4
+    assert result[0]["end"] == 2.0
+    pieces = result[1:]
+    assert all(piece["end"] - piece["start"] <= 3.0 + 1e-6 for piece in pieces)
+    assert pieces[0]["start"] == 2.0 and pieces[-1]["end"] == 9.0
+    # Words re-windowed per piece and text follows the words.
+    assert all(
+        all(piece["start"] - 0.05 <= w["start"] < piece["end"] for w in piece["words"])
+        for piece in pieces
+    )
+    assert pieces[0]["text"].startswith("w2")
+    # Camera/sfx/icons only on the first piece; title/mood survive on all.
+    assert pieces[0]["beat"]["magic"]["camera"] == "punch_in"
+    for piece in pieces[1:]:
+        magic = piece["beat"]["magic"]
+        assert magic["camera"] == "none" and magic["sfx"] is None and magic["icons"] == []
+        assert magic["title"] == "عنوان"
+
+
 def test_validate_handles_garbage_payloads():
     beats = _beats(2)
     for garbage in (None, "nope", 42, [{"index": "x"}], [None, []]):

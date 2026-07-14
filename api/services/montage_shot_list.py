@@ -60,6 +60,19 @@ Return STRICT JSON only, no prose, no markdown fences:
   "beat_type": "enumeration"|"narrative"|"cta",
   "visual_prompt": "...", "keyword": "...", "prefer": "image"|"video"}]}"""
 
+# OneShare Magic cuts MUCH finer: the montage works in micro-frames, each
+# with its own mood, instead of sentence-length scenes.
+MAGIC_SHOT_LIST_ADDENDUM = """
+
+MICRO-BEAT MODE (this montage uses the OneShare Magic template):
+- Cut far finer than the rules above: enumeration items get 0.5-1.2 seconds
+  each (under a second is welcome), narrative speech is chopped into short
+  phrases of 1.0-2.5 seconds. NO beat may exceed 2.5 seconds — split long
+  sentences at natural phrase boundaries even mid-sentence.
+- EVERY beat gets its own distinct visual_prompt with its OWN mood — change
+  the setting, lighting, or palette between adjacent beats; two consecutive
+  beats must never describe the same-looking scene."""
+
 
 def _extract_json(text: str) -> dict[str, Any] | None:
     raw = str(text or "").strip()
@@ -177,6 +190,7 @@ async def generate_shot_list(
     suite: Suite,
     notes: str = "",
     max_beats: int = 24,
+    style: str = "default",
 ) -> list[dict[str, Any]] | None:
     """Transcript → validated visual beats, or None when the LLM path failed.
 
@@ -230,7 +244,11 @@ async def generate_shot_list(
         text = await call_claude(
             model=settings.anthropic_fast_model,
             max_tokens=4000,
-            system=SHOT_LIST_SYSTEM,
+            system=(
+                SHOT_LIST_SYSTEM + MAGIC_SHOT_LIST_ADDENDUM
+                if style == "oneshare_magic"
+                else SHOT_LIST_SYSTEM
+            ),
             messages=[
                 {
                     "role": "user",
