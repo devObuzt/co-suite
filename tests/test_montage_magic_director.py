@@ -175,6 +175,29 @@ def test_split_long_beat_segments_micro_frames():
         assert magic["title"] == "عنوان"
 
 
+def test_resolve_magic_scene_video_never_repeats():
+    from types import SimpleNamespace
+
+    from api.services.video_montage import resolve_magic_scene_video
+
+    locked = []
+    a = SimpleNamespace(id="a")
+    b = SimpleNamespace(id="b")
+    c = SimpleNamespace(id="c")
+    d = SimpleNamespace(id="d")
+    # Fresh videos lock up to the cap.
+    assert resolve_magic_scene_video(a, locked_videos=locked, max_distinct=3) is a
+    assert resolve_magic_scene_video(b, locked_videos=locked, max_distinct=3) is b
+    # A repeat NEVER rotates back in — the frame generates an image instead.
+    assert resolve_magic_scene_video(a, locked_videos=locked, max_distinct=3) is None
+    assert resolve_magic_scene_video(c, locked_videos=locked, max_distinct=3) is c
+    # Cap reached: even a new video is refused.
+    assert resolve_magic_scene_video(d, locked_videos=locked, max_distinct=3) is None
+    # Nothing picked stays nothing (caller mints the frame's own image).
+    assert resolve_magic_scene_video(None, locked_videos=locked, max_distinct=3) is None
+    assert [v.id for v in locked] == ["a", "b", "c"]
+
+
 def test_validate_handles_garbage_payloads():
     beats = _beats(2)
     for garbage in (None, "nope", 42, [{"index": "x"}], [None, []]):

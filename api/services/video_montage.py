@@ -1283,6 +1283,31 @@ def beat_scene_segments(
     return segments if len(segments) >= 2 else []
 
 
+def resolve_magic_scene_video(
+    picked: CreativeAsset | None,
+    *,
+    locked_videos: list[CreativeAsset],
+    max_distinct: int,
+) -> CreativeAsset | None:
+    """Magic never repeats a background video across frames.
+
+    The default template's rotation backfill ("no scene goes static") is
+    exactly the repetition Magic exists to kill: it silently filled every
+    video-directed frame with the same hero clip, so the per-frame image
+    generation never fired. A Magic frame either locks a NEW distinct video
+    (below the decoder cap) or returns None so the caller mints the frame's
+    own generated image instead. Mutates ``locked_videos``.
+    """
+    if picked is None:
+        return None
+    if any(asset.id == picked.id for asset in locked_videos):
+        return None
+    if len(locked_videos) >= max_distinct:
+        return None
+    locked_videos.append(picked)
+    return picked
+
+
 def split_long_beat_segments(
     segments: list[dict[str, Any]],
     *,
@@ -1964,14 +1989,23 @@ async def build_remotion_scene_manifest(
                     is_beat_scene=bool(beat),
                     locked_videos=locked_background_videos,
                 )
-            visual_video_asset = resolve_scene_background_video(
-                visual_video_asset,
-                scene_index=index,
-                locked_videos=locked_background_videos,
-                # Magic leans harder on motion; one extra decoder stays inside
-                # the 8GB container's budget.
-                max_distinct=MAX_DISTINCT_BACKGROUND_VIDEOS + 1 if is_magic else MAX_DISTINCT_BACKGROUND_VIDEOS,
-            )
+            if is_magic:
+                # No rotation backfill: a repeated video frame becomes a
+                # freshly generated image frame instead.
+                visual_video_asset = resolve_magic_scene_video(
+                    visual_video_asset,
+                    locked_videos=locked_background_videos,
+                    # Magic leans harder on motion; one extra decoder stays
+                    # inside the 8GB container's budget.
+                    max_distinct=MAX_DISTINCT_BACKGROUND_VIDEOS + 1,
+                )
+            else:
+                visual_video_asset = resolve_scene_background_video(
+                    visual_video_asset,
+                    scene_index=index,
+                    locked_videos=locked_background_videos,
+                    max_distinct=MAX_DISTINCT_BACKGROUND_VIDEOS,
+                )
         visual_asset = None
         if subject_has_alpha and allow_scene_image:
             # Magic image frames mint their OWN literal visual FIRST — a
@@ -1999,6 +2033,9 @@ async def build_remotion_scene_manifest(
                         generated_image_count += 1
                         active_assets.append(visual_asset)
                 except Exception:
+                    # Loud, not silent: a whole render of failed generations
+                    # otherwise looks identical to "decided not to generate".
+                    log.exception("Magic frame %s image generation failed; falling back to library pick.", index + 1)
                     visual_asset = None
             if not visual_asset:
                 visual_asset = pick_asset(
@@ -2098,6 +2135,21 @@ async def build_remotion_scene_manifest(
             scenes[index + 1]["sourceStart"] = boundary
 
     scenes = split_scenes_at_joins(scenes, dead_air_joins or [], fps)
+
+    if is_magic:
+        # One glance answers "did every frame get its own background?".
+        log_event(
+            log,
+            logging.INFO,
+            "Magic frame backgrounds resolved.",
+            event="montage_magic_backgrounds",
+            suite_id=suite.id,
+            frames=len(scenes),
+            generated_images=generated_image_count,
+            distinct_videos=len(locked_background_videos),
+            solid_frames=sum(1 for scene in scenes if (scene.get("magic") or {}).get("background") == "solid"),
+            stage_image=bool(magic_stage_public_path),
+        )
 
     edited_duration = sum(max(0.1, scene["sourceEnd"] - scene["sourceStart"]) for scene in scenes)
     music_asset = None
