@@ -2601,7 +2601,7 @@ async def _render_remotion_montage_impl(
     if manifest_diagnostics.get("sceneSource") == "shot_list_beats":
         capabilities.append("llm_shot_list_beats")
     if manifest_data.get("template") == MAGIC_TEMPLATE:
-        capabilities.append("oneshare_magic_template")
+        capabilities.append("oneshare_superzoom_template")
         if manifest_diagnostics.get("magicDirectionSource") == "llm":
             capabilities.append("magic_scene_direction")
 
