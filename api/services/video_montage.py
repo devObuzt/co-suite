@@ -31,6 +31,7 @@ from .media_storage import r2_configured, upload_bytes
 from .montage_magic_director import (
     MAGIC_SFX_QUERIES,
     MAGIC_TEMPLATE,
+    MAGIC_TEMPLATES,
     apply_magic_directions,
     heuristic_magic_direction,
     montage_template,
@@ -1766,7 +1767,7 @@ async def build_remotion_scene_manifest(
 
     options = requested_options(input_data)
     template = montage_template(input_data)
-    is_magic = template == MAGIC_TEMPLATE
+    is_magic = template in MAGIC_TEMPLATES
     # Honest options: a toggle the user switched off must leave zero trace in
     # the manifest, so the render cannot silently apply it anyway.
     show_captions = "captions" in options
@@ -2512,14 +2513,14 @@ async def _render_remotion_montage_impl(
         transcript_segments,
         suite=suite,
         notes=str(input_data.get("notes") or ""),
-        max_beats=MAGIC_MAX_MONTAGE_SCENES if template == MAGIC_TEMPLATE else MAX_MONTAGE_SCENES,
+        max_beats=MAGIC_MAX_MONTAGE_SCENES if template in MAGIC_TEMPLATES else MAX_MONTAGE_SCENES,
         style=template,
     )
     # OneShare Magic: a second LLM pass stages every beat individually
     # (layout, solid/video background, 3D title, icons, camera, sfx). Scenes
     # without a staged beat get heuristic directions in the manifest loop.
     magic_direction_source: str | None = None
-    if template == MAGIC_TEMPLATE and shot_list_beats:
+    if template in MAGIC_TEMPLATES and shot_list_beats:
         magic_direction_source = await apply_magic_directions(
             shot_list_beats, suite=suite, notes=str(input_data.get("notes") or "")
         )
@@ -2600,8 +2601,8 @@ async def _render_remotion_montage_impl(
         capabilities.append("audio_cleanup")
     if manifest_diagnostics.get("sceneSource") == "shot_list_beats":
         capabilities.append("llm_shot_list_beats")
-    if manifest_data.get("template") == MAGIC_TEMPLATE:
-        capabilities.append("oneshare_superzoom_template")
+    if manifest_data.get("template") in MAGIC_TEMPLATES:
+        capabilities.append(f"{manifest_data.get('template')}_template")
         if manifest_diagnostics.get("magicDirectionSource") == "llm":
             capabilities.append("magic_scene_direction")
 

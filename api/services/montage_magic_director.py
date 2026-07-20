@@ -1,6 +1,6 @@
 """OneShare Magic director: per-scene art direction on top of the shot list.
 
-The "oneshare_superzoom" montage template treats every scene as its own edit:
+The "oneshare_magic" / "oneshare_superzoom" montage templates treat every scene as its own edit:
 a fast Anthropic model looks at each shot-list beat and decides how to stage
 it — split layout (background media on the top half blending into a solid
 brand-color stage behind the speaker), a huge 3D shadowed title, an optional
@@ -24,8 +24,13 @@ from ..models.suite import Suite
 
 log = logging.getLogger(__name__)
 
-MAGIC_TEMPLATE = "oneshare_superzoom"
-MONTAGE_TEMPLATES = {"default", MAGIC_TEMPLATE}
+# Two templates share the SAME per-scene grammar (this director, the shot
+# list, MagicScene) and differ ONLY in zoom intensity, applied on the render
+# side: "oneshare_magic" keeps zooms gentle; "oneshare_superzoom" pushes them.
+MAGIC_TEMPLATE = "oneshare_magic"
+SUPERZOOM_TEMPLATE = "oneshare_superzoom"
+MAGIC_TEMPLATES = {MAGIC_TEMPLATE, SUPERZOOM_TEMPLATE}
+MONTAGE_TEMPLATES = {"default", MAGIC_TEMPLATE, SUPERZOOM_TEMPLATE}
 
 MAGIC_LAYOUTS = {"split", "full"}
 MAGIC_BACKGROUNDS = {"solid", "video", "image"}

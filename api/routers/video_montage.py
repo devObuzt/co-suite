@@ -286,7 +286,7 @@ def parse_zoom(raw: str) -> float:
     return max(1.0, min(3.0, round(value * 4) / 4))
 
 
-MONTAGE_TEMPLATES = {"default", "oneshare_superzoom"}
+MONTAGE_TEMPLATES = {"default", "oneshare_magic", "oneshare_superzoom"}
 
 
 def parse_template(raw: str) -> str:
