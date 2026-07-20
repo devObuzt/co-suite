@@ -541,14 +541,17 @@ def brand_stage_suffix(suite: Suite) -> str:
 
     Reference finding: winning montages unify every scene on one FIXED virtual
     stage, so generated backgrounds read as one branded set instead of random
-    stock. The suite's primary color keys the stage glow to the brand.
+    stock. The suite's primary color keys the stage to the brand. The goal is a
+    CLEAN, uncluttered plate — not a glowing, busy one.
     """
     return (
         " Consistent virtual stage shared across the whole video series: "
         "a dark tech grid floor fading to the horizon, "
-        f"ambient glow in the brand primary color {_brand_primary_hex(suite)}, "
+        f"grounded in the brand primary color {_brand_primary_hex(suite)}, "
         "same camera angle and lighting across the series, "
-        "premium cohesive set design, background plate only."
+        "premium cohesive set design. Keep it clean, uncluttered and calm — "
+        "plenty of empty negative space, no busy details, no crowded elements, "
+        "background plate only."
     )
 
 
@@ -559,7 +562,14 @@ async def generate_visual_asset_for_scene(
     scene_text: str,
     kind: str = "visual_image",
     visual_prompt: str | None = None,
+    magic_top_zone: bool = False,
 ) -> CreativeAsset | None:
+    # ``magic_top_zone`` = the OneShare Magic top-zone VIDEO band: a wide 16:9
+    # clip that blends behind the speaker into the bottom brand stage. Unlike
+    # the clean image plates, it is free and expressive — it interprets the
+    # IDEA through the brand instead of drawing the words literally, and
+    # people/faces/hands/real logos/expressive icons are welcome. Only applies
+    # to kind == "visual_video".
     # A shot-list beat brings its own literal scene description; without one
     # the spoken line itself steers the visual.
     scene_line = (
@@ -591,15 +601,39 @@ async def generate_visual_asset_for_scene(
         f"{brand_stage_suffix(suite)}"
     )
     if kind == "visual_video":
-        video_prompt = (
-            f"{base_prompt} Create subtle continuous motion: moving light streaks, depth, camera drift, "
-            "soft particles or contextual b-roll movement. It should work as a background layer behind a speaker."
-        )
+        if magic_top_zone:
+            # The Magic top-zone clip: wide, expressive, brand-aware b-roll.
+            # It reads the MEANING of the moment (through the brand's industry,
+            # offering and audience) rather than literally illustrating the
+            # words, and it may show people, real logos and life — it sits
+            # behind the speaker as b-roll, not as a plate the speaker stands on.
+            concept = visual_prompt or scene_text
+            video_prompt = (
+                "Wide 16:9 cinematic b-roll for a premium short social video, shown as a "
+                "horizontal band behind a speaker and blending down into a solid brand "
+                "stage. "
+                f"This moment is about: {concept}.{brand_context} "
+                "Interpret the IDEA behind this moment for THIS business and its audience — "
+                "evoke the concept, mood and context, not a literal dictionary drawing of "
+                "the words. People, faces, hands, real brand logos and expressive icons "
+                "are all welcome when they help tell the idea. "
+                "The one hard rule: NO on-screen text — and if any text is truly "
+                "unavoidable it must be ENGLISH only (video models garble other scripts). "
+                "Rich continuous motion: real b-roll movement, camera drift, depth, "
+                "light and life."
+            )
+            video_aspect = "16:9"
+        else:
+            video_prompt = (
+                f"{base_prompt} Create subtle continuous motion: moving light streaks, depth, camera drift, "
+                "soft particles or contextual b-roll movement. It should work as a background layer behind a speaker."
+            )
+            video_aspect = "9:16"
         idea = {
             "id": f"visual-background-{uuid.uuid4().hex[:8]}",
             "division": "marketing",
             "topic": scene_text[:120],
-            "aspect_ratio": "9:16",
+            "aspect_ratio": video_aspect,
             "video_subtype": "video_with_titles",
             "video_prompt": video_prompt,
             "video_title_en": "",

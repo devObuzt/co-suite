@@ -1008,6 +1008,14 @@ def extract_audio_for_transcription(video_path: Path, audio_path: Path) -> Path 
                 "-i",
                 str(video_path),
                 "-vn",
+                # Whisper expects mono 16 kHz. Handing it stereo 44.1 kHz makes
+                # it hallucinate/collapse the whole track to a single canned
+                # phrase (e.g. "اشتركوا في القناة") on some sources; downmixing
+                # to mono 16 kHz transcribes the real speech reliably.
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
                 "-c:a",
                 "aac",
                 "-b:a",
@@ -1113,6 +1121,46 @@ def detect_subject_top_rel(frames_dir: Path) -> float | None:
                         return round(y / height, 4)
     except Exception:
         log.exception("Failed to detect subject top from %s", sample)
+    return None
+
+
+def detect_subject_head_width_rel(frames_dir: Path) -> float | None:
+    """Widest alpha extent in the head band (0..1 of frame width).
+
+    Used to cap the subject zoom so the head never exceeds ~90% of the frame
+    width. Measures the head band just below the detected subject top — the
+    face/hair is the widest thing there and drives the safe max zoom.
+    """
+    frames = sorted(frames_dir.glob("frame_*.png"))
+    if not frames:
+        return None
+    sample = frames[min(len(frames) - 1, len(frames) // 4)]
+    try:
+        with Image.open(sample) as img:
+            alpha = img.convert("RGBA").getchannel("A")
+            width, height = alpha.size
+            pixels = alpha.load()
+            # Find the subject top row first.
+            top_y = None
+            for y in range(0, height, 3):
+                if any(pixels[x, y] > 24 for x in range(0, width, 6)):
+                    top_y = y
+                    break
+            if top_y is None:
+                return None
+            # Scan the head band (top ~13% of the frame below the crown) for the
+            # widest run of opaque pixels.
+            band_end = min(height, top_y + int(height * 0.13))
+            widest = 0
+            for y in range(top_y, band_end, 3):
+                xs = [x for x in range(0, width, 4) if pixels[x, y] > 24]
+                if xs:
+                    widest = max(widest, xs[-1] - xs[0])
+            if widest <= 0:
+                return None
+            return round(widest / width, 4)
+    except Exception:
+        log.exception("Failed to detect subject head width from %s", sample)
     return None
 
 
@@ -1430,8 +1478,23 @@ def split_scenes_at_joins(
     return result
 
 
-def build_scene_transitions(scenes: list[dict[str, Any]], seed: int) -> list[dict[str, Any]]:
-    """One transition per interior boundary, chosen by energy (seeded)."""
+MAGIC_TRANSITION_FRAMES = 9
+
+
+def build_scene_transitions(
+    scenes: list[dict[str, Any]], seed: int, *, magic: bool = False
+) -> list[dict[str, Any]]:
+    """One transition per interior boundary, chosen by energy (seeded).
+
+    OneShare Magic overrides the geometric grammar: every cut is a smooth
+    cross-dissolve ("mix") so the end of one clip melts into the start of the
+    next instead of flipping/sliding.
+    """
+    if magic:
+        return [
+            {"type": "fade", "durationInFrames": MAGIC_TRANSITION_FRAMES, "direction": None}
+            for _ in range(len(scenes) - 1)
+        ]
     return [
         pick_scene_transition(scenes[i], scenes[i + 1], seed=seed + i)
         for i in range(len(scenes) - 1)
@@ -1942,6 +2005,9 @@ async def build_remotion_scene_manifest(
                     scene_text=scene_match_text,
                     kind="visual_video",
                     visual_prompt=(beat.get("visual_prompt") if beat else None),
+                    # Magic top-zone video: expressive, brand-aware, 16:9,
+                    # people/logos allowed (the default template stays literal).
+                    magic_top_zone=is_magic,
                 )
                 if visual_video_asset:
                     active_assets.append(visual_video_asset)
@@ -1972,6 +2038,9 @@ async def build_remotion_scene_manifest(
                     scene_text=scene_match_text,
                     kind="visual_video",
                     visual_prompt=(beat.get("visual_prompt") if beat else None),
+                    # Magic top-zone video: expressive, brand-aware, 16:9,
+                    # people/logos allowed (the default template stays literal).
+                    magic_top_zone=is_magic,
                 )
                 if visual_video_asset:
                     active_assets.append(visual_video_asset)
@@ -2188,7 +2257,10 @@ async def build_remotion_scene_manifest(
     transition_pool = transition_sound_pool(sfx_assets) if music_enabled else []
     boundary_indices = varied_index_sequence(len(boundary_starts), len(transition_pool), render_shuffle_seed ^ 0x9E3779B9)
     for index, start in enumerate(boundary_starts):
-        if not music_enabled:
+        # Magic cuts are smooth cross-dissolves ("mix"); the generic boundary
+        # whoosh/swoosh just repeats over every cut, so drop it entirely and
+        # let the per-scene director sfx + music carry the audio.
+        if not music_enabled or is_magic:
             continue
         # A Magic scene that stages its own sound owns its cut — the generic
         # boundary transition sfx would double up on the same instant.
@@ -2297,6 +2369,7 @@ async def build_remotion_scene_manifest(
                 "framesPublicPath": f"/remotion/inputs/{frames_dir.name}",
                 "framePattern": "frame_%05d.png",
                 "subjectTopRel": detect_subject_top_rel(frames_dir),
+                "subjectHeadWidthRel": detect_subject_head_width_rel(frames_dir),
             }
         )
     manifest = {
@@ -2313,7 +2386,7 @@ async def build_remotion_scene_manifest(
             "backgroundMusic": background_music,
             "soundEffects": sound_effects,
         },
-        "sceneTransitions": build_scene_transitions(scenes, seed=render_shuffle_seed),
+        "sceneTransitions": build_scene_transitions(scenes, seed=render_shuffle_seed, magic=is_magic),
         "creativeAssets": serialized_creative_assets,
         "selectedCreativeAssetIds": sorted(set(selected_asset_ids)),
         "style": {

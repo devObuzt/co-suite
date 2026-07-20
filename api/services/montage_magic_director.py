@@ -68,18 +68,22 @@ THE MAGIC FRAME: every scene is a micro-frame (0.8-2.3s) with its OWN mood. The 
 is a sandwich of two background layers: the BOTTOM layer behind the speaker and the
 captions is one constant, clean, uncluttered brand-stage image (already handled — not
 your decision); the TOP zone between the 3D title and the bottom captions carries the
-per-frame VIDEO or ANIMATION that embodies the spoken content. Adjacent frames must
-never share the same look — a new frame means a new atmosphere in the top zone.
+per-frame VIDEO or ANIMATION that embodies the spoken content and blends down into the
+bottom stage behind the speaker (the top-zone video is free and expressive — it may
+show people, real logos or life). Adjacent frames must never share the same look — a
+new frame means a new atmosphere in the top zone.
 
 Per-beat direction fields:
 - "layout": "split" — the STANDARD Magic frame described above. "full" — the top
   media takes the whole frame behind the speaker; reserve it for immersive moments
   (fast enumerated services, rich establishing visuals).
-- "background" chooses the TOP zone: "video" whenever motion embodies the spoken
-  meaning — be generous, this is the default instinct (a service word gets a related
-  moving background); "image" for calm moments (it still gets subtle animated drift);
-  "solid" means NO top media at all — only when the 3D typography alone should own
-  the frame (punchy one-liners, CTA). Never let two consecutive frames feel identical.
+- "background" chooses the TOP zone. ALWAYS PREFER "video" as the first choice:
+  it is the default for almost every beat — a wide, expressive, brand-aware clip
+  that interprets the idea (it may show people, real logos or life) and blends down
+  behind the speaker into the brand stage. Pick "image" only for genuinely calm
+  moments (it still gets subtle animated drift), and "solid" (NO top media, the 3D
+  typography alone owns the frame) only for punchy one-liners or the CTA. When in
+  doubt, choose "video". Never let two consecutive frames feel identical.
 - "title": the beat's headline in the transcript's language, 1-4 words, rendered as a
   huge 3D block title with a hard shadow. For the hook, use the core promise
   (e.g. "محل واحد"). Never punctuation, never a full sentence.
@@ -210,10 +214,12 @@ def heuristic_magic_direction(*, index: int, beat: dict[str, Any] | None, scene_
             "sfx": "pop",
         }
     # Narrative micro-frames default to the standard Magic sandwich: media on
-    # top of the solid stage, each frame with its own generated image.
+    # top of the solid stage. Video is the first choice for the top zone; the
+    # pipeline backfills a per-frame generated image when the decoder budget is
+    # spent, so every frame still gets its own visual.
     return {
         "layout": "split",
-        "background": "image",
+        "background": "video",
         "title": title,
         "subtitle": "",
         "icons": [],
