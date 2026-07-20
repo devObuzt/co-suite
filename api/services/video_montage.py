@@ -1801,9 +1801,12 @@ async def build_remotion_scene_manifest(
                 ]
             )
         # The composition runs to ceil(duration*fps) frames; ffmpeg's fps filter
-        # can land a couple short, so hold the last frame across the gap rather
-        # than let a single 404 collapse the render to the ffmpeg fallback.
-        pad_subject_frames(frames_dir, int(math.ceil(duration * fps)) + 4)
+        # can land a couple short, AND cross-dissolve transitions make the tail
+        # sequence request a few source frames past the scene end. Pad generously
+        # (hold the last frame) so a single 404 never collapses the render to the
+        # ffmpeg fallback. The manifest also ships subjectFrameCount so the
+        # compositor clamps the index as a belt-and-suspenders guard.
+        pad_subject_frames(frames_dir, int(math.ceil(duration * fps)) + 12)
 
     has_source_audio = ffprobe_has_audio(transparent_source_path)
     audio_path = inputs_dir / f"{transparent_source_path.stem}-audio.m4a"
@@ -2369,6 +2372,7 @@ async def build_remotion_scene_manifest(
             {
                 "framesPublicPath": f"/remotion/inputs/{frames_dir.name}",
                 "framePattern": "frame_%05d.png",
+                "subjectFrameCount": len(list(frames_dir.glob("frame_*.png"))),
                 "subjectTopRel": detect_subject_top_rel(frames_dir),
                 "subjectHeadWidthRel": detect_subject_head_width_rel(frames_dir),
             }
