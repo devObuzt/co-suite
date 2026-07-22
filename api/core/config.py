@@ -112,11 +112,19 @@ class Settings(BaseSettings):
     failed_job_alerts_enabled: bool = True
     admin_email: str = ""
     lead_owner_email: str = "w.sholy@gmail.com"
-    # Static funnel OTP until WhatsApp/SMS sending is wired in.
+    # Funnel OTP. When WhatsApp is configured the code is random and delivered
+    # over the Cloud API; otherwise it stays static for local/dev use.
     funnel_otp_code: str = "123456"
     funnel_otp_ttl_seconds: int = 600
     funnel_otp_resend_seconds: int = 60
     funnel_otp_max_attempts: int = 5
+    # WhatsApp Cloud API (shared business number). The OTP template is an
+    # AUTHENTICATION template whose code fills the body and the copy-code button.
+    whatsapp_access_token: str = ""
+    whatsapp_phone_number_id: str = ""
+    whatsapp_api_version: str = "v19.0"
+    whatsapp_otp_template_name: str = "logincode"
+    whatsapp_otp_template_language: str = "en_US"
 
     class Config:
         env_file = str(_here / ".env")
