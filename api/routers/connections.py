@@ -1,4 +1,5 @@
 """Platform connections — OAuth flows and connection management."""
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -76,9 +77,21 @@ async def meta_callback(
         short_token = token_data["access_token"]
         long_token = await get_long_lived_token(short_token)
         pages = await get_user_pages(long_token)
+    except httpx.HTTPStatusError as e:
+        # never echo the exception string: request URLs embed the access token
+        raise HTTPException(
+            status_code=400,
+            detail=f"Meta OAuth failed: Meta returned {e.response.status_code} while fetching your account data. Try reconnecting.",
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="Meta OAuth failed: could not complete the connection. Try reconnecting.")
+
+    # Ad accounts are optional: users without ads permissions (e.g. app not yet
+    # approved for ads scopes) should still be able to connect their pages.
+    try:
         ad_accounts = await get_ad_accounts(long_token)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Meta OAuth failed: {e}")
+    except Exception:
+        ad_accounts = []
 
     # Store user token temporarily on suite (will be replaced by page token on selection)
     connections = dict(suite.connections or {})
