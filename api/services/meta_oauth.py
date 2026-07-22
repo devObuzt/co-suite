@@ -32,6 +32,9 @@ def get_oauth_url(suite_id: str) -> str:
         f"&scope={scope}"
         f"&state={suite_id}"
         f"&response_type=code"
+        # rerequest forces the granular asset-selection dialog to reappear,
+        # otherwise Facebook silently reuses the first grant's page subset
+        f"&auth_type=rerequest"
     )
 
 
@@ -76,16 +79,22 @@ async def get_user_pages(user_token: str) -> list[dict]:
     """Get all Facebook Pages the user manages, including IG account info."""
     async with external_call("meta", "fetch_pages") as call:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{GRAPH}/me/accounts",
-                params={
-                    "access_token": user_token,
-                    "fields": "id,name,access_token,instagram_business_account{id,name,username,profile_picture_url}",
-                },
-            )
-            call.note(status_code=resp.status_code)
-            resp.raise_for_status()
-            pages = resp.json().get("data", [])
+            pages: list[dict] = []
+            url = f"{GRAPH}/me/accounts"
+            params = {
+                "access_token": user_token,
+                "fields": "id,name,access_token,instagram_business_account{id,name,username,profile_picture_url}",
+                "limit": 100,
+            }
+            # Graph API paginates; follow paging.next until exhausted
+            while url:
+                resp = await client.get(url, params=params)
+                call.note(status_code=resp.status_code)
+                resp.raise_for_status()
+                body = resp.json()
+                pages.extend(body.get("data", []))
+                url = body.get("paging", {}).get("next")
+                params = None  # paging.next already includes all query params
             call.note(pages=len(pages))
             return pages
 
