@@ -26,7 +26,7 @@ from ..models.services_catalog import (
 from ..models.suite import MemberRole, Suite, SuiteMember, SuiteStatus
 from ..models.user import User
 from ..services.admin_audit import record_audit_log, serialize_user_public
-from ..services.otp_sender import send_otp
+from ..services.otp_sender import OtpSendError, generate_code, send_otp
 from ..services.service_pricing import compute_totals
 from ..services.telegram_notify import send_company_message
 from .suites import slugify
@@ -166,12 +166,20 @@ async def otp_request(data: OtpRequestIn, db: AsyncSession = Depends(get_db)):
 
     otp = PhoneOtp(
         phone=phone,
-        code=settings.funnel_otp_code,
+        code=generate_code(),
         expires_at=now + timedelta(seconds=settings.funnel_otp_ttl_seconds),
     )
     db.add(otp)
     await db.commit()
-    await send_otp(phone, otp.code)
+    try:
+        await send_otp(phone, otp.code)
+    except OtpSendError:
+        # The code is worthless if it never arrived — drop it so the visitor can
+        # retry immediately instead of being held by the resend throttle.
+        log.warning("otp delivery failed for %s", phone, exc_info=True)
+        await db.delete(otp)
+        await db.commit()
+        raise HTTPException(status_code=502, detail="otp_send_failed")
     if new_lead:
         # The owner hears about every captured phone immediately, even if the
         # visitor never finishes. Send failure must not fail the request.
