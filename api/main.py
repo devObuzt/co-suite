@@ -47,6 +47,12 @@ _static_dir.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
+# httpx logs full request URLs at INFO level, which leaks access tokens and
+# client secrets into deploy logs — keep it at WARNING.
+import logging as _logging
+_logging.getLogger("httpx").setLevel(_logging.WARNING)
+
+
 @app.on_event("startup")
 async def startup():
     import logging

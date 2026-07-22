@@ -6,6 +6,9 @@ from ..core.external_calls import external_call
 
 GRAPH = "https://graph.facebook.com/v22.0"
 
+# Graph API can be slow for accounts with many pages; default 5s timeout is not enough
+META_TIMEOUT = httpx.Timeout(30.0)
+
 META_SCOPES = [
     "pages_manage_posts",
     "pages_read_engagement",
@@ -42,7 +45,7 @@ async def exchange_code(code: str) -> dict:
     """Exchange short-lived code for a short-lived user token."""
     redirect_uri = f"{settings.frontend_url}/connections/callback"
     async with external_call("meta", "oauth_exchange_code") as call:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=META_TIMEOUT) as client:
             resp = await client.get(
                 f"{GRAPH}/oauth/access_token",
                 params={
@@ -60,7 +63,7 @@ async def exchange_code(code: str) -> dict:
 async def get_long_lived_token(short_token: str) -> str:
     """Exchange short-lived for 60-day long-lived token."""
     async with external_call("meta", "oauth_extend_token") as call:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=META_TIMEOUT) as client:
             resp = await client.get(
                 f"{GRAPH}/oauth/access_token",
                 params={
@@ -78,7 +81,7 @@ async def get_long_lived_token(short_token: str) -> str:
 async def get_user_pages(user_token: str) -> list[dict]:
     """Get all Facebook Pages the user manages, including IG account info."""
     async with external_call("meta", "fetch_pages") as call:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=META_TIMEOUT) as client:
             pages: list[dict] = []
             url = f"{GRAPH}/me/accounts"
             params = {
@@ -102,7 +105,7 @@ async def get_user_pages(user_token: str) -> list[dict]:
 async def get_ad_accounts(user_token: str) -> list[dict]:
     """Get ad accounts the user can access."""
     async with external_call("meta", "fetch_ad_accounts") as call:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=META_TIMEOUT) as client:
             resp = await client.get(
                 f"{GRAPH}/me/adaccounts",
                 params={
@@ -124,7 +127,7 @@ async def verify_token(token: str) -> Optional[dict]:
         # Exceptions propagate through the context manager (logged as a
         # failed call) before the outer except turns them into None.
         async with external_call("meta", "verify_token") as call:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=META_TIMEOUT) as client:
                 resp = await client.get(
                     f"{GRAPH}/debug_token",
                     params={
