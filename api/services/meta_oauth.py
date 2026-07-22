@@ -32,6 +32,9 @@ def get_oauth_url(suite_id: str) -> str:
         f"&scope={scope}"
         f"&state={suite_id}"
         f"&response_type=code"
+        # rerequest forces the granular asset-selection dialog to reappear,
+        # otherwise Facebook silently reuses the first grant's page subset
+        f"&auth_type=rerequest"
     )
 
 
