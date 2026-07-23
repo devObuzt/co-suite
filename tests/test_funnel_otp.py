@@ -90,3 +90,68 @@ def test_notification_text_without_name_or_email():
     )
     assert "+972521234567" in text
     assert "None" not in text
+
+
+# ── WhatsApp delivery flag ───────────────────────────────────────────────────
+
+import pytest
+
+from api.core.config import settings
+from api.services import otp_sender
+
+
+@pytest.fixture
+def whatsapp_credentials(monkeypatch):
+    """Credentials present — only the flag decides whether a message goes out."""
+    monkeypatch.setattr(settings, "whatsapp_access_token", "token", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_phone_number_id", "12345", raising=False)
+
+
+@pytest.fixture
+def no_http(monkeypatch):
+    """Any outbound HTTP attempt fails the test."""
+    def explode(*args, **kwargs):
+        raise AssertionError("otp_sender must not open an HTTP client while frozen")
+    monkeypatch.setattr(otp_sender.httpx, "AsyncClient", explode)
+
+
+def test_flag_off_keeps_static_code(monkeypatch, whatsapp_credentials):
+    monkeypatch.setattr(settings, "whatsapp_otp_enabled", False, raising=False)
+    assert otp_sender.whatsapp_delivery_enabled() is False
+    assert otp_sender.generate_code() == settings.funnel_otp_code == "123456"
+
+
+async def test_flag_off_sends_nothing(monkeypatch, whatsapp_credentials, no_http):
+    monkeypatch.setattr(settings, "whatsapp_otp_enabled", False, raising=False)
+    await otp_sender.send_otp("+972521234567", "123456")
+
+
+async def test_flag_on_without_credentials_sends_nothing(monkeypatch, no_http):
+    monkeypatch.setattr(settings, "whatsapp_otp_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "whatsapp_access_token", "", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_phone_number_id", "", raising=False)
+    assert otp_sender.generate_code() == "123456"
+    await otp_sender.send_otp("+972521234567", "123456")
+
+
+def test_flag_on_with_credentials_generates_random_code(monkeypatch, whatsapp_credentials):
+    monkeypatch.setattr(settings, "whatsapp_otp_enabled", True, raising=False)
+    assert otp_sender.whatsapp_delivery_enabled() is True
+    codes = {otp_sender.generate_code() for _ in range(30)}
+    assert all(len(c) == 6 and c.isdigit() for c in codes)
+    assert len(codes) > 1  # random, not the static code
+
+
+async def test_flag_on_with_credentials_does_deliver(monkeypatch, whatsapp_credentials, no_http):
+    """The mirror of the frozen tests: flipping the flag back on reaches WhatsApp.
+
+    Without this the "sends nothing" tests could pass for the wrong reason.
+    """
+    monkeypatch.setattr(settings, "whatsapp_otp_enabled", True, raising=False)
+    with pytest.raises(AssertionError, match="must not open an HTTP client"):
+        await otp_sender.send_otp("+972521234567", "123456")
+
+
+def test_flag_defaults_to_off():
+    """Shipping without the env var set must leave WhatsApp frozen."""
+    assert type(settings).model_fields["whatsapp_otp_enabled"].default is False
