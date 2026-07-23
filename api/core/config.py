@@ -112,14 +112,18 @@ class Settings(BaseSettings):
     failed_job_alerts_enabled: bool = True
     admin_email: str = ""
     lead_owner_email: str = "w.sholy@gmail.com"
-    # Funnel OTP. When WhatsApp is configured the code is random and delivered
-    # over the Cloud API; otherwise it stays static for local/dev use.
+    # Funnel OTP. When WhatsApp delivery is enabled the code is random and sent
+    # over the Cloud API; otherwise it stays static for local/dev/testing use.
     funnel_otp_code: str = "123456"
     funnel_otp_ttl_seconds: int = 600
     funnel_otp_resend_seconds: int = 60
     funnel_otp_max_attempts: int = 5
     # WhatsApp Cloud API (shared business number). The OTP template is an
     # AUTHENTICATION template whose code fills the body and the copy-code button.
+    # Master switch for WhatsApp OTP delivery. Off by default so the funnel keeps
+    # the static funnel_otp_code and sends nothing; set WHATSAPP_OTP_ENABLED=true
+    # (with the credentials below) to hand delivery back to WhatsApp.
+    whatsapp_otp_enabled: bool = False
     whatsapp_access_token: str = ""
     whatsapp_phone_number_id: str = ""
     whatsapp_api_version: str = "v19.0"

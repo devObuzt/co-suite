@@ -4,8 +4,11 @@ Sends the login code over the WhatsApp Cloud API using the "logincode"
 AUTHENTICATION template. Authentication templates carry the code twice: once as
 the body parameter and once as the copy-code button parameter.
 
-When WhatsApp is not configured the sender is a no-op and the funnel keeps the
-static dev code (settings.funnel_otp_code), so local development still works.
+Delivery is gated by WHATSAPP_OTP_ENABLED. When the flag is off — or the Cloud
+API credentials are missing — the sender is a no-op and the funnel keeps the
+static dev code (settings.funnel_otp_code), so local development and testing
+still work. Flip the flag back on to restore WhatsApp delivery; nothing else
+needs to change.
 """
 import logging
 import secrets
@@ -26,21 +29,32 @@ def whatsapp_configured() -> bool:
     return bool(settings.whatsapp_access_token and settings.whatsapp_phone_number_id)
 
 
+def whatsapp_delivery_enabled() -> bool:
+    """Whether an OTP may actually leave over WhatsApp.
+
+    Both halves must hold: the feature flag is on *and* the Cloud API is
+    configured. Everything downstream keys off this one function, so freezing
+    delivery is a single env toggle.
+    """
+    return settings.whatsapp_otp_enabled and whatsapp_configured()
+
+
 def generate_code() -> str:
     """Random 6-digit code when WhatsApp can deliver it, static code otherwise.
 
     A random code is only safe once the user actually receives it — without a
     delivery channel the funnel would be unusable, so dev keeps the static one.
     """
-    if not whatsapp_configured():
+    if not whatsapp_delivery_enabled():
         return settings.funnel_otp_code
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
 async def send_otp(phone: str, code: str) -> None:
     """Deliver ``code`` to ``phone`` over WhatsApp. Raises OtpSendError on failure."""
-    if not whatsapp_configured():
-        log.info("otp_sender: WhatsApp not configured; static code left for %s", phone)
+    if not whatsapp_delivery_enabled():
+        reason = "disabled by WHATSAPP_OTP_ENABLED" if whatsapp_configured() else "not configured"
+        log.info("otp_sender: WhatsApp %s; static code left for %s", reason, phone)
         return
 
     # Cloud API expects E.164 digits without the leading "+".
