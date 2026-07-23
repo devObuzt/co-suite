@@ -117,6 +117,27 @@ async def _fetch_business_pages(
     return pages
 
 
+async def _fetch_page_token(
+    client: httpx.AsyncClient, user_token: str, page_id: str
+) -> Optional[str]:
+    """Ask for a single page's access token (portfolio edges don't include one)."""
+    try:
+        resp = await client.get(
+            f"{GRAPH}/{page_id}",
+            params={"access_token": user_token, "fields": "access_token"},
+        )
+        resp.raise_for_status()
+        return resp.json().get("access_token")
+    except httpx.HTTPError:
+        return None
+
+
+async def fetch_page_token(user_token: str, page_id: str) -> Optional[str]:
+    """Public wrapper: resolve one page's access token from a user token."""
+    async with httpx.AsyncClient(timeout=META_TIMEOUT) as client:
+        return await _fetch_page_token(client, user_token, page_id)
+
+
 async def get_user_pages(user_token: str) -> list[dict]:
     """Get all Facebook Pages the user manages, including IG account info.
 
@@ -158,10 +179,28 @@ async def get_user_pages(user_token: str) -> list[dict]:
                         if page.get("id") and page["id"] not in by_id:
                             by_id[page["id"]] = page
 
+            # Portfolio edges omit access_token; fetch it per page so the
+            # picker can actually connect them.
+            missing = [p for p in by_id.values() if not p.get("access_token")]
+            if missing:
+                tokens = await asyncio.gather(
+                    *(_fetch_page_token(client, user_token, p["id"]) for p in missing),
+                    return_exceptions=True,
+                )
+                for page, token in zip(missing, tokens):
+                    if isinstance(token, str) and token:
+                        page["access_token"] = token
+
             call.note(
                 pages=len(by_id),
                 direct=len(direct),
                 businesses=len(businesses),
+                token_backfilled=sum(
+                    1 for p in missing if p.get("access_token")
+                ),
+                token_missing=sum(
+                    1 for p in by_id.values() if not p.get("access_token")
+                ),
             )
             return list(by_id.values())
 

@@ -12,7 +12,8 @@ from ..core.security import get_current_user
 from ..models.user import User
 from ..models.suite import Suite
 from ..services.meta_oauth import (
-    get_oauth_url, exchange_code, get_long_lived_token, get_user_pages, get_ad_accounts, verify_token
+    get_oauth_url, exchange_code, get_long_lived_token, get_user_pages, get_ad_accounts,
+    fetch_page_token, verify_token
 )
 from ..services.meta_ads_manager import fetch_campaigns
 from ..services.google_ads import (
@@ -49,7 +50,9 @@ class PageSelection(BaseModel):
     suite_id: str
     page_id: str
     page_name: str
-    page_access_token: str
+    # Pages reached via a Business Portfolio arrive without a token; the server
+    # resolves one from the stored user token instead of rejecting the request.
+    page_access_token: Optional[str] = None
     ig_user_id: Optional[str] = None
     ig_username: Optional[str] = None
     ad_account_id: Optional[str] = None
@@ -113,18 +116,30 @@ async def meta_select_page(
     suite = await _get_suite(data.suite_id, current_user, db)
 
     connections = dict(suite.connections or {})
+
+    page_token = data.page_access_token
+    if not page_token:
+        user_token = connections.get("meta_user_token")
+        if user_token:
+            page_token = await fetch_page_token(user_token, data.page_id)
+    if not page_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not get a posting token for this Page. Make sure you have a role on it, then reconnect.",
+        )
+
     connections["facebook"] = {
         "connected": True,
         "page_id": data.page_id,
         "page_name": data.page_name,
-        "page_access_token": data.page_access_token,
+        "page_access_token": page_token,
     }
     if data.ig_user_id:
         connections["instagram"] = {
             "connected": True,
             "ig_user_id": data.ig_user_id,
             "username": data.ig_username,
-            "page_access_token": data.page_access_token,
+            "page_access_token": page_token,
         }
     if data.ad_account_id:
         connections["meta_ads"] = {
