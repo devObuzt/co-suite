@@ -1,4 +1,5 @@
 """Meta (Facebook + Instagram) OAuth service."""
+import asyncio
 import httpx
 from typing import Optional
 from ..core.config import settings
@@ -78,28 +79,91 @@ async def get_long_lived_token(short_token: str) -> str:
             return resp.json()["access_token"]
 
 
+PAGE_FIELDS = (
+    "id,name,access_token,"
+    "instagram_business_account{id,name,username,profile_picture_url}"
+)
+
+
+async def _fetch_all(client: httpx.AsyncClient, url: str, params: dict) -> list[dict]:
+    """Follow Graph API paging.next until the edge is exhausted."""
+    items: list[dict] = []
+    while url:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        body = resp.json()
+        items.extend(body.get("data", []))
+        url = body.get("paging", {}).get("next")
+        params = None  # paging.next already carries every query param
+    return items
+
+
+async def _fetch_business_pages(
+    client: httpx.AsyncClient, user_token: str, business_id: str
+) -> list[dict]:
+    """Pages a Business Portfolio owns or manages for a client."""
+    pages: list[dict] = []
+    for edge in ("owned_pages", "client_pages"):
+        try:
+            pages.extend(
+                await _fetch_all(
+                    client,
+                    f"{GRAPH}/{business_id}/{edge}",
+                    {"access_token": user_token, "fields": PAGE_FIELDS, "limit": 100},
+                )
+            )
+        except httpx.HTTPError:
+            continue  # one inaccessible edge must not sink the whole list
+    return pages
+
+
 async def get_user_pages(user_token: str) -> list[dict]:
-    """Get all Facebook Pages the user manages, including IG account info."""
+    """Get all Facebook Pages the user manages, including IG account info.
+
+    /me/accounts only returns pages the user holds a *direct* role on. Pages
+    reached through a Business Portfolio asset assignment are invisible there,
+    even for an admin with every permission — so walk the portfolios too.
+    """
     async with external_call("meta", "fetch_pages") as call:
         async with httpx.AsyncClient(timeout=META_TIMEOUT) as client:
-            pages: list[dict] = []
-            url = f"{GRAPH}/me/accounts"
-            params = {
-                "access_token": user_token,
-                "fields": "id,name,access_token,instagram_business_account{id,name,username,profile_picture_url}",
-                "limit": 100,
-            }
-            # Graph API paginates; follow paging.next until exhausted
-            while url:
-                resp = await client.get(url, params=params)
-                call.note(status_code=resp.status_code)
-                resp.raise_for_status()
-                body = resp.json()
-                pages.extend(body.get("data", []))
-                url = body.get("paging", {}).get("next")
-                params = None  # paging.next already includes all query params
-            call.note(pages=len(pages))
-            return pages
+            direct = await _fetch_all(
+                client,
+                f"{GRAPH}/me/accounts",
+                {"access_token": user_token, "fields": PAGE_FIELDS, "limit": 100},
+            )
+            by_id = {p["id"]: p for p in direct if p.get("id")}
+
+            try:
+                businesses = await _fetch_all(
+                    client,
+                    f"{GRAPH}/me/businesses",
+                    {"access_token": user_token, "fields": "id,name", "limit": 100},
+                )
+            except httpx.HTTPError:
+                businesses = []  # no business_management access; direct pages still work
+
+            if businesses:
+                results = await asyncio.gather(
+                    *(
+                        _fetch_business_pages(client, user_token, b["id"])
+                        for b in businesses
+                        if b.get("id")
+                    ),
+                    return_exceptions=True,
+                )
+                for result in results:
+                    if isinstance(result, BaseException):
+                        continue
+                    for page in result:
+                        if page.get("id") and page["id"] not in by_id:
+                            by_id[page["id"]] = page
+
+            call.note(
+                pages=len(by_id),
+                direct=len(direct),
+                businesses=len(businesses),
+            )
+            return list(by_id.values())
 
 
 async def get_ad_accounts(user_token: str) -> list[dict]:
