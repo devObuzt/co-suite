@@ -580,23 +580,36 @@ async def generate_visual_asset_for_scene(
             f"{scene_text}."
         )
     )
-    # The image model needs to know WHO the brand is, not just its name —
-    # without industry/offering context it invents unrelated settings
-    # (a living room behind a marketing agency's video).
+    # The image model needs the KIND of business for a relevant setting, but the
+    # literal business name and (especially) an Arabic/Hebrew service list get
+    # rendered by the model as on-screen text — a printed menu/label in the
+    # plate. So feed ONLY a short Latin-script industry hint as context, never
+    # the name or the offerings list. The concrete visual_prompt carries the
+    # actual scene.
     brand_data = suite.brand if isinstance(suite.brand, dict) else {}
-    brand_context = f" Business name: {suite.name}."
-    industry = str(brand_data.get("industry") or "").strip()
-    niche = str(brand_data.get("niche") or "").strip()
-    if industry or niche:
-        brand_context += f" The business is: {', '.join(part for part in (industry, niche) if part)}."
-    offerings = [str(item).strip() for item in (brand_data.get("services") or brand_data.get("products") or []) if str(item).strip()]
-    if offerings:
-        brand_context += f" It offers: {', '.join(offerings[:6])}."
+
+    def _latin_hint(value: Any) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        letters = [ch for ch in text if ch.isalpha()]
+        if not letters:
+            return ""
+        latin = sum(1 for ch in letters if ord(ch) < 0x250)
+        # Mostly non-Latin copy would be drawn as literal text — drop it.
+        return text if latin / len(letters) >= 0.85 else ""
+
+    industry_hint = _latin_hint(brand_data.get("industry")) or _latin_hint(brand_data.get("niche"))
+    brand_context = (
+        f" Setting context only, never rendered as text: a {industry_hint} business."
+        if industry_hint
+        else ""
+    )
     base_prompt = (
         "Vertical 9:16 cinematic marketing background for a short social video. "
         "Background plate only: absolutely no people, faces, hands, bodies, or human silhouettes — "
         "a real person is composited on top and any generated human reads as a glitch. "
-        "No readable text, no logos, no UI screenshots. Leave clean center space for a talking person. "
+        "CRITICAL — render ZERO text: no Arabic, Hebrew or Latin letters, no words, captions, "
+        "labels, lists, menus, price tags, signage, logos, watermarks or UI anywhere; a purely "
+        "photographic scene with no typography. Leave clean center space for a talking person. "
         f"{scene_line}{brand_context}"
         f"{brand_stage_suffix(suite)}"
     )

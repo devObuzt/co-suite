@@ -719,6 +719,20 @@ def brand_primary_color(suite: Suite) -> tuple[int, int, int]:
     return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16))
 
 
+def stage_tone(input_data: dict[str, Any]) -> str:
+    """Magic stage tone: "light" only when the job explicitly asks for it."""
+    value = str((input_data or {}).get("stage_tone") or "").strip().lower()
+    return "light" if value == "light" else "dark"
+
+
+def brand_background_color(suite: Suite) -> str:
+    """The brand's light canvas color (used by the light Magic stage)."""
+    brand = suite.brand if isinstance(suite.brand, dict) else {}
+    colors = brand.get("colors") if isinstance(brand.get("colors"), dict) else {}
+    value = str(colors.get("background") or "").strip()
+    return value if re.fullmatch(r"#[0-9a-fA-F]{6}", value) else "#faf8f4"
+
+
 def font_path() -> Path | None:
     candidates = [
         Path(__file__).resolve().parent.parent / "fonts" / "NotoSansArabic-Regular.ttf",
@@ -1523,6 +1537,134 @@ def enforce_short_beat_video_rule(
     return None
 
 
+_AR_NOISE_RE = re.compile(r"[ً-ْٰـ]")
+
+
+def _normalize_title_token(token: str) -> str:
+    """Normalize an Arabic/Latin token for spoken-word matching."""
+    text = _AR_NOISE_RE.sub("", str(token or ""))
+    text = re.sub(r"[^\w؀-ۿ]+", "", text, flags=re.UNICODE)
+    return (
+        text.replace("أ", "ا")
+        .replace("إ", "ا")
+        .replace("آ", "ا")
+        .replace("ة", "ه")
+        .replace("ى", "ي")
+        .lower()
+    )
+
+
+def _tokens_match(spoken: str, wanted: str) -> bool:
+    if not spoken or not wanted:
+        return False
+    if spoken == wanted:
+        return True
+    # Stem-ish prefix match ("قرر" ↔ "قررت", "تستمر" ↔ "تستمري").
+    if min(len(spoken), len(wanted)) >= 2 and (
+        spoken.startswith(wanted) or wanted.startswith(spoken)
+    ):
+        return True
+    return False
+
+
+def _title_spoken_at(title: str, caption_chunks: Any) -> float | None:
+    """Scene-relative second the title's lead word is actually spoken."""
+    tokens = [_normalize_title_token(part) for part in str(title or "").split()]
+    tokens = [token for token in tokens if token][:2]
+    if not tokens:
+        return None
+    for chunk in caption_chunks if isinstance(caption_chunks, list) else []:
+        for word in (chunk.get("words") or []) if isinstance(chunk, dict) else []:
+            spoken = _normalize_title_token(word.get("text"))
+            if any(_tokens_match(spoken, token) for token in tokens):
+                try:
+                    return float(word.get("start") or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+    return None
+
+
+def align_magic_titles(scenes: list[dict[str, Any]]) -> dict[str, int]:
+    """Sync every Magic title to the moment its word is actually spoken.
+
+    The director titles a BEAT, but the render pops the title at scene start —
+    so a title whose word lands late (or in the neighbouring scene after beat
+    splitting) appears seconds before it is spoken. This pass stamps
+    magic["titleAt"] (scene-relative seconds) from the caption word
+    timestamps, migrates a title to the adjacent scene that actually speaks
+    it, and drops adjacent duplicate titles left by scene splitting.
+    """
+    stats = {"aligned": 0, "moved": 0, "deduped": 0}
+    for index, scene in enumerate(scenes):
+        magic = scene.get("magic")
+        if not isinstance(magic, dict):
+            continue
+        magic.setdefault("titleAt", 0.0)
+        title = str(magic.get("title") or "").strip()
+        if not title:
+            continue
+        previous = scenes[index - 1].get("magic") if index > 0 else None
+        if isinstance(previous, dict) and str(previous.get("title") or "").strip() == title:
+            # Scene splitting duplicated the beat's title — keep the first only.
+            magic["title"] = ""
+            magic["titleAt"] = 0.0
+            stats["deduped"] += 1
+            continue
+        spoken_at = _title_spoken_at(title, scene.get("captionChunks"))
+        if spoken_at is not None:
+            scene_duration = max(
+                0.1, float(scene.get("sourceEnd") or 0) - float(scene.get("sourceStart") or 0)
+            )
+            next_magic = (
+                scenes[index + 1].get("magic") if index + 1 < len(scenes) else None
+            )
+            if (
+                spoken_at > scene_duration - 0.6
+                and isinstance(next_magic, dict)
+                and not str(next_magic.get("title") or "").strip()
+            ):
+                # The word lands in the scene's dying frames — the title would
+                # blink for a beat and vanish. Hand it to the next scene, which
+                # continues the same spoken phrase.
+                next_magic["title"] = title
+                next_magic["titleAt"] = 0.0
+                magic["title"] = ""
+                magic["titleAt"] = 0.0
+                stats["moved"] += 1
+                continue
+            # Guarantee ≥0.9s on screen even when the word lands late.
+            magic["titleAt"] = round(
+                min(max(0.0, spoken_at - 0.12), max(0.0, scene_duration - 0.9)), 3
+            )
+            stats["aligned"] += 1
+            continue
+        migrated = False
+        for neighbour_index in (index + 1, index - 1):
+            if not 0 <= neighbour_index < len(scenes):
+                continue
+            neighbour = scenes[neighbour_index]
+            neighbour_magic = neighbour.get("magic")
+            if not isinstance(neighbour_magic, dict):
+                continue
+            if str(neighbour_magic.get("title") or "").strip():
+                continue
+            neighbour_at = _title_spoken_at(title, neighbour.get("captionChunks"))
+            if neighbour_at is None:
+                continue
+            neighbour_magic["title"] = title
+            neighbour_magic["titleAt"] = round(max(0.0, neighbour_at - 0.12), 3)
+            magic["title"] = ""
+            magic["titleAt"] = 0.0
+            stats["moved"] += 1
+            migrated = True
+            break
+        if not migrated:
+            # Conceptual title (e.g. the brand name never literally spoken):
+            # keep it at the scene start — legacy behaviour.
+            magic["titleAt"] = 0.0
+    return stats
+
+
 def text_override_at(input_data: dict[str, Any], key: str, index: int) -> str | None:
     values = input_data.get(key)
     if not isinstance(values, list) or index >= len(values):
@@ -1909,10 +2051,21 @@ async def build_remotion_scene_manifest(
                 scene_text=f"{suite.name} brand stage backdrop",
                 kind="visual_image",
                 visual_prompt=(
-                    "a flat seamless empty studio backdrop: one smooth solid wall "
-                    "in the brand color with a soft vertical gradient and a dark "
-                    "reflective floor line — absolutely minimal, no furniture, no "
-                    "room, no objects, no decorations, just the clean wall"
+                    (
+                        "a flat seamless empty studio backdrop: one smooth bright "
+                        "airy wall in a very light pastel tint of the brand color, "
+                        "soft warm daylight, cream white floor, high-key bright "
+                        "lighting, nothing dark anywhere — absolutely minimal, no "
+                        "furniture, no room, no objects, no decorations, just the "
+                        "clean bright wall"
+                    )
+                    if stage_tone(input_data) == "light"
+                    else (
+                        "a flat seamless empty studio backdrop: one smooth solid wall "
+                        "in the brand color with a soft vertical gradient and a dark "
+                        "reflective floor line — absolutely minimal, no furniture, no "
+                        "room, no objects, no decorations, just the clean wall"
+                    )
                 ),
             )
             if stage_asset:
@@ -2210,6 +2363,7 @@ async def build_remotion_scene_manifest(
     scenes = split_scenes_at_joins(scenes, dead_air_joins or [], fps)
 
     if is_magic:
+        title_sync = align_magic_titles(scenes)
         # One glance answers "did every frame get its own background?".
         log_event(
             log,
@@ -2222,6 +2376,7 @@ async def build_remotion_scene_manifest(
             distinct_videos=len(locked_background_videos),
             solid_frames=sum(1 for scene in scenes if (scene.get("magic") or {}).get("background") == "solid"),
             stage_image=bool(magic_stage_public_path),
+            title_sync=title_sync,
         )
 
     edited_duration = sum(max(0.1, scene["sourceEnd"] - scene["sourceStart"]) for scene in scenes)
@@ -2399,6 +2554,10 @@ async def build_remotion_scene_manifest(
             "arabicFontFamily": "ConnecCairo",
             "subjectZoom": max(1.0, min(3.0, float(input_data.get("zoom") or 1.0))),
             "brandColor": "#%02x%02x%02x" % brand_primary_color(suite),
+            # Opt-in bright Magic stage: light washes + dark ink typography.
+            # Defaults to the classic dark stage for every existing client.
+            "stageTone": stage_tone(input_data),
+            "stageColor": brand_background_color(suite),
             "subjectOffsetXPct": max(-40.0, min(40.0, float(input_data.get("subject_offset_x") or 0.0))),
             "subjectOffsetYPct": max(-40.0, min(40.0, float(input_data.get("subject_offset_y") or 0.0))),
             "captionScale": caption_scale,

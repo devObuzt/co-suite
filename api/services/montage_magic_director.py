@@ -89,8 +89,13 @@ Per-beat direction fields:
   moments (it still gets subtle animated drift), and "solid" (NO top media, the 3D
   typography alone owns the frame) only for punchy one-liners or the CTA. When in
   doubt, choose "video". Never let two consecutive frames feel identical.
-- "title": the beat's headline in the transcript's language, 1-4 words, rendered as a
-  huge 3D block title with a hard shadow. For the hook, use the core promise
+- "title": OPTIONAL headline in the transcript's language, 1-4 words, rendered as a
+  huge 3D block title with a hard shadow. Titles are SPARSE, not constant: give a
+  title ONLY to the strongest beats — the hook, the brand/program name when spoken,
+  a hard number, the CTA — at most ~40% of beats, and never more than two titled
+  beats in a row. Use "" for every other beat: a quiet frame makes the titled ones
+  land harder. The title must be the EXACT idea being spoken at that moment (never
+  a word from a neighbouring beat). For the hook, use the core promise
   (e.g. "محل واحد"). Never punctuation, never a full sentence.
 - "subtitle": optional short complement (max 6 words) shown at the opposite edge with a
   converging 3D perspective (top and bottom text lean toward a far vanishing point).
@@ -221,11 +226,12 @@ def heuristic_magic_direction(*, index: int, beat: dict[str, Any] | None, scene_
     # Narrative micro-frames default to the standard Magic sandwich: media on
     # top of the solid stage. Video is the first choice for the top zone; the
     # pipeline backfills a per-frame generated image when the decoder budget is
-    # spent, so every frame still gets its own visual.
+    # spent, so every frame still gets its own visual. Titles stay SPARSE:
+    # plain narration renders untitled so hook/enumeration/CTA headlines land.
     return {
         "layout": "split",
         "background": "video",
-        "title": title,
+        "title": "",
         "subtitle": "",
         "icons": [],
         "emphasis": "",
@@ -268,11 +274,17 @@ def validate_magic_directions(
         camera = str(item.get("camera") or "").strip().lower()
         sfx_raw = item.get("sfx")
         sfx = str(sfx_raw).strip().lower() if sfx_raw else None
+        # Titles are sparse by design: an EXPLICIT empty title from the model
+        # means "no headline this scene" and must survive as "". Only a missing
+        # key falls back to the heuristic title.
+        title = (
+            _clean_title(item["title"], "") if "title" in item else fallback["title"]
+        )
         directions.append(
             {
                 "layout": layout if layout in MAGIC_LAYOUTS else fallback["layout"],
                 "background": background if background in MAGIC_BACKGROUNDS else fallback["background"],
-                "title": _clean_title(item.get("title"), fallback["title"]),
+                "title": title,
                 "subtitle": _clean_text(item.get("subtitle"), 80),
                 "icons": _clean_icons(item.get("icons")),
                 "emphasis": _clean_text(item.get("emphasis"), 30),
