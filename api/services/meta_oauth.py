@@ -1,9 +1,12 @@
 """Meta (Facebook + Instagram) OAuth service."""
 import asyncio
+import logging
 import httpx
 from typing import Optional
 from ..core.config import settings
 from ..core.external_calls import external_call
+
+_log = logging.getLogger(__name__)
 
 GRAPH = "https://graph.facebook.com/v22.0"
 
@@ -120,15 +123,37 @@ async def _fetch_business_pages(
 async def _fetch_page_token(
     client: httpx.AsyncClient, user_token: str, page_id: str
 ) -> Optional[str]:
-    """Ask for a single page's access token (portfolio edges don't include one)."""
+    """Ask for a single page's access token (portfolio edges don't include one).
+
+    Business-Portfolio pages don't hand back a token unless the user holds a
+    page-level task, so we also read `tasks` — its presence tells us whether the
+    grant is a role gap (fixable in Business settings) or something else, and it
+    is logged (never the token itself) to make that diagnosable.
+    """
     try:
         resp = await client.get(
             f"{GRAPH}/{page_id}",
-            params={"access_token": user_token, "fields": "access_token"},
+            params={"access_token": user_token, "fields": "access_token,name,tasks"},
         )
-        resp.raise_for_status()
-        return resp.json().get("access_token")
-    except httpx.HTTPError:
+        if resp.status_code != 200:
+            body = resp.json() if "json" in resp.headers.get("content-type", "") else {}
+            err = (body.get("error") or {}) if isinstance(body, dict) else {}
+            _log.warning(
+                "page-token fetch failed page=%s status=%s code=%s subcode=%s msg=%s",
+                page_id, resp.status_code, err.get("code"),
+                err.get("error_subcode"), err.get("message"),
+            )
+            return None
+        data = resp.json()
+        token = data.get("access_token")
+        if not token:
+            _log.warning(
+                "page-token absent page=%s name=%s tasks=%s (user lacks a page task)",
+                page_id, data.get("name"), data.get("tasks"),
+            )
+        return token
+    except httpx.HTTPError as e:
+        _log.warning("page-token request error page=%s: %s", page_id, type(e).__name__)
         return None
 
 
