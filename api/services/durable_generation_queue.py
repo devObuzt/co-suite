@@ -39,6 +39,8 @@ from .product_bulk_generator import (
 )
 from .media_library import montage_media_asset
 from .video_montage import generate_video_montage_for_suite
+from .social_ideas_generator import generate_social_ideas
+from .admin_audit import record_provider_usage
 from ..models.suite import Suite
 
 log = logging.getLogger(__name__)
@@ -195,6 +197,21 @@ def _save_suite_marketing_plan_execution_section(suite: Suite, section: str, val
     )
     suite.strategy = strategy
     return deck
+
+
+def _save_suite_social_ideas_plan(suite: Suite, plan: dict) -> None:
+    """Persist the social-ideas plan blob under strategy.marketing_action_plan.
+
+    Mirrors the router's _save_social_ideas_plan so the worker owns the terminal
+    write without importing the router (which would be a circular dependency).
+    The frontend polls this blob's ``status`` until it leaves "generating".
+    """
+    strategy = dict(_suite_strategy(suite))
+    action = strategy.get("marketing_action_plan")
+    action_plan = dict(action) if isinstance(action, dict) else {}
+    action_plan["social_ideas_plan"] = plan
+    strategy["marketing_action_plan"] = action_plan
+    suite.strategy = strategy
 
 
 async def claim_next_job(db: AsyncSession) -> Optional[GenerationJob]:
@@ -547,6 +564,65 @@ async def execute_claimed_job(
                         log.exception("Could not file montage output for job %s into the media library", job.id)
                         await db.rollback()
                     return await mark_completed(db, job.id, montage_result)
+
+            if job.type == GenerationJobType.social_ideas:
+                result = await db.execute(select(Suite).where(Suite.id == job.suite_id))
+                suite = result.scalar_one_or_none()
+                if not suite:
+                    return await mark_failed(db, job.id, "Suite not found")
+                period = str(input_data.get("period") or "")
+                await mark_progress(
+                    db,
+                    job.id,
+                    {
+                        "stage": "social_ideas",
+                        "message": "Researching occasions and market, then generating ideas.",
+                        "progress": 25,
+                    },
+                )
+                # generate_social_ideas never raises: on any internal failure it
+                # returns templated fallback ideas + warnings, so the plan always
+                # reaches a terminal "ready" state and the client poller escapes.
+                plan = await generate_social_ideas(
+                    db,
+                    suite,
+                    period=period,
+                    target_count=input_data.get("target_count"),
+                    requested_language=input_data.get("language"),
+                )
+                plan["status"] = "ready"
+                _save_suite_social_ideas_plan(suite, plan)
+                await db.commit()
+                warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
+                # Usage accounting must never re-run a completed generation.
+                try:
+                    await record_provider_usage(
+                        db,
+                        provider=settings.ai_text_provider,
+                        operation="marketing_social_ideas.generate",
+                        model=settings.anthropic_text_model,
+                        status="partial" if warnings else "success",
+                        suite_id=suite.id,
+                        user_id=job.created_by,
+                        metadata={
+                            "period": period,
+                            "target_count": plan.get("target_count"),
+                            "candidate_count": len(plan.get("candidates") or []),
+                            "occasion_count": len(plan.get("occasions") or []),
+                            "warnings": warnings,
+                        },
+                    )
+                except Exception:
+                    log.warning("Provider usage logging failed for social-ideas job %s", job.id)
+                return await mark_completed(
+                    db,
+                    job.id,
+                    {
+                        "period": period,
+                        "candidate_count": len(plan.get("candidates") or []),
+                        "warnings": warnings,
+                    },
+                )
 
             return await mark_failed(db, job.id, f"Unsupported generation job type: {job.type}")
         except Exception as exc:

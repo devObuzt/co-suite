@@ -163,6 +163,7 @@ async def startup():
                 "product_bulk_generate_all",
                 "product_bulk_regenerate_asset",
                 "video_montage",
+                "social_ideas",
             ):
                 await conn.execute(text(
                     f"ALTER TYPE generationjobtype ADD VALUE IF NOT EXISTS '{value}'"
