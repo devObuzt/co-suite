@@ -153,6 +153,10 @@ class CompetitorClassificationRequest(BaseModel):
     classification_tags: list[str] = Field(default_factory=list, max_length=8)
 
 
+class MarketingMessageUpdateRequest(BaseModel):
+    message: str = Field(default="", max_length=4000)
+
+
 class MarketingPlanShareRequest(BaseModel):
     enabled: bool = True
     password: str | None = Field(default=None, max_length=120)
@@ -293,6 +297,13 @@ def _save_marketing_intelligence(suite: Suite, intelligence: dict[str, Any]) -> 
     strategy["marketing_intelligence"] = intelligence
     suite.strategy = strategy
     return intelligence
+
+
+def _save_marketing_message(suite: Suite, message: str) -> str:
+    strategy = dict(_strategy(suite))
+    strategy["marketing_message"] = message
+    suite.strategy = strategy
+    return message
 
 
 def _save_social_content_plan(suite: Suite, plan: dict[str, Any]) -> dict[str, Any]:
@@ -2748,6 +2759,31 @@ async def update_marketing_keywords(
     )
     await db.commit()
     return _marketing_plan_response(suite, suite_id, None, "market_ready")
+
+
+@router.patch("/suites/{suite_id}/marketing-plan/message")
+async def update_marketing_message(
+    suite_id: str,
+    payload: MarketingMessageUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually edit the marketing message. A user rewriting their own copy is
+    not an AI regeneration, so the funnel one-shot guard does not apply here."""
+    suite = await get_owned_suite(db, suite_id, current_user)
+    message = re.sub(r"[ \t]+\n", "\n", payload.message).strip()
+    _save_marketing_message(suite, message)
+    await record_audit_log(
+        db,
+        action="marketing.message.update",
+        resource_type="marketing_message",
+        resource_id=suite.id,
+        suite_id=suite.id,
+        actor=current_user,
+        metadata={"length": len(message)},
+    )
+    await db.commit()
+    return {"marketing_message": message}
 
 
 async def _run_demand_supply_generation(

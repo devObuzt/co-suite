@@ -249,7 +249,7 @@ async def generate_shot_list(
             max_tokens=4000,
             system=(
                 SHOT_LIST_SYSTEM + MAGIC_SHOT_LIST_ADDENDUM
-                if style == "oneshare_magic"
+                if style in ("oneshare_magic", "oneshare_superzoom")
                 else SHOT_LIST_SYSTEM
             ),
             messages=[
@@ -279,7 +279,7 @@ async def generate_shot_list(
         max_beats=max_beats,
         # Owner-approved Magic frame range: 0.8-2.3s (ceiling enforced by
         # split_long_beat_segments downstream).
-        min_beat_seconds=0.8 if style == "oneshare_magic" else MIN_BEAT_SECONDS,
+        min_beat_seconds=0.8 if style in ("oneshare_magic", "oneshare_superzoom") else MIN_BEAT_SECONDS,
     )
     if not beats:
         _fail("invalid_beats")

@@ -1,6 +1,6 @@
 """OneShare Magic director: per-scene art direction on top of the shot list.
 
-The "oneshare_magic" montage template treats every scene as its own edit:
+The "oneshare_magic" / "oneshare_superzoom" montage templates treat every scene as its own edit:
 a fast Anthropic model looks at each shot-list beat and decides how to stage
 it — split layout (background media on the top half blending into a solid
 brand-color stage behind the speaker), a huge 3D shadowed title, an optional
@@ -24,8 +24,13 @@ from ..models.suite import Suite
 
 log = logging.getLogger(__name__)
 
+# Two templates share the SAME per-scene grammar (this director, the shot
+# list, MagicScene) and differ ONLY in zoom intensity, applied on the render
+# side: "oneshare_magic" keeps zooms gentle; "oneshare_superzoom" pushes them.
 MAGIC_TEMPLATE = "oneshare_magic"
-MONTAGE_TEMPLATES = {"default", MAGIC_TEMPLATE}
+SUPERZOOM_TEMPLATE = "oneshare_superzoom"
+MAGIC_TEMPLATES = {MAGIC_TEMPLATE, SUPERZOOM_TEMPLATE}
+MONTAGE_TEMPLATES = {"default", MAGIC_TEMPLATE, SUPERZOOM_TEMPLATE}
 
 MAGIC_LAYOUTS = {"split", "full"}
 MAGIC_BACKGROUNDS = {"solid", "video", "image"}
@@ -68,20 +73,29 @@ THE MAGIC FRAME: every scene is a micro-frame (0.8-2.3s) with its OWN mood. The 
 is a sandwich of two background layers: the BOTTOM layer behind the speaker and the
 captions is one constant, clean, uncluttered brand-stage image (already handled — not
 your decision); the TOP zone between the 3D title and the bottom captions carries the
-per-frame VIDEO or ANIMATION that embodies the spoken content. Adjacent frames must
-never share the same look — a new frame means a new atmosphere in the top zone.
+per-frame VIDEO or ANIMATION that embodies the spoken content and blends down into the
+bottom stage behind the speaker (the top-zone video is free and expressive — it may
+show people, real logos or life). Adjacent frames must never share the same look — a
+new frame means a new atmosphere in the top zone.
 
 Per-beat direction fields:
 - "layout": "split" — the STANDARD Magic frame described above. "full" — the top
   media takes the whole frame behind the speaker; reserve it for immersive moments
   (fast enumerated services, rich establishing visuals).
-- "background" chooses the TOP zone: "video" whenever motion embodies the spoken
-  meaning — be generous, this is the default instinct (a service word gets a related
-  moving background); "image" for calm moments (it still gets subtle animated drift);
-  "solid" means NO top media at all — only when the 3D typography alone should own
-  the frame (punchy one-liners, CTA). Never let two consecutive frames feel identical.
-- "title": the beat's headline in the transcript's language, 1-4 words, rendered as a
-  huge 3D block title with a hard shadow. For the hook, use the core promise
+- "background" chooses the TOP zone. ALWAYS PREFER "video" as the first choice:
+  it is the default for almost every beat — a wide, expressive, brand-aware clip
+  that interprets the idea (it may show people, real logos or life) and blends down
+  behind the speaker into the brand stage. Pick "image" only for genuinely calm
+  moments (it still gets subtle animated drift), and "solid" (NO top media, the 3D
+  typography alone owns the frame) only for punchy one-liners or the CTA. When in
+  doubt, choose "video". Never let two consecutive frames feel identical.
+- "title": OPTIONAL headline in the transcript's language, 1-4 words, rendered as a
+  huge 3D block title with a hard shadow. Titles are SPARSE, not constant: give a
+  title ONLY to the strongest beats — the hook, the brand/program name when spoken,
+  a hard number, the CTA — at most ~40% of beats, and never more than two titled
+  beats in a row. Use "" for every other beat: a quiet frame makes the titled ones
+  land harder. The title must be the EXACT idea being spoken at that moment (never
+  a word from a neighbouring beat). For the hook, use the core promise
   (e.g. "محل واحد"). Never punctuation, never a full sentence.
 - "subtitle": optional short complement (max 6 words) shown at the opposite edge with a
   converging 3D perspective (top and bottom text lean toward a far vanishing point).
@@ -210,11 +224,14 @@ def heuristic_magic_direction(*, index: int, beat: dict[str, Any] | None, scene_
             "sfx": "pop",
         }
     # Narrative micro-frames default to the standard Magic sandwich: media on
-    # top of the solid stage, each frame with its own generated image.
+    # top of the solid stage. Video is the first choice for the top zone; the
+    # pipeline backfills a per-frame generated image when the decoder budget is
+    # spent, so every frame still gets its own visual. Titles stay SPARSE:
+    # plain narration renders untitled so hook/enumeration/CTA headlines land.
     return {
         "layout": "split",
-        "background": "image",
-        "title": title,
+        "background": "video",
+        "title": "",
         "subtitle": "",
         "icons": [],
         "emphasis": "",
@@ -257,11 +274,17 @@ def validate_magic_directions(
         camera = str(item.get("camera") or "").strip().lower()
         sfx_raw = item.get("sfx")
         sfx = str(sfx_raw).strip().lower() if sfx_raw else None
+        # Titles are sparse by design: an EXPLICIT empty title from the model
+        # means "no headline this scene" and must survive as "". Only a missing
+        # key falls back to the heuristic title.
+        title = (
+            _clean_title(item["title"], "") if "title" in item else fallback["title"]
+        )
         directions.append(
             {
                 "layout": layout if layout in MAGIC_LAYOUTS else fallback["layout"],
                 "background": background if background in MAGIC_BACKGROUNDS else fallback["background"],
-                "title": _clean_title(item.get("title"), fallback["title"]),
+                "title": title,
                 "subtitle": _clean_text(item.get("subtitle"), 80),
                 "icons": _clean_icons(item.get("icons")),
                 "emphasis": _clean_text(item.get("emphasis"), 30),
