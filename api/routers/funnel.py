@@ -16,10 +16,12 @@ from ..core.phone import normalize_phone
 from ..core.security import create_access_token, get_current_user, hash_password
 from ..models.services_catalog import (
     Lead,
+    Package,
     PhoneOtp,
     ServiceItem,
     ServiceRequest,
     serialize_lead,
+    serialize_package,
     serialize_service_item,
     serialize_service_request,
 )
@@ -516,6 +518,17 @@ async def catalog(current_user: User = Depends(get_current_user), db: AsyncSessi
         )
     ).scalars().all()
     return [serialize_service_item(item) for item in rows]
+
+
+@router.get("/packages")
+async def funnel_packages(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Active packages (with covers) shown on the pricing proposal page."""
+    rows = (
+        await db.execute(
+            select(Package).where(Package.is_active.is_(True)).order_by(Package.sort_order)
+        )
+    ).scalars().all()
+    return [serialize_package(pkg) for pkg in rows]
 
 
 @router.post("/recommendations")

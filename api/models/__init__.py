@@ -22,7 +22,7 @@ from .billing import (
 )
 from .admin import AppTextOverride, AuditLog, ProviderUsageEvent, CreativeAsset
 from .media_asset import MediaAsset
-from .services_catalog import ServiceItem, Lead, ServiceRequest
+from .services_catalog import ServiceItem, Lead, ServiceRequest, Package
 from .research_cache import ResearchCache
 
 __all__ = [
