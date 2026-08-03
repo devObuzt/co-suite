@@ -28,7 +28,11 @@ CREATIVE_ROOT.mkdir(parents=True, exist_ok=True)
 AUDIO_KINDS = {"sfx", "music", "transition"}
 VISUAL_KINDS = {"visual_image", "visual_video"}
 VIDEO_TRANSITION_KINDS = {"transition_video"}
-ALL_KINDS = AUDIO_KINDS | VISUAL_KINDS | VIDEO_TRANSITION_KINDS
+# Package covers are stored as assets for R2/local reuse but kept OUT of
+# VISUAL_KINDS so montage never picks one as a background, and out of the
+# Creative Asset Library kind filters.
+PACKAGE_COVER_KIND = "package_cover"
+ALL_KINDS = AUDIO_KINDS | VISUAL_KINDS | VIDEO_TRANSITION_KINDS | {PACKAGE_COVER_KIND}
 BUILTIN_LIBRARY_MANIFEST = CREATIVE_ROOT / "library" / "manifest.json"
 
 

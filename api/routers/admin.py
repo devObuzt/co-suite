@@ -48,6 +48,20 @@ class AdminPasswordUpdate(BaseModel):
     password: str = Field(min_length=8, max_length=200)
 
 
+class AdminUserCreate(BaseModel):
+    email: EmailStr
+    full_name: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=8, max_length=200)
+    is_super_admin: bool = False
+    is_active: bool = True
+    is_verified: bool = True
+    approval_status: Literal["approved", "frozen", "funnel"] = "approved"
+
+
+class AdminUserBulkDeactivate(BaseModel):
+    user_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 class AppTextOverrideUpdate(BaseModel):
     language: str = Field(min_length=2, max_length=12)
     key: str = Field(min_length=1, max_length=240)
@@ -312,6 +326,73 @@ async def users(
         }
         for user, suite_count in rows
     ]
+
+
+@router.post("/users", status_code=201)
+async def create_user(
+    payload: AdminUserCreate,
+    request: Request,
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Exact-match uniqueness to mirror login/signup (email stored as-is).
+    existing = (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="A user with this email already exists")
+    user = User(
+        email=payload.email,
+        full_name=payload.full_name.strip(),
+        hashed_password=hash_password(payload.password),
+        is_active=payload.is_active,
+        is_verified=payload.is_verified,
+        is_super_admin=payload.is_super_admin,
+        approval_status=payload.approval_status,
+    )
+    db.add(user)
+    await db.flush()
+    await record_audit_log(
+        db,
+        action="admin.user.create",
+        resource_type="user",
+        resource_id=user.id,
+        target_user_id=user.id,
+        actor=admin,
+        request=request,
+        metadata={"email": user.email, "is_super_admin": user.is_super_admin},
+    )
+    await db.commit()
+    await db.refresh(user)
+    return serialize_user_public(user)
+
+
+@router.post("/users/bulk-deactivate")
+async def bulk_deactivate_users(
+    payload: AdminUserBulkDeactivate,
+    request: Request,
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Soft-deactivate (is_active=False), consistent with single-user delete.
+    # The admin's own account is always skipped, never their session-killer.
+    ids = [uid for uid in dict.fromkeys(payload.user_ids) if uid != admin.id]
+    users = (await db.execute(select(User).where(User.id.in_(ids)))).scalars().all() if ids else []
+    deactivated = 0
+    for user in users:
+        if user.is_active:
+            user.is_active = False
+            deactivated += 1
+    if deactivated:
+        await record_audit_log(
+            db,
+            action="admin.user.bulk_deactivate",
+            resource_type="user",
+            resource_id=None,
+            actor=admin,
+            request=request,
+            metadata={"user_ids": [u.id for u in users if not u.is_active], "count": deactivated},
+        )
+    await db.commit()
+    return {"ok": True, "deactivated": deactivated, "skipped_self": admin.id in set(payload.user_ids)}
 
 
 @router.get("/users/{user_id}")

@@ -27,6 +27,29 @@ class ServiceItem(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class Package(Base):
+    """A curated offering shown on the startbyconnec pricing proposal.
+
+    Standalone (not a bundle of specific service_ids): a bilingual name +
+    description, a price band, and a cover image the admin either uploads or
+    generates from the package's own content. Shown to a lead with its cover.
+    """
+
+    __tablename__ = "packages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[dict] = mapped_column(JSON, nullable=False)          # {"ar": ..., "he": ...}
+    description: Mapped[dict] = mapped_column(JSON, nullable=False)   # {"ar": ..., "he": ...}
+    billing_cycle: Mapped[str] = mapped_column(String, nullable=False, default="one_time")
+    price_min: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    price_max: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # NULL → fixed price
+    cover_image_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class Lead(Base):
     """A startbyconnec visitor: created at funnel registration, enriched later."""
 
@@ -92,6 +115,20 @@ def serialize_service_item(item: ServiceItem) -> dict[str, Any]:
         "unit": item.unit,
         "is_active": bool(item.is_active if item.is_active is not None else True),
         "sort_order": int(item.sort_order or 0),
+    }
+
+
+def serialize_package(pkg: Package) -> dict[str, Any]:
+    return {
+        "id": pkg.id,
+        "name": pkg.name or {},
+        "description": pkg.description or {},
+        "billing_cycle": pkg.billing_cycle,
+        "price_min": pkg.price_min,
+        "price_max": pkg.price_max,
+        "cover_image_url": pkg.cover_image_url,
+        "is_active": bool(pkg.is_active if pkg.is_active is not None else True),
+        "sort_order": int(pkg.sort_order or 0),
     }
 
 

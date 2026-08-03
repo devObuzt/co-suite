@@ -1,7 +1,8 @@
-"""Admin CRUD for the startbyconnec service catalog + leads inbox."""
+"""Admin CRUD for the startbyconnec service catalog + packages + leads inbox."""
+import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,15 +11,19 @@ from ..core.database import get_db
 from ..core.security import get_current_user
 from ..models.services_catalog import (
     Lead,
+    Package,
     ServiceItem,
     ServiceRequest,
     serialize_lead,
+    serialize_package,
     serialize_service_item,
     serialize_service_request,
 )
 from ..models.suite import Suite
 from ..models.user import User
 from ..services.admin_audit import record_audit_log, require_super_admin, serialize_user_public
+from ..services.content_generator import _generate_image
+from ..services.creative_assets import PACKAGE_COVER_KIND, create_asset_from_bytes
 
 router = APIRouter(prefix="/admin", tags=["admin-catalog"])
 
@@ -58,6 +63,32 @@ class ServiceItemPatch(BaseModel):
     price_min: float | None = Field(default=None, gt=0)
     price_max: float | None = Field(default=None, gt=0)
     unit: dict | None = None
+    is_active: bool | None = None
+    sort_order: int | None = None
+
+
+class PackageIn(BaseModel):
+    name: dict
+    description: dict
+    billing_cycle: Literal["one_time", "monthly", "yearly"]
+    price_min: float = Field(gt=0)
+    price_max: float | None = Field(default=None, gt=0)
+    is_active: bool = True
+    sort_order: int = 0
+
+    @field_validator("name", "description")
+    @classmethod
+    def check_bilingual(cls, v: dict) -> dict:
+        return _bilingual(v)
+
+
+class PackagePatch(BaseModel):
+    name: dict | None = None
+    description: dict | None = None
+    billing_cycle: Literal["one_time", "monthly", "yearly"] | None = None
+    price_min: float | None = Field(default=None, gt=0)
+    price_max: float | None = Field(default=None, gt=0)
+    cover_image_url: str | None = None
     is_active: bool | None = None
     sort_order: int | None = None
 
@@ -131,6 +162,144 @@ async def deactivate_service(
     )
     await db.commit()
     return {"ok": True}
+
+
+# ── Packages ─────────────────────────────────────────────────────────────────
+
+@router.get("/packages")
+async def list_packages(admin: User = Depends(_admin_user), db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Package).order_by(Package.sort_order))).scalars().all()
+    return [serialize_package(pkg) for pkg in rows]
+
+
+@router.post("/packages", status_code=201)
+async def create_package(
+    payload: PackageIn, request: Request,
+    admin: User = Depends(_admin_user), db: AsyncSession = Depends(get_db),
+):
+    pkg = Package(**payload.model_dump())
+    db.add(pkg)
+    await record_audit_log(
+        db, action="admin.package.create", resource_type="package",
+        actor=admin, request=request, metadata={"name": payload.name},
+    )
+    await db.commit()
+    await db.refresh(pkg)
+    return serialize_package(pkg)
+
+
+@router.patch("/packages/{package_id}")
+async def update_package(
+    package_id: str, payload: PackagePatch, request: Request,
+    admin: User = Depends(_admin_user), db: AsyncSession = Depends(get_db),
+):
+    pkg = await db.get(Package, package_id)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    updates = payload.model_dump(exclude_unset=True)
+    for key in ("name", "description"):
+        if key in updates and updates[key] is not None:
+            updates[key] = _bilingual(updates[key])
+    for key, value in updates.items():
+        setattr(pkg, key, value)
+    await record_audit_log(
+        db, action="admin.package.update", resource_type="package",
+        resource_id=pkg.id, actor=admin, request=request, metadata=updates,
+    )
+    await db.commit()
+    await db.refresh(pkg)
+    return serialize_package(pkg)
+
+
+@router.delete("/packages/{package_id}")
+async def deactivate_package(
+    package_id: str, request: Request,
+    admin: User = Depends(_admin_user), db: AsyncSession = Depends(get_db),
+):
+    pkg = await db.get(Package, package_id)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    pkg.is_active = False
+    await record_audit_log(
+        db, action="admin.package.deactivate", resource_type="package",
+        resource_id=pkg.id, actor=admin, request=request,
+    )
+    await db.commit()
+    return {"ok": True}
+
+
+async def _set_package_cover(db, pkg, data: bytes, *, content_type, filename, prompt=None, generated=False):
+    asset = await create_asset_from_bytes(
+        db,
+        kind=PACKAGE_COVER_KIND,
+        title=f"package cover {pkg.id[:8]}",
+        filename=filename,
+        data=data,
+        content_type=content_type,
+        classification_prompt=prompt,
+        metadata={"package_id": pkg.id, "generated": generated},
+    )
+    pkg.cover_image_url = asset.storage_url
+    return asset
+
+
+@router.post("/packages/{package_id}/cover")
+async def upload_package_cover(
+    package_id: str, request: Request,
+    file: UploadFile = File(...),
+    admin: User = Depends(_admin_user), db: AsyncSession = Depends(get_db),
+):
+    pkg = await db.get(Package, package_id)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    await _set_package_cover(
+        db, pkg, data,
+        content_type=file.content_type or "image/png",
+        filename=file.filename or f"{package_id}.png",
+    )
+    await record_audit_log(
+        db, action="admin.package.cover_upload", resource_type="package",
+        resource_id=pkg.id, actor=admin, request=request,
+    )
+    await db.commit()
+    await db.refresh(pkg)
+    return serialize_package(pkg)
+
+
+@router.post("/packages/{package_id}/cover/generate")
+async def generate_package_cover(
+    package_id: str, request: Request,
+    admin: User = Depends(_admin_user), db: AsyncSession = Depends(get_db),
+):
+    pkg = await db.get(Package, package_id)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    name = str((pkg.name or {}).get("ar") or (pkg.name or {}).get("he") or "package").strip()
+    desc = str((pkg.description or {}).get("ar") or (pkg.description or {}).get("he") or "").strip()
+    prompt = (
+        "A premium, clean marketing cover image for a service package. "
+        f"The package is: {name}. {desc} "
+        "One strong visual concept that represents this offering, modern, vibrant and professional. "
+        "Absolutely NO text, no words, no letters, no logos, no watermarks — a purely photographic/graphic cover. "
+        "Wide 16:9 composition."
+    )
+    data = await asyncio.to_thread(_generate_image, prompt, "16:9")
+    if not data:
+        raise HTTPException(status_code=502, detail="cover_generation_failed")
+    await _set_package_cover(
+        db, pkg, data, content_type="image/png",
+        filename=f"{package_id}.png", prompt=prompt, generated=True,
+    )
+    await record_audit_log(
+        db, action="admin.package.cover_generate", resource_type="package",
+        resource_id=pkg.id, actor=admin, request=request,
+    )
+    await db.commit()
+    await db.refresh(pkg)
+    return serialize_package(pkg)
 
 
 @router.get("/leads")
