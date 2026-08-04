@@ -30,7 +30,14 @@ log = logging.getLogger(__name__)
 MAGIC_TEMPLATE = "oneshare_magic"
 SUPERZOOM_TEMPLATE = "oneshare_superzoom"
 MAGIC_TEMPLATES = {MAGIC_TEMPLATE, SUPERZOOM_TEMPLATE}
-MONTAGE_TEMPLATES = {"default", MAGIC_TEMPLATE, SUPERZOOM_TEMPLATE}
+# Classic family — calm "editor's cut", NOT part of the Magic micro-beat
+# grammar. They render sentence scenes through ClassicScene: "oneshare_classic"
+# (per-scene background + lower-third) and "oneshare_minimal" (one static brand
+# backdrop + captions only). Both get smooth cross-dissolve transitions.
+CLASSIC_TEMPLATE = "oneshare_classic"
+MINIMAL_TEMPLATE = "oneshare_minimal"
+CLASSIC_TEMPLATES = {CLASSIC_TEMPLATE, MINIMAL_TEMPLATE}
+MONTAGE_TEMPLATES = {"default", MAGIC_TEMPLATE, SUPERZOOM_TEMPLATE, CLASSIC_TEMPLATE, MINIMAL_TEMPLATE}
 
 MAGIC_LAYOUTS = {"split", "full"}
 MAGIC_BACKGROUNDS = {"solid", "video", "image"}
