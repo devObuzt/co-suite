@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
@@ -286,7 +286,7 @@ def parse_zoom(raw: str) -> float:
     return max(1.0, min(3.0, round(value * 4) / 4))
 
 
-MONTAGE_TEMPLATES = {"default", "oneshare_magic", "oneshare_superzoom"}
+MONTAGE_TEMPLATES = {"default", "oneshare_magic", "oneshare_superzoom", "oneshare_classic", "oneshare_minimal"}
 
 
 def parse_template(raw: str) -> str:
@@ -381,4 +381,57 @@ async def create_video_montage_job(
         job_id=job_id,
     )
 
+    return serialize_job(job, suite_id=suite_id)
+
+
+class ReviseIn(BaseModel):
+    prompt: str = Field(min_length=3, max_length=2000)
+
+
+@router.post("/jobs/{job_id}/revise")
+async def revise_video_montage_job(
+    suite_id: str,
+    job_id: str,
+    payload: ReviseIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Automated edit: re-render the montage steered by a revision prompt.
+
+    Reuses the original job's source + settings and appends the prompt to the
+    notes that steer the shot list + scene director, then enqueues a fresh
+    render. The original render is left untouched (this is a new version).
+    """
+    await get_owned_suite(db, suite_id, current_user)
+    original = await db.get(GenerationJob, job_id)
+    if (
+        not original
+        or original.suite_id != suite_id
+        or original.type != GenerationJobType.video_montage
+    ):
+        raise HTTPException(status_code=404, detail="Montage job not found")
+    src = original.input if isinstance(original.input, dict) else {}
+    # The worker is a separate container: only an R2 source_url is reusable in
+    # prod (a local source_file_path lives on the API box only).
+    if not src.get("source_url") and not src.get("source_file_path"):
+        raise HTTPException(status_code=400, detail="Original job has no reusable source to revise")
+
+    prompt = payload.prompt.strip()
+    base_notes = str(src.get("notes") or "").strip()
+    revised_notes = (f"{base_notes}\n\n" if base_notes else "") + f"تعديل مطلوب على النسخة السابقة: {prompt}"
+    new_input = {
+        **src,
+        "notes": revised_notes[:3000],
+        "revision_prompt": prompt,
+        "revised_from_job_id": job_id,
+    }
+    new_job_id = str(uuid.uuid4())
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.video_montage,
+        user_id=current_user.id,
+        input_data=new_input,
+        job_id=new_job_id,
+    )
     return serialize_job(job, suite_id=suite_id)

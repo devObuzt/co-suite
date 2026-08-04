@@ -29,6 +29,7 @@ from ..models.admin import CreativeAsset
 from ..models.suite import Suite
 from .media_storage import r2_configured, upload_bytes
 from .montage_magic_director import (
+    CLASSIC_TEMPLATES,
     MAGIC_SFX_QUERIES,
     MAGIC_TEMPLATE,
     MAGIC_TEMPLATES,
@@ -2546,7 +2547,9 @@ async def build_remotion_scene_manifest(
             "backgroundMusic": background_music,
             "soundEffects": sound_effects,
         },
-        "sceneTransitions": build_scene_transitions(scenes, seed=render_shuffle_seed, magic=is_magic),
+        "sceneTransitions": build_scene_transitions(
+            scenes, seed=render_shuffle_seed, magic=is_magic or template in CLASSIC_TEMPLATES
+        ),
         "creativeAssets": serialized_creative_assets,
         "selectedCreativeAssetIds": sorted(set(selected_asset_ids)),
         "style": {
