@@ -765,9 +765,12 @@ def _fallback_competitor_research(
     locations = _audience_locations(brand, strategy)
     location = " ".join(locations[:2]).strip()
     copy = _fallback_market_copy(language)
+    # Instagram leads the competitor sample: it is where this market's
+    # competitors actually show their offer/content, so it is the most useful
+    # first section for the owner to read.
     platforms = [
-        ("google", "Google", ""),
         ("instagram", "Instagram", "site:instagram.com"),
+        ("google", "Google", ""),
         ("facebook", "Facebook", "site:facebook.com"),
         ("tiktok", "TikTok", "site:tiktok.com"),
     ]
@@ -1057,8 +1060,8 @@ def normalize_marketing_intelligence(
     if keywords:
         search_location = " ".join(locations[:2]).strip()
         for platform, site_filter in (
-            ("google", ""),
             ("instagram", "site:instagram.com"),
+            ("google", ""),
             ("facebook", "site:facebook.com"),
             ("tiktok", "site:tiktok.com"),
         ):
