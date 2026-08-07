@@ -3,6 +3,7 @@ import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -531,47 +532,108 @@ async def funnel_packages(current_user: User = Depends(get_current_user), db: As
     return [serialize_package(pkg) for pkg in rows]
 
 
+def _plan_signals(suite: Suite | None) -> dict[str, Any]:
+    """What the generated plan says this business actually needs.
+
+    Pulls the delivery-shaped parts of the plan — the monthly social work plan
+    and the paid funnel — plus the message/demand context, so services can be
+    proposed against real planned work instead of the brand blurb alone.
+    """
+    strategy = suite.strategy if suite and isinstance(suite.strategy, dict) else {}
+    intelligence = strategy.get("marketing_intelligence") if isinstance(strategy.get("marketing_intelligence"), dict) else {}
+    action = strategy.get("marketing_action_plan") if isinstance(strategy.get("marketing_action_plan"), dict) else {}
+
+    def _titles(items: Any, limit: int) -> list[str]:
+        out: list[str] = []
+        for item in (items if isinstance(items, list) else [])[:limit]:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("title") or item.get("idea") or item.get("name") or "").strip()
+            fmt = str(item.get("format") or item.get("content_type") or item.get("channel") or "").strip()
+            if label:
+                out.append(f"{label}{f' ({fmt})' if fmt else ''}")
+        return out
+
+    social = _titles(action.get("social_items"), 14)
+    ads = _titles(action.get("ad_funnel_items"), 10)
+    message = intelligence.get("marketing_message")
+    if isinstance(message, dict):
+        message = message.get("text") or message.get("message") or ""
+    demand = intelligence.get("demand_supply") if isinstance(intelligence.get("demand_supply"), dict) else {}
+    return {
+        "social_plan_items": social,
+        "paid_funnel_items": ads,
+        "marketing_message": str(message or "")[:600],
+        "demand_recommendation": str(demand.get("recommendation") or "")[:400],
+        # Volume drives how much production capacity the client actually needs.
+        "social_item_count": len(action.get("social_items") or []) if isinstance(action.get("social_items"), list) else 0,
+        "paid_item_count": len(action.get("ad_funnel_items") or []) if isinstance(action.get("ad_funnel_items"), list) else 0,
+    }
+
+
 @router.post("/recommendations")
 async def recommendations(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     lead = await _require_lead(db, current_user)
-    if lead.recommendations:
-        return lead.recommendations
     if not lead.suite_id:
+        if lead.recommendations:
+            return lead.recommendations
         raise HTTPException(status_code=400, detail="Create the suite first")
     suite = (await db.execute(select(Suite).where(Suite.id == lead.suite_id))).scalar_one_or_none()
+    signals = _plan_signals(suite)
+    has_plan = bool(signals["social_plan_items"] or signals["paid_funnel_items"])
+
+    cached = lead.recommendations if isinstance(lead.recommendations, dict) else None
+    # A cached answer computed from the brand alone is stale once the plan
+    # exists — the whole point is to propose against the planned work.
+    if cached and (cached.get("plan_based") or not has_plan):
+        return cached
+
     brand = dict(suite.brand or {}) if suite else {}
     rows = (
         await db.execute(select(ServiceItem).where(ServiceItem.is_active.is_(True)))
     ).scalars().all()
     catalog_lines = [
-        f"- id={item.id} | {item.name.get('ar', '')} | {item.billing_cycle}"
+        f"- id={item.id} | {item.name.get('ar', '')} | {item.billing_cycle} | from ₪{item.price_min}"
         for item in rows
     ]
     try:
         raw = await call_text_ai(
-            max_tokens=400,
+            max_tokens=900,
             system=(
-                "You match marketing/web services to a business. Return ONLY a JSON object: "
-                '{"recommended_service_ids": ["..."]} with 3-6 ids from the provided catalog.'
+                "You are proposing services to a business owner who has just received their "
+                "marketing plan. Recommend ONLY services the plan actually requires to be "
+                "executed — match the planned social content volume, formats and paid-funnel "
+                "channels to catalog services. Return ONLY JSON: "
+                '{"recommended_service_ids": ["..."], "reasons": {"<id>": "<one short sentence, '
+                'in the same language as the plan, naming the planned work it covers>"}}. '
+                "Pick 3-6 ids from the catalog, most needed first."
             ),
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Business brand JSON:\n{json.dumps(brand, ensure_ascii=False)[:4000]}\n\n"
-                    f"Catalog:\n" + "\n".join(catalog_lines)
+                    f"Business brand JSON:\n{json.dumps(brand, ensure_ascii=False)[:2500]}\n\n"
+                    f"Generated marketing plan signals:\n{json.dumps(signals, ensure_ascii=False)[:4000]}\n\n"
+                    "Catalog:\n" + "\n".join(catalog_lines)
                 ),
             }],
         )
     except Exception:
         log.warning("recommendations LLM call failed", exc_info=True)
-        return {"recommended_service_ids": []}
+        return cached or {"recommended_service_ids": []}
     try:
         parsed = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
-        ids = [i for i in parsed.get("recommended_service_ids", []) if any(r.id == i for r in rows)]
+        valid = {r.id for r in rows}
+        ids = [i for i in parsed.get("recommended_service_ids", []) if i in valid]
+        raw_reasons = parsed.get("reasons") if isinstance(parsed.get("reasons"), dict) else {}
+        reasons = {k: str(v)[:300] for k, v in raw_reasons.items() if k in ids}
     except Exception:
         log.warning("recommendations parse failed; storing empty list")
-        ids = []
-    lead.recommendations = {"recommended_service_ids": ids}
+        ids, reasons = [], {}
+    lead.recommendations = {
+        "recommended_service_ids": ids,
+        "reasons": reasons,
+        "plan_based": has_plan,
+    }
     await db.commit()
     return lead.recommendations
 
