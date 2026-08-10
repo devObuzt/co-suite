@@ -66,7 +66,9 @@ class SelectionItem(BaseModel):
 
 
 class FunnelServiceRequestIn(BaseModel):
-    items: list[SelectionItem] = Field(min_length=1)
+    # Either pick individual services, or pick one ready-made package, or both.
+    items: list[SelectionItem] = Field(default_factory=list)
+    package_id: str | None = None
     customer_notes: str | None = Field(default=None, max_length=4000)
 
 
@@ -596,24 +598,37 @@ async def recommendations(current_user: User = Depends(get_current_user), db: As
         f"- id={item.id} | {item.name.get('ar', '')} | {item.billing_cycle} | from ₪{item.price_min}"
         for item in rows
     ]
+    packages = (
+        await db.execute(select(Package).where(Package.is_active.is_(True)).order_by(Package.price_min))
+    ).scalars().all()
+    package_lines = [
+        f"- id={p.id} | {(p.name or {}).get('ar', '')} | ₪{int(p.price_min)}/mo | audience={p.audience}"
+        for p in packages
+    ]
     try:
         raw = await call_text_ai(
             max_tokens=900,
             system=(
-                "You are proposing services to a business owner who has just received their "
-                "marketing plan. Recommend ONLY services the plan actually requires to be "
-                "executed — match the planned social content volume, formats and paid-funnel "
-                "channels to catalog services. Return ONLY JSON: "
+                "You are proposing services and monthly packages to a business owner who has "
+                "just received their marketing plan. Recommend ONLY services the plan actually "
+                "requires to be executed — match the planned social content volume, formats and "
+                "paid-funnel channels to catalog services. Then pick 3-7 packages that fit this "
+                "business, cheapest first, giving a real range of options. Package rules: only "
+                'include an audience="very_small" package if this business is clearly tiny '
+                '(no real budget); only include audience="retail_web" packages for shops/sites '
+                'that sell online or depend on search; audience="local_service" suits on-site '
+                'trades; audience="all" fits anyone. Return ONLY JSON: '
                 '{"recommended_service_ids": ["..."], "reasons": {"<id>": "<one short sentence, '
-                'in the same language as the plan, naming the planned work it covers>"}}. '
-                "Pick 3-6 ids from the catalog, most needed first."
+                'in the same language as the plan, naming the planned work it covers>"}, '
+                '"recommended_package_ids": ["..."], "business_size": "very_small|small|normal"}.'
             ),
             messages=[{
                 "role": "user",
                 "content": (
                     f"Business brand JSON:\n{json.dumps(brand, ensure_ascii=False)[:2500]}\n\n"
                     f"Generated marketing plan signals:\n{json.dumps(signals, ensure_ascii=False)[:4000]}\n\n"
-                    "Catalog:\n" + "\n".join(catalog_lines)
+                    "Service catalog:\n" + "\n".join(catalog_lines) + "\n\n"
+                    "Packages (monthly, VAT included):\n" + "\n".join(package_lines)
                 ),
             }],
         )
@@ -626,12 +641,25 @@ async def recommendations(current_user: User = Depends(get_current_user), db: As
         ids = [i for i in parsed.get("recommended_service_ids", []) if i in valid]
         raw_reasons = parsed.get("reasons") if isinstance(parsed.get("reasons"), dict) else {}
         reasons = {k: str(v)[:300] for k, v in raw_reasons.items() if k in ids}
+        size = str(parsed.get("business_size") or "").strip().lower()
+        by_id = {p.id: p for p in packages}
+        picked = [by_id[i] for i in parsed.get("recommended_package_ids", []) if i in by_id]
+        # The "very small budgets only" rule is enforced here, not left to the
+        # model: that tier must never be shown to a normal business.
+        if size != "very_small":
+            picked = [p for p in picked if p.audience != "very_small"]
+        if not picked:
+            picked = [p for p in packages if p.audience == "all"]
+        picked.sort(key=lambda p: p.price_min)
+        package_ids = [p.id for p in picked[:7]]
     except Exception:
         log.warning("recommendations parse failed; storing empty list")
-        ids, reasons = [], {}
+        ids, reasons, package_ids, size = [], {}, [], ""
     lead.recommendations = {
         "recommended_service_ids": ids,
         "reasons": reasons,
+        "recommended_package_ids": package_ids,
+        "business_size": size,
         "plan_based": has_plan,
     }
     await db.commit()
@@ -650,6 +678,27 @@ async def submit_service_request(
         await db.execute(select(ServiceItem).where(ServiceItem.is_active.is_(True)))
     ).scalars().all()
     items, totals = snapshot_selection([s.model_dump() for s in data.items], {r.id: r for r in rows})
+
+    # A chosen package is snapshotted alongside the services and added to the
+    # monthly total, so the request shows exactly what the client picked.
+    if data.package_id:
+        pkg = await db.get(Package, data.package_id)
+        if not pkg or not pkg.is_active:
+            raise HTTPException(status_code=400, detail="Package not found")
+        items = list(items) + [{
+            "kind": "package",
+            "package_id": pkg.id,
+            "name": pkg.name or {},
+            "billing_cycle": pkg.billing_cycle,
+            "price_min": pkg.price_min,
+            "price_max": pkg.price_max,
+            "qty": 1,
+        }]
+        cycle = totals.setdefault(pkg.billing_cycle, {"min": 0.0, "max": 0.0})
+        cycle["min"] = float(cycle.get("min") or 0) + float(pkg.price_min or 0)
+        cycle["max"] = float(cycle.get("max") or 0) + float(pkg.price_max or pkg.price_min or 0)
+    if not items:
+        raise HTTPException(status_code=400, detail="Choose at least one service or a package")
 
     existing = (
         await db.execute(
