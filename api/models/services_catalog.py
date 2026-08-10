@@ -44,6 +44,12 @@ class Package(Base):
     price_min: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     price_max: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # NULL → fixed price
     cover_image_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # What the package includes, as bilingual bullets: [{"ar": ..., "he": ...}]
+    features: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    # Who this package is for. "very_small" packages are only surfaced to
+    # obviously tiny businesses; "all" is the general ladder; the rest target a
+    # vertical (retail_web, local_service, clinic, education, travel).
+    audience: Mapped[str] = mapped_column(String, nullable=False, default="all", server_default="all")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -127,6 +133,8 @@ def serialize_package(pkg: Package) -> dict[str, Any]:
         "price_min": pkg.price_min,
         "price_max": pkg.price_max,
         "cover_image_url": pkg.cover_image_url,
+        "features": pkg.features or [],
+        "audience": pkg.audience or "all",
         "is_active": bool(pkg.is_active if pkg.is_active is not None else True),
         "sort_order": int(pkg.sort_order or 0),
     }

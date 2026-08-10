@@ -85,6 +85,10 @@ async def startup():
                     "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR",
                     "CREATE INDEX IF NOT EXISTS ix_usage_events_idempotency_key ON usage_events (idempotency_key)",
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN DEFAULT FALSE NOT NULL",
+                    # Packages gained bilingual feature bullets and an audience
+                    # tag after the table already shipped.
+                    "ALTER TABLE packages ADD COLUMN IF NOT EXISTS features JSON",
+                    "ALTER TABLE packages ADD COLUMN IF NOT EXISTS audience VARCHAR DEFAULT 'all' NOT NULL",
                     "CREATE TABLE IF NOT EXISTS audit_logs (id VARCHAR PRIMARY KEY, actor_user_id VARCHAR REFERENCES users(id), actor_email VARCHAR, action VARCHAR NOT NULL, resource_type VARCHAR NOT NULL, resource_id VARCHAR, suite_id VARCHAR REFERENCES suites(id), target_user_id VARCHAR REFERENCES users(id), metadata_json JSON, ip_address VARCHAR, user_agent TEXT, created_at TIMESTAMP WITH TIME ZONE DEFAULT now())",
                     "CREATE INDEX IF NOT EXISTS ix_audit_logs_created_at ON audit_logs (created_at)",
                     "CREATE INDEX IF NOT EXISTS ix_audit_logs_action ON audit_logs (action)",
