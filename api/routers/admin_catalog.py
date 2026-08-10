@@ -73,6 +73,8 @@ class PackageIn(BaseModel):
     billing_cycle: Literal["one_time", "monthly", "yearly"]
     price_min: float = Field(gt=0)
     price_max: float | None = Field(default=None, gt=0)
+    features: list[dict] | None = None
+    audience: str = "all"
     is_active: bool = True
     sort_order: int = 0
 
@@ -89,6 +91,8 @@ class PackagePatch(BaseModel):
     price_min: float | None = Field(default=None, gt=0)
     price_max: float | None = Field(default=None, gt=0)
     cover_image_url: str | None = None
+    features: list[dict] | None = None
+    audience: str | None = None
     is_active: bool | None = None
     sort_order: int | None = None
 
@@ -170,6 +174,24 @@ async def deactivate_service(
 async def list_packages(admin: User = Depends(_admin_user), db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(select(Package).order_by(Package.sort_order))).scalars().all()
     return [serialize_package(pkg) for pkg in rows]
+
+
+@router.post("/packages/seed")
+async def seed_package_ladder(
+    request: Request,
+    overwrite: bool = False,
+    admin: User = Depends(_admin_user), db: AsyncSession = Depends(get_db),
+):
+    """Insert the ready-made package ladder (idempotent; admin edits are kept)."""
+    from ..services.package_seed import seed_packages
+
+    result = await seed_packages(db, overwrite=overwrite)
+    await record_audit_log(
+        db, action="admin.package.seed", resource_type="package",
+        actor=admin, request=request, metadata=result,
+    )
+    await db.commit()
+    return result
 
 
 @router.post("/packages", status_code=201)
