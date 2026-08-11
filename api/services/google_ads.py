@@ -498,8 +498,6 @@ async def fetch_google_ads_campaigns(customer_id: str, refresh_token: str) -> di
               campaign.name,
               campaign.status,
               campaign.advertising_channel_type,
-              campaign.start_date,
-              campaign.end_date,
               metrics.impressions,
               metrics.clicks,
               metrics.cost_micros,
@@ -596,8 +594,9 @@ async def fetch_google_ads_campaigns(customer_id: str, refresh_token: str) -> di
             "name": campaign.get("name") or f"Campaign {campaign_id}",
             "status": campaign.get("status"),
             "channel_type": campaign.get("advertisingChannelType"),
-            "start_date": campaign.get("startDate"),
-            "end_date": campaign.get("endDate"),
+            # Removed from the campaign resource in Google Ads API v24.
+            "start_date": None,
+            "end_date": None,
             "metrics": _metrics(row),
             "ad_groups": groups_by_campaign.get(campaign_id, []),
         })
