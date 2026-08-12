@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import get_db
@@ -15,7 +15,8 @@ from ..core.security import get_current_user, hash_password
 from ..models.admin import AppTextOverride, AuditLog, CreativeAsset, ProviderUsageEvent
 from ..models.billing import UsageEvent
 from ..models.generation_job import GenerationJob
-from ..models.suite import Suite
+from ..models.services_catalog import Lead
+from ..models.suite import Suite, SuiteMember
 from ..models.user import User
 from ..services.admin_audit import (
     period_bounds,
@@ -393,6 +394,60 @@ async def bulk_deactivate_users(
         )
     await db.commit()
     return {"ok": True, "deactivated": deactivated, "skipped_self": admin.id in set(payload.user_ids)}
+
+
+@router.delete("/users/{user_id}/permanent")
+async def hard_delete_user(
+    user_id: str,
+    request: Request,
+    confirm_email: str = Query(..., description="Must equal the user's email — guards against a mis-click"),
+    admin: User = Depends(_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Irreversibly delete a user row. Deactivation (DELETE /users/{id}) is the reversible option.
+
+    Refuses while the user still owns suites: Suite.owner_id is NOT NULL, so the
+    delete would either fail or require destroying the suites and everything
+    under them. The admin must delete or transfer those suites first — that stays
+    a conscious, separate decision rather than a hidden cascade.
+    """
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Admin cannot delete their own account")
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if (confirm_email or "").strip().lower() != (user.email or "").strip().lower():
+        raise HTTPException(status_code=400, detail="confirm_email does not match this user's email")
+
+    owned = (await db.execute(select(func.count(Suite.id)).where(Suite.owner_id == user_id))).scalar() or 0
+    if owned:
+        raise HTTPException(
+            status_code=409,
+            detail=f"User still owns {owned} suite(s). Delete or transfer them before permanent deletion.",
+        )
+
+    email = user.email
+    # Detach the nullable references so the row can go without taking history
+    # (audit logs, jobs, usage) with it.
+    await db.execute(update(AuditLog).where(AuditLog.actor_user_id == user_id).values(actor_user_id=None))
+    await db.execute(update(AuditLog).where(AuditLog.target_user_id == user_id).values(target_user_id=None))
+    await db.execute(update(GenerationJob).where(GenerationJob.user_id == user_id).values(user_id=None))
+    await db.execute(update(CreativeAsset).where(CreativeAsset.created_by_user_id == user_id).values(created_by_user_id=None))
+    await db.execute(update(Lead).where(Lead.user_id == user_id).values(user_id=None))
+    await db.execute(delete(SuiteMember).where(SuiteMember.user_id == user_id))
+
+    await record_audit_log(
+        db,
+        action="admin.user.hard_delete",
+        resource_type="user",
+        resource_id=user_id,
+        actor=admin,
+        request=request,
+        metadata={"email": email},
+    )
+    await db.delete(user)
+    await db.commit()
+    return {"ok": True, "deleted": True, "email": email}
 
 
 @router.get("/users/{user_id}")
