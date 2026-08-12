@@ -586,7 +586,12 @@ async def recommendations(current_user: User = Depends(get_current_user), db: As
 
     cached = lead.recommendations if isinstance(lead.recommendations, dict) else None
     # A cached answer computed from the brand alone is stale once the plan
-    # exists — the whole point is to propose against the planned work.
+    # exists — the whole point is to propose against the planned work. A cache
+    # written before packages existed has no package key at all; without this
+    # check those leads never get packages proposed, because the branch below
+    # short-circuits forever.
+    if cached and "recommended_package_ids" not in cached:
+        cached = None
     if cached and (cached.get("plan_based") or not has_plan):
         return cached
 
