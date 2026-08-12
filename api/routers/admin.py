@@ -9,13 +9,12 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.database import get_db
+from ..core.database import Base, get_db
 from ..core.config import settings
 from ..core.security import get_current_user, hash_password
 from ..models.admin import AppTextOverride, AuditLog, CreativeAsset, ProviderUsageEvent
 from ..models.billing import UsageEvent
 from ..models.generation_job import GenerationJob
-from ..models.services_catalog import Lead
 from ..models.suite import Suite, SuiteMember
 from ..models.user import User
 from ..services.admin_audit import (
@@ -427,13 +426,21 @@ async def hard_delete_user(
         )
 
     email = user.email
-    # Detach the nullable references so the row can go without taking history
-    # (audit logs, jobs, usage) with it.
-    await db.execute(update(AuditLog).where(AuditLog.actor_user_id == user_id).values(actor_user_id=None))
-    await db.execute(update(AuditLog).where(AuditLog.target_user_id == user_id).values(target_user_id=None))
-    await db.execute(update(GenerationJob).where(GenerationJob.user_id == user_id).values(user_id=None))
-    await db.execute(update(CreativeAsset).where(CreativeAsset.created_by_user_id == user_id).values(created_by_user_id=None))
-    await db.execute(update(Lead).where(Lead.user_id == user_id).values(user_id=None))
+    # Detach every nullable reference so the row can go without taking history
+    # (audit logs, jobs, posts, usage) with it. Derived from the mapper rather
+    # than hand-listed: a hand-written list silently goes stale the moment a
+    # model gains a user FK, and the failure only shows up as a 500 here.
+    # The NOT NULL referrers are the two handled explicitly: suites.owner_id is
+    # refused above, and suite_members rows are deleted below.
+    for table in Base.metadata.sorted_tables:
+        for column in table.columns:
+            if not any(fk.column.table.name == "users" for fk in column.foreign_keys):
+                continue
+            if table.name == "suite_members" or not column.nullable:
+                continue
+            await db.execute(
+                update(table).where(column == user_id).values({column.name: None})
+            )
     await db.execute(delete(SuiteMember).where(SuiteMember.user_id == user_id))
 
     await record_audit_log(
