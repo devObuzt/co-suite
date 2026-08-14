@@ -1697,17 +1697,20 @@ def copy_remotion_runtime(work_dir: Path) -> tuple[Path, Path]:
     for filename in ("AiMontage.tsx", "Root.tsx", "index.ts"):
         shutil.copy2(WEB_ROOT / "src" / "remotion" / filename, src_dir / filename)
 
-    # Copy the modules AiMontage imports via relative paths (resolved next to
-    # AiMontage.tsx): custom transition presentations and the OneShare Magic
-    # scene components.
-    for module_dir in ("transitions", "magic"):
-        source_module = WEB_ROOT / "src" / "remotion" / module_dir
-        if source_module.exists():
-            target_module = src_dir / module_dir
-            target_module.mkdir(parents=True, exist_ok=True)
-            for tsx in source_module.iterdir():
-                if tsx.is_file():
-                    shutil.copy2(tsx, target_module / tsx.name)
+    # Copy every module AiMontage imports via relative paths (resolved next to
+    # AiMontage.tsx): transition presentations, and the per-template scene
+    # components. Copy whatever directories exist rather than naming them — a
+    # hardcoded list silently drops a new template's directory, the bundler then
+    # fails to resolve its import, and the whole Remotion render falls back to
+    # the bare ffmpeg montage. That is how the Classic/Minimal templates shipped
+    # broken: they were added without being added here.
+    remotion_root = WEB_ROOT / "src" / "remotion"
+    for source_module in sorted(p for p in remotion_root.iterdir() if p.is_dir()):
+        target_module = src_dir / source_module.name
+        target_module.mkdir(parents=True, exist_ok=True)
+        for tsx in source_module.iterdir():
+            if tsx.is_file():
+                shutil.copy2(tsx, target_module / tsx.name)
 
     # The Remotion bundler resolves bare imports (e.g. `@remotion/transitions`)
     # by walking up from the entry file's dir for a node_modules. This isolated

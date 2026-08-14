@@ -1281,3 +1281,24 @@ def test_remotion_component_renders_brand_stage_floor():
     assert "height: '28%'" in source
     assert "opacity: 0.5" in source
     assert "${BRAND_COLOR}2e" in source
+
+
+def test_copy_remotion_runtime_copies_every_scene_module(tmp_path):
+    """Every directory under src/remotion must reach the isolated work dir.
+
+    AiMontage imports its scene components by relative path. A module the copy
+    misses does not fail loudly — the Remotion bundler cannot resolve the
+    import, the whole render errors, and the pipeline silently falls back to the
+    bare ffmpeg montage. That is how the Classic/Minimal templates shipped
+    unusable: they were added to the app but not to the copy list.
+    """
+    src_dir, _public_dir = video_montage.copy_remotion_runtime(tmp_path)
+
+    remotion_root = video_montage.WEB_ROOT / "src" / "remotion"
+    expected = {p.name for p in remotion_root.iterdir() if p.is_dir()}
+    assert expected, "no scene modules found to copy — check WEB_ROOT"
+    missing = {name for name in expected if not (src_dir / name).is_dir()}
+    assert not missing, f"scene modules missing from the render work dir: {sorted(missing)}"
+
+    # Classic/Minimal live here and are the templates that regressed.
+    assert (src_dir / "classic" / "ClassicScene.tsx").exists()
