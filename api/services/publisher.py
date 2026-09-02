@@ -19,6 +19,7 @@ from ..core.config import settings
 from ..core.external_calls import ExternalCall, external_call
 from ..models.content import ContentPost, PostFormat, PostStatus
 from .media_storage import platform_media_for_post, upload_static_path
+from .youtube_publish import publish_to_youtube
 
 log = logging.getLogger(__name__)
 GRAPH = "https://graph.facebook.com/v22.0"
@@ -229,5 +230,14 @@ def publish_post(post: ContentPost, connections: dict, platforms: list[str], all
             except Exception as e:
                 log.exception("IG publish failed")
                 results["instagram_error"] = str(e)
+
+    # ── YouTube ───────────────────────────────────────────────────────────────
+    # Deliberately does not go through _resolve_url(): YouTube takes bytes, not a
+    # link, so youtube_publish streams the file itself. See that module.
+    if "youtube" in platforms:
+        if fmt != PostFormat.video:
+            results["youtube_error"] = "YouTube publishing needs a video post."
+        else:
+            results.update(publish_to_youtube(post, connections))
 
     return results

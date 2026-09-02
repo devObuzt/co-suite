@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     google_ads_developer_token: str = ""
     google_ads_client_id: str = ""
     google_ads_client_secret: str = ""
+
+    # Separate Cloud project from Google Ads on purpose — see youtube_oauth.py.
+    youtube_client_id: str = ""
+    youtube_client_secret: str = ""
     google_ads_login_customer_id: str = ""
     google_ads_customer_id: str = ""
     google_ads_refresh_token: str = ""

@@ -16,6 +16,11 @@ from ..services.meta_oauth import (
     fetch_page_token, verify_token
 )
 from ..services.meta_ads_manager import fetch_campaigns
+from ..services.youtube_oauth import (
+    get_youtube_oauth_url,
+    exchange_youtube_code,
+    fetch_authorized_channel,
+)
 from ..services.google_ads import (
     get_google_ads_oauth_url,
     exchange_google_ads_code,
@@ -228,6 +233,57 @@ async def google_select_customer(
     flag_modified(suite, "connections")
     await db.commit()
     return {"ok": True, "connections": _safe_connections(connections)}
+
+
+# ── YouTube ───────────────────────────────────────────────────────────────────
+#
+# No select-channel step, unlike Google Ads: a YouTube authorization binds to the
+# single channel the user picked in Google's own chooser, so the callback already
+# knows the target. See youtube_oauth.fetch_authorized_channel.
+
+@router.get("/{suite_id}/youtube/auth-url")
+async def youtube_auth_url(
+    suite_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_suite(suite_id, current_user, db)
+    try:
+        return {"url": get_youtube_oauth_url(suite.id)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/youtube/callback")
+async def youtube_callback(
+    data: CallbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    suite = await _get_suite(data.suite_id, current_user, db)
+    try:
+        token_data = await exchange_youtube_code(data.code)
+        refresh_token = token_data.get("refresh_token")
+        access_token = token_data.get("access_token")
+        if not refresh_token:
+            raise RuntimeError(
+                "Google did not return a refresh token. Disconnect and approve offline access again."
+            )
+        channel = await fetch_authorized_channel(access_token)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"YouTube OAuth failed: {e}")
+
+    connections = dict(suite.connections or {})
+    connections["youtube"] = {
+        "connected": True,
+        **channel,
+        "refresh_token": refresh_token,
+    }
+    suite.connections = connections
+    flag_modified(suite, "connections")
+    await db.commit()
+
+    return {"ok": True, "channel": channel, "connections": _safe_connections(connections)}
 
 
 # ── Disconnect ────────────────────────────────────────────────────────────────
