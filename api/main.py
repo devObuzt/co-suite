@@ -11,6 +11,7 @@ from .core.database import AsyncSessionLocal, engine, Base
 from .routers import auth, suites, onboarding
 from .routers import content
 from .routers import connections
+from .routers import internal
 from .routers import billing
 from .routers import analytics
 from .routers import product_bulk
@@ -85,6 +86,12 @@ async def startup():
                     "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR",
                     "CREATE INDEX IF NOT EXISTS ix_usage_events_idempotency_key ON usage_events (idempotency_key)",
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN DEFAULT FALSE NOT NULL",
+                    # Manzuma link: accounts becomes the identity, and a suite
+                    # becomes the business it belongs to.
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS manzuma_user_id VARCHAR",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_manzuma_user_id ON users (manzuma_user_id)",
+                    "ALTER TABLE suites ADD COLUMN IF NOT EXISTS organization_id VARCHAR",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_suites_organization_id ON suites (organization_id)",
                     # Packages gained bilingual feature bullets and an audience
                     # tag after the table already shipped.
                     "ALTER TABLE packages ADD COLUMN IF NOT EXISTS features JSON",
@@ -211,6 +218,9 @@ app.include_router(video_montage.router, prefix="/api/v1")
 app.include_router(media.router, prefix="/api/v1")
 app.include_router(funnel.router, prefix="/api/v1")
 app.include_router(admin_catalog.router, prefix="/api/v1")
+# Service-key only, and deliberately outside /api/v1: it is not part of the
+# product API and no browser should ever reach it.
+app.include_router(internal.router)
 
 
 @app.get("/health")

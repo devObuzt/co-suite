@@ -10,8 +10,15 @@ from sqlalchemy import select
 from .config import settings
 from .database import get_db
 from ..models.user import User
+from ..services.manzuma_accounts import ManzumaSession, verify_session
+from ..services.manzuma_link import resolve_user
 
 bearer_scheme = HTTPBearer()
+# The session cookie accounts sets on .manzuma.app, production and local.
+MANZUMA_COOKIE_NAMES = ("__Secure-manzuma.session", "manzuma.session")
+# Optional, because a browser carrying the Manzuma cookie has no bearer token
+# to offer and must not be turned away before we look at the cookie.
+optional_bearer = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -129,11 +136,55 @@ def frozen_path_allowed(approval_status: str, method: str, path: str) -> bool:
     return _path_in(path, FROZEN_ALLOWED_PREFIXES)
 
 
+def enforce_status(user: User, method: str, path: str) -> User:
+    """The frozen/funnel gate, unchanged — extracted so both branches share it."""
+    if not user.is_super_admin and not frozen_path_allowed(
+        user.approval_status or "frozen", method, path
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="account_frozen")
+    return user
+
+
+async def manzuma_session_or_none(request: Request) -> Optional[ManzumaSession]:
+    """The verified Manzuma session behind this request, if there is one.
+
+    The single source for "who is this, and which businesses are theirs" — an
+    endpoint that decides something about a business must ask here rather than
+    believe an id in a request body.
+    """
+    if not settings.manzuma_sso:
+        return None
+
+    cookie = request.headers.get("cookie")
+    # Only our own cookie is worth a round trip — and worth handing to anybody.
+    if not cookie or not any(name in cookie for name in MANZUMA_COOKIE_NAMES):
+        return None
+
+    return await verify_session(cookie=cookie, bearer=None)
+
+
+async def manzuma_user_or_none(request: Request, db) -> Optional[User]:
+    """The Manzuma identity for this request, or None to try the legacy path."""
+    session = await manzuma_session_or_none(request)
+    if not session:
+        return None
+
+    org = session.organizations[0] if session.organizations else None
+    return await resolve_user(db, session, org)
+
+
 async def get_current_user(
     request: Request,
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_bearer),
     db: AsyncSession = Depends(get_db),
 ) -> User:
+    linked = await manzuma_user_or_none(request, db)
+    if linked:
+        return enforce_status(linked, request.method, request.url.path)
+
+    if not credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
     token = credentials.credentials
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
@@ -147,8 +198,4 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    if not user.is_super_admin and not frozen_path_allowed(
-        user.approval_status or "frozen", request.method, request.url.path
-    ):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="account_frozen")
-    return user
+    return enforce_status(user, request.method, request.url.path)

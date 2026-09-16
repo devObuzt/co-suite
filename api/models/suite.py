@@ -27,6 +27,9 @@ class Suite(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     slug: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     status: Mapped[SuiteStatus] = mapped_column(Enum(SuiteStatus), default=SuiteStatus.onboarding)
+    # The Manzuma business this suite IS. One suite per business — the unique
+    # constraint is what makes "suite = business" true rather than aspirational.
+    organization_id: Mapped[Optional[str]] = mapped_column(String, unique=True, nullable=True, index=True)
 
     # Brand profile (JSON — populated during onboarding)
     brand: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

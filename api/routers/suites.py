@@ -1,11 +1,11 @@
 import re
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field
 from typing import Optional
 from ..core.database import get_db
-from ..core.security import get_current_user
+from ..core.security import get_current_user, manzuma_session_or_none
 from ..models.user import User
 from ..models.suite import Suite, SuiteMember, SuiteStatus, MemberRole
 from ..services.media_storage import storage_status, test_public_storage
@@ -114,6 +114,63 @@ async def create_suite(
     await db.commit()
     await db.refresh(suite)
     return serialize_suite(suite)
+
+
+class LinkOrganizationRequest(BaseModel):
+    organization_id: str = Field(..., min_length=1)
+
+
+LINKING_ROLES = ("owner", "admin")
+
+
+@router.post("/link-organization")
+async def link_organization(
+    payload: LinkOrganizationRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Make this suite the strategy of one Manzuma business.
+
+    Explicit and one-time: the link decides whose campaigns, whose tokens and
+    whose billing this suite belongs to, so a business that already has a suite
+    is refused, and an owner with two unlinked suites is asked rather than
+    guessed at.
+
+    The business id arrives in the body, so it proves nothing: the caller's own
+    Manzuma session decides whether that business is theirs at all. Without
+    this check, anyone could bind their suite to somebody else's business and
+    every product would then read their strategy as that business's.
+    """
+    organization_id = payload.organization_id
+
+    session = await manzuma_session_or_none(request)
+    membership = (
+        next((org for org in session.organizations if org.id == organization_id), None)
+        if session
+        else None
+    )
+    if not membership or membership.role not in LINKING_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="not_organization_admin")
+
+    taken = (
+        await db.execute(select(Suite).where(Suite.organization_id == organization_id))
+    ).scalar_one_or_none()
+    if taken:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="organization_already_linked")
+
+    owned = (
+        await db.execute(
+            select(Suite).where(Suite.owner_id == current_user.id, Suite.organization_id.is_(None))
+        )
+    ).scalars().all()
+    if len(owned) != 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ambiguous_suite")
+
+    owned[0].organization_id = organization_id
+    await db.commit()
+    print(f"[link] suite {owned[0].id} -> org {organization_id} by user {current_user.id}")
+    return {"ok": True, "suite_id": owned[0].id}
 
 
 @router.get("/{suite_id}/memory")
