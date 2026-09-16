@@ -20,6 +20,10 @@ class User(Base):
     # product API (see core.security.frozen_path_allowed)
     approval_status: Mapped[str] = mapped_column(String, default="frozen", server_default="frozen", nullable=False)
     phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Set the first time this person signs in with a Manzuma session. Nullable
+    # because the link happens per user as people arrive, not in one migration
+    # night.
+    manzuma_user_id: Mapped[Optional[str]] = mapped_column(String, unique=True, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

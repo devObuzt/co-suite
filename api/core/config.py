@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     # Frontend — comma-separated list of allowed origins
     frontend_url: str = "http://localhost:3000"
 
+    # Manzuma link — see docs/superpowers/specs/2026-09-16-suite-manzuma-identity-link-design.md
+    manzuma_accounts_url: str = "https://accounts.manzuma.app"
+    manzuma_service_key: str = ""      # our key when we call the accounts vault
+    manzuma_sso: bool = False          # flip only after the path is proven
+    internal_service_keys: str = ""    # "oneshare:key,heartbeat:key" — products calling us
+
     # AI Keys
     anthropic_api_key: str = ""
     openai_api_key: str = ""
