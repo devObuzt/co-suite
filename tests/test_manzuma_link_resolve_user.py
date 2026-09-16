@@ -46,7 +46,11 @@ class FakeDB:
 
 
 SESSION = ManzumaSession(
-    user_id="u1", email="W@Example.com", phone="050-123-4567", name="Wisam", organizations=()
+    user_id="u1", email="W@Example.com", phone="050-123-4567", name="Wisam", organizations=(),
+    email_verified=True, phone_verified=True,
+)
+UNVERIFIED = ManzumaSession(
+    user_id="u2", email="W@Example.com", phone="050-123-4567", name="Impostor", organizations=(),
 )
 ORG = ManzumaOrg(
     id="o1", name="Afkar", role="owner",
@@ -117,3 +121,16 @@ async def test_a_new_user_without_a_cosuite_subscription_stays_frozen():
     user = await resolve_user(db, SESSION, no_sub)
 
     assert user.approval_status == "frozen"
+
+
+@pytest.mark.asyncio
+async def test_an_unverified_email_never_adopts_somebody_elses_account():
+    legacy = User(id="local9", email="w@example.com", hashed_password="x", full_name="Wisam")
+    db = FakeDB({"email": legacy, "phone": legacy})
+
+    user = await resolve_user(db, UNVERIFIED, ORG)
+
+    assert user is not legacy          # the impostor gets their own empty row
+    assert db.asked == ["manzuma_user_id"]  # neither identifier was even looked up
+    assert db.added == [user]
+    assert user.is_verified is False

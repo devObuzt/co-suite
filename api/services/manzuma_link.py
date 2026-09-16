@@ -68,13 +68,16 @@ async def resolve_user(db, session: ManzumaSession, org: Optional[ManzumaOrg]) -
     if found:
         return found
 
+    # Only an identifier accounts itself proved may adopt an existing account.
+    # Without this, anyone who signs up at accounts claiming someone else's
+    # email walks into that person's suite, their brand and their connections.
     email = normalize_email(session.email)
-    if email:
+    if email and session.email_verified:
         found = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
 
     if not found:
         phone = normalize_phone(session.phone)
-        if phone:
+        if phone and session.phone_verified:
             found = (await db.execute(select(User).where(User.phone == phone))).scalar_one_or_none()
 
     if found:
@@ -91,7 +94,7 @@ async def resolve_user(db, session: ManzumaSession, org: Optional[ManzumaOrg]) -
     )
     created.manzuma_user_id = session.user_id
     created.approval_status = approval_for(org)
-    created.is_verified = True
+    created.is_verified = bool(session.email_verified or session.phone_verified)
     db.add(created)
     await db.commit()
     await db.refresh(created)

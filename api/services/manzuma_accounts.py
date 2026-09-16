@@ -50,6 +50,10 @@ class ManzumaSession:
     phone: Optional[str]
     name: Optional[str]
     organizations: tuple[ManzumaOrg, ...]
+    # Whether accounts itself proved these identifiers. Default False: an
+    # identifier nobody vouched for must never adopt an existing account.
+    email_verified: bool = False
+    phone_verified: bool = False
 
 
 _session_cache: dict[str, tuple[float, Optional[ManzumaSession]]] = {}
@@ -87,6 +91,8 @@ def _parse(payload: dict[str, Any]) -> Optional[ManzumaSession]:
         phone=user.get("phone"),
         name=user.get("name"),
         organizations=orgs,
+        email_verified=bool(user.get("emailVerified")),
+        phone_verified=bool(user.get("phoneVerified")),
     )
 
 
