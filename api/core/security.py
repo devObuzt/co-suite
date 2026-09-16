@@ -10,7 +10,7 @@ from sqlalchemy import select
 from .config import settings
 from .database import get_db
 from ..models.user import User
-from ..services.manzuma_accounts import verify_session
+from ..services.manzuma_accounts import ManzumaSession, verify_session
 from ..services.manzuma_link import resolve_user
 
 bearer_scheme = HTTPBearer()
@@ -145,8 +145,13 @@ def enforce_status(user: User, method: str, path: str) -> User:
     return user
 
 
-async def manzuma_user_or_none(request: Request, db) -> Optional[User]:
-    """The Manzuma identity for this request, or None to try the legacy path."""
+async def manzuma_session_or_none(request: Request) -> Optional[ManzumaSession]:
+    """The verified Manzuma session behind this request, if there is one.
+
+    The single source for "who is this, and which businesses are theirs" — an
+    endpoint that decides something about a business must ask here rather than
+    believe an id in a request body.
+    """
     if not settings.manzuma_sso:
         return None
 
@@ -155,7 +160,12 @@ async def manzuma_user_or_none(request: Request, db) -> Optional[User]:
     if not cookie or not any(name in cookie for name in MANZUMA_COOKIE_NAMES):
         return None
 
-    session = await verify_session(cookie=cookie, bearer=None)
+    return await verify_session(cookie=cookie, bearer=None)
+
+
+async def manzuma_user_or_none(request: Request, db) -> Optional[User]:
+    """The Manzuma identity for this request, or None to try the legacy path."""
+    session = await manzuma_session_or_none(request)
     if not session:
         return None
 
