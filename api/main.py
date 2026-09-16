@@ -11,6 +11,7 @@ from .core.database import AsyncSessionLocal, engine, Base
 from .routers import auth, suites, onboarding
 from .routers import content
 from .routers import connections
+from .routers import internal
 from .routers import billing
 from .routers import analytics
 from .routers import product_bulk
@@ -217,6 +218,9 @@ app.include_router(video_montage.router, prefix="/api/v1")
 app.include_router(media.router, prefix="/api/v1")
 app.include_router(funnel.router, prefix="/api/v1")
 app.include_router(admin_catalog.router, prefix="/api/v1")
+# Service-key only, and deliberately outside /api/v1: it is not part of the
+# product API and no browser should ever reach it.
+app.include_router(internal.router)
 
 
 @app.get("/health")
