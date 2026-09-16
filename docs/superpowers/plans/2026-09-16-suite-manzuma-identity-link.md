@@ -566,7 +566,7 @@ git commit -m "feat(link): rules for resolving a session to a user and a suite"
 
 **Interfaces:**
 - Consumes: Task 3's helpers, `ManzumaSession` (Task 2), `User` model (Task 1).
-- Produces: `async def resolve_user(db, session: ManzumaSession, org: ManzumaOrg | None) -> User` — returns an existing adopted user or a newly created one, always with `manzuma_user_id` set.
+- Produces: `async def resolve_user(db, session: ManzumaSession, org: ManzumaOrg | None) -> User` — returns an existing adopted user or a newly created one, always with `manzuma_user_id` set. Adoption by email or phone happens **only** when the session carries `email_verified` / `phone_verified` from accounts; otherwise a new account is created. `ManzumaSession` carries both flags, defaulting to `False`.
 
 - [ ] **Step 1: Write the failing test**
 

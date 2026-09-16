@@ -117,10 +117,19 @@ written to logs beyond the resolved user id.
 **Resolving the user**, in order:
 
 1. `users.manzuma_user_id` matches the session's user id → that user.
-2. `users.email` matches case-insensitively → adopt: write `manzuma_user_id`.
-3. `users.phone` matches in E.164 → adopt.
+2. `users.email` matches case-insensitively **and accounts says the email is
+   verified** → adopt: write `manzuma_user_id`.
+3. `users.phone` matches in E.164 **and accounts says the phone is verified** →
+   adopt.
 4. Otherwise create a user from the session (email, name, phone) with no
    usable password hash.
+
+The two verification conditions are not decoration. Adoption hands over an
+existing suite — its brand, its strategy, its connected accounts — so it may
+only follow an identifier this platform itself proved. Accounts publishes
+`emailVerified` and `phoneVerified` on the session for exactly this, and a
+missing flag reads as *not verified*: the impostor gets their own empty account
+instead of somebody else's business.
 
 `approval_status` is **not** forced to `approved`. An adopted user keeps the
 status it already had, and a newly created one is approved only when the
