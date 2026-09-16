@@ -116,6 +116,45 @@ async def create_suite(
     return serialize_suite(suite)
 
 
+class LinkOrganizationRequest(BaseModel):
+    organization_id: str = Field(..., min_length=1)
+
+
+@router.post("/link-organization")
+async def link_organization(
+    payload: LinkOrganizationRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Make this suite the strategy of one Manzuma business.
+
+    Explicit and one-time: the link decides whose campaigns, whose tokens and
+    whose billing this suite belongs to, so a business that already has a suite
+    is refused, and an owner with two unlinked suites is asked rather than
+    guessed at.
+    """
+    organization_id = payload.organization_id
+
+    taken = (
+        await db.execute(select(Suite).where(Suite.organization_id == organization_id))
+    ).scalar_one_or_none()
+    if taken:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="organization_already_linked")
+
+    owned = (
+        await db.execute(
+            select(Suite).where(Suite.owner_id == current_user.id, Suite.organization_id.is_(None))
+        )
+    ).scalars().all()
+    if len(owned) != 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ambiguous_suite")
+
+    owned[0].organization_id = organization_id
+    await db.commit()
+    print(f"[link] suite {owned[0].id} -> org {organization_id} by user {current_user.id}")
+    return {"ok": True, "suite_id": owned[0].id}
+
+
 @router.get("/{suite_id}/memory")
 async def get_suite_memory(
     suite_id: str,
