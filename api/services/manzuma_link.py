@@ -68,12 +68,19 @@ async def resolve_user(db, session: ManzumaSession, org: Optional[ManzumaOrg]) -
     if found:
         return found
 
-    # Only an identifier accounts itself proved may adopt an existing account.
-    # Without this, anyone who signs up at accounts claiming someone else's
-    # email walks into that person's suite, their brand and their connections.
+    # The email is looked up either way: whether we may ADOPT that row depends
+    # on accounts vouching for the address, but whether the address is already
+    # taken decides what we can insert — `users.email` is unique, and creating
+    # a second row with it crashes the sign-in.
     email = normalize_email(session.email)
-    if email and session.email_verified:
-        found = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    taken_by = None
+    if email:
+        taken_by = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+        # Only an identifier accounts itself proved may adopt an existing
+        # account. Without this, anyone who signs up at accounts claiming
+        # somebody's email walks into their suite, brand and connections.
+        if session.email_verified:
+            found = taken_by
 
     if not found:
         phone = normalize_phone(session.phone)
@@ -86,8 +93,13 @@ async def resolve_user(db, session: ManzumaSession, org: Optional[ManzumaOrg]) -
         await db.refresh(found)
         return found
 
+    # An address we may not adopt is also an address we may not reuse: the new
+    # account gets a placeholder, and the person keeps a way in while the
+    # verified identifier is still theirs to prove.
+    new_email = email if (email and taken_by is None) else f"{session.user_id}@manzuma.local"
+
     created = User(
-        email=email or f"{session.user_id}@manzuma.local",
+        email=new_email,
         hashed_password="",
         full_name=session.name or email or "Manzuma user",
         phone=normalize_phone(session.phone),

@@ -130,7 +130,10 @@ async def test_an_unverified_email_never_adopts_somebody_elses_account():
 
     user = await resolve_user(db, UNVERIFIED, ORG)
 
-    assert user is not legacy          # the impostor gets their own empty row
-    assert db.asked == ["manzuma_user_id"]  # neither identifier was even looked up
+    assert user is not legacy                      # the impostor gets their own row
+    assert db.asked == ["manzuma_user_id", "email"]  # looked up, never adopted
     assert db.added == [user]
     assert user.is_verified is False
+    # And the taken address is not reused: users.email is unique, and a second
+    # row carrying it would crash the sign-in instead of refusing it.
+    assert user.email == "u2@manzuma.local"
