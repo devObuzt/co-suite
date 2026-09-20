@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,8 +16,19 @@ class FakeDb:
         self.committed = True
 
 
+async def _noop_async(*_args, **_kwargs):
+    return None
+
+
+async def _async_value(value):
+    return value
+
+
 @pytest.mark.asyncio
-async def test_paid_plan_routes_generate_save_and_refetch_without_erasing_social_data(monkeypatch):
+async def test_paid_plan_generate_enqueues_a_job_instead_of_running_inline(monkeypatch):
+    """Generation used to run inside the request, so closing the tab aborted it
+    and the user lost the run — the only write happened at the very end. The
+    route must now enqueue a durable job and return immediately."""
     suite = Suite(
         id="suite-paid-route",
         owner_id="user-paid-route",
@@ -32,57 +44,116 @@ async def test_paid_plan_routes_generate_save_and_refetch_without_erasing_social
         full_name="Paid Owner",
     )
     db = FakeDb()
-    provider_calls = []
+    created = []
+    generator_ran = []
 
     async def fake_get_owned_suite(*_args, **_kwargs):
         return suite
 
-    async def fake_generate_paid_content_work_plan(*_args, **_kwargs):
-        return {
-            "version": "paid_content_work_plan_v2",
-            "status": "ready",
-            "stages": [{"key": "awareness", "required_count": 1}],
-            "candidates": {
-                "awareness": [
-                    {
-                        "id": "awareness-1",
-                        "stage": "awareness",
-                        "title": "فكرة الوعي",
-                        "description": "وصف مختصر",
-                        "recommended_format": "ai_video",
-                        "provider": "openai",
-                    },
-                    {
-                        "id": "awareness-2",
-                        "stage": "awareness",
-                        "title": "فكرة وعي ثانية",
-                        "description": "وصف مختصر ثانٍ",
-                        "recommended_format": "carousel",
-                        "provider": "anthropic",
-                    },
-                ]
-            },
-            "selected_ids": ["awareness-1"],
-            "warnings": [],
-        }
+    async def fake_generate(*_args, **_kwargs):
+        generator_ran.append(True)
+        return {}
 
-    async def fake_record_provider_usage(_db, **kwargs):
-        provider_calls.append(kwargs)
-
-    async def fake_record_audit_log(*_args, **_kwargs):
+    async def fake_get_active_job(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
-    monkeypatch.setattr(marketing_plans, "generate_paid_content_work_plan", fake_generate_paid_content_work_plan)
-    monkeypatch.setattr(marketing_plans, "record_provider_usage", fake_record_provider_usage)
-    monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
+    async def fake_create_job(_db, **kwargs):
+        created.append(kwargs)
+        return SimpleNamespace(id="job-paid-1", user_id=user.id)
 
-    generated = await marketing_plans.generate_marketing_paid_content_plan(
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    monkeypatch.setattr(marketing_plans, "generate_paid_content_work_plan", fake_generate)
+    monkeypatch.setattr(marketing_plans, "get_active_job", fake_get_active_job)
+    monkeypatch.setattr(marketing_plans, "create_job", fake_create_job)
+    monkeypatch.setattr(marketing_plans, "record_audit_log", _noop_async)
+    monkeypatch.setattr(marketing_plans, "serialize_job", lambda job, **kw: {"id": getattr(job, "id", None)})
+
+    response = await marketing_plans.generate_marketing_paid_content_plan(
         suite.id,
         marketing_plans.GeneratePaidContentPlanRequest(language="ar"),
         user,
         db,
     )
+
+    assert not generator_ran, "the request must not run the generator inline any more"
+    assert created and created[0]["job_type"].value == "paid_content_plan"
+    assert response["status"] == "generating"
+    # The client polls this blob, so it has to say a run is in flight.
+    assert suite.strategy["marketing_action_plan"]["paid_content_plan"]["status"] == "generating"
+    # Queueing a run must not wipe the sibling social plan.
+    assert suite.strategy["marketing_action_plan"]["social_ideas_plan"] == {"selected_ids": ["social-1"]}
+    assert db.committed is True
+
+
+@pytest.mark.asyncio
+async def test_paid_plan_generate_does_not_queue_a_second_job(monkeypatch):
+    """A run already in flight must not be duplicated by an impatient click."""
+    suite = Suite(
+        id="suite-paid-dedupe",
+        owner_id="user-paid-route",
+        name="Connec",
+        slug="connec-paid-dedupe",
+        brand={"name": "Connec"},
+        strategy={},
+    )
+    user = User(id="user-paid-route", email="p@e.com", hashed_password="h", full_name="P")
+    db = FakeDb()
+    created = []
+
+    async def fake_get_active_job(*_args, **_kwargs):
+        return SimpleNamespace(id="job-already-running", user_id=user.id)
+
+    async def fake_create_job(_db, **kwargs):
+        created.append(kwargs)
+        return SimpleNamespace(id="job-2", user_id=user.id)
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", lambda *a, **k: _async_value(suite))
+    monkeypatch.setattr(marketing_plans, "get_active_job", fake_get_active_job)
+    monkeypatch.setattr(marketing_plans, "create_job", fake_create_job)
+    monkeypatch.setattr(marketing_plans, "serialize_job", lambda job, **kw: {"id": getattr(job, "id", None)})
+
+    response = await marketing_plans.generate_marketing_paid_content_plan(
+        suite.id, marketing_plans.GeneratePaidContentPlanRequest(language="ar"), user, db
+    )
+
+    assert created == [], "a second job must not be queued while one is active"
+    assert response["status"] == "generating"
+
+
+@pytest.mark.asyncio
+async def test_paid_plan_selection_saves_without_erasing_social_data(monkeypatch):
+    """The original regression guard: saving a paid selection must leave the
+    sibling social_ideas_plan untouched."""
+    suite = Suite(
+        id="suite-paid-sel",
+        owner_id="user-paid-route",
+        name="Connec",
+        slug="connec-paid-sel",
+        brand={"name": "Connec", "audience_languages": ["ar"]},
+        strategy={
+            "marketing_action_plan": {
+                "social_ideas_plan": {"selected_ids": ["social-1"]},
+                "paid_content_plan": {
+                    "version": "paid_content_work_plan_v2",
+                    "status": "ready",
+                    "stages": [{"key": "awareness", "required_count": 1}],
+                    "candidates": {
+                        "awareness": [
+                            {"id": "awareness-1", "stage": "awareness", "title": "فكرة الوعي"},
+                            {"id": "awareness-2", "stage": "awareness", "title": "فكرة وعي ثانية"},
+                        ]
+                    },
+                    "selected_ids": ["awareness-1"],
+                },
+            }
+        },
+    )
+    user = User(id="user-paid-route", email="paid@example.com", hashed_password="hash", full_name="Paid Owner")
+    db = FakeDb()
+
+    monkeypatch.setattr(marketing_plans, "get_owned_suite", lambda *a, **k: _async_value(suite))
+    monkeypatch.setattr(marketing_plans, "record_audit_log", _noop_async)
+
     saved = await marketing_plans.update_marketing_paid_content_plan_selection(
         suite.id,
         marketing_plans.PaidContentPlanSelectionRequest(selected_ids=["awareness-2"]),
@@ -91,11 +162,9 @@ async def test_paid_plan_routes_generate_save_and_refetch_without_erasing_social
     )
     refetched = marketing_plans._marketing_plan_response(suite, suite.id, None, "action_plan_ready")
 
-    assert generated["action_plan"]["paid_content_plan"]["version"] == "paid_content_work_plan_v2"
     assert saved["action_plan"]["paid_content_plan"]["selected_ids"] == ["awareness-2"]
     assert refetched["action_plan"]["paid_content_plan"]["selected_ids"] == ["awareness-2"]
     assert refetched["action_plan"]["social_ideas_plan"] == {"selected_ids": ["social-1"]}
-    assert provider_calls[0]["metadata"]["candidate_count"] == 2
     assert db.committed is True
 
 
