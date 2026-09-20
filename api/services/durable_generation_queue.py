@@ -571,15 +571,31 @@ async def execute_claimed_job(
                 if not suite:
                     return await mark_failed(db, job.id, "Suite not found")
                 period = str(input_data.get("period") or "")
-                await mark_progress(
-                    db,
-                    job.id,
-                    {
-                        "stage": "social_ideas",
-                        "message": "Researching occasions and market, then generating ideas.",
-                        "progress": 25,
-                    },
-                )
+
+                # One progress write at the start left the client showing the
+                # same sentence for the whole run (~56s measured). Report each
+                # phase instead, into the plan blob the client already polls,
+                # so it can say what is actually happening. Stage keys are
+                # machine-readable; the UI owns the wording and translations.
+                async def report(stage: str, percent: int) -> None:
+                    await mark_progress(
+                        db,
+                        job.id,
+                        {"stage": f"social_ideas:{stage}", "message": stage, "progress": percent},
+                    )
+                    _save_suite_social_ideas_plan(
+                        suite,
+                        {
+                            "status": "generating",
+                            "period": period,
+                            "target_count": input_data.get("target_count"),
+                            "stage": stage,
+                            "progress": percent,
+                        },
+                    )
+                    await db.commit()
+
+                await report("starting", 5)
                 # generate_social_ideas never raises: on any internal failure it
                 # returns templated fallback ideas + warnings, so the plan always
                 # reaches a terminal "ready" state and the client poller escapes.
@@ -589,6 +605,7 @@ async def execute_claimed_job(
                     period=period,
                     target_count=input_data.get("target_count"),
                     requested_language=input_data.get("language"),
+                    on_progress=report,
                 )
                 plan["status"] = "ready"
                 _save_suite_social_ideas_plan(suite, plan)

@@ -113,3 +113,48 @@ async def test_generate_social_ideas_falls_back_on_llm_failure():
     assert "generation_failed" in out["warnings"]
     assert len(out["candidates"]) == 12          # 2x fallback
     assert all(c["title"] for c in out["candidates"])
+
+
+@pytest.mark.asyncio
+async def test_generate_social_ideas_reports_each_phase_in_order():
+    """The client showed one frozen sentence for the whole ~56s run. Each phase
+    must now be announced, in order, so the UI can say what is happening."""
+    from api.services import social_ideas_generator as gen
+
+    seen: list[tuple[str, int]] = []
+
+    async def hook(stage: str, percent: int) -> None:
+        seen.append((stage, percent))
+
+    with patch.object(gen, "infer_plan_language", return_value="ar"), \
+         patch.object(gen, "suite_research_payload", return_value={"brand": {}}), \
+         patch.object(gen, "_social_content_plan_context", return_value={"target_audience": {}}), \
+         patch.object(gen, "get_occasions", new=AsyncMock(return_value=[])), \
+         patch.object(gen, "get_market_research", new=AsyncMock(return_value={})), \
+         patch.object(gen, "call_text_ai", new=AsyncMock(return_value=json.dumps({"ideas": []}))):
+        await gen.generate_social_ideas(None, object(), period="2026-10", on_progress=hook)
+
+    stages = [s for s, _ in seen]
+    assert stages == ["occasions", "market", "ideas", "shaping"]
+    percents = [p for _, p in seen]
+    assert percents == sorted(percents), "progress must never go backwards"
+
+
+@pytest.mark.asyncio
+async def test_generate_social_ideas_survives_a_failing_progress_hook():
+    """A broken progress writer must never cost the user their generation."""
+    from api.services import social_ideas_generator as gen
+
+    async def boom(stage: str, percent: int) -> None:
+        raise RuntimeError("progress writer died")
+
+    with patch.object(gen, "infer_plan_language", return_value="ar"), \
+         patch.object(gen, "suite_research_payload", return_value={"brand": {}}), \
+         patch.object(gen, "_social_content_plan_context", return_value={"target_audience": {}}), \
+         patch.object(gen, "get_occasions", new=AsyncMock(return_value=[])), \
+         patch.object(gen, "get_market_research", new=AsyncMock(return_value={})), \
+         patch.object(gen, "call_text_ai", new=AsyncMock(return_value=json.dumps({"ideas": []}))):
+        plan = await gen.generate_social_ideas(None, object(), period="2026-10", on_progress=boom)
+
+    assert plan["version"] == "social_ideas_v1"
+    assert plan["candidates"], "a dead hook must not empty the result"
