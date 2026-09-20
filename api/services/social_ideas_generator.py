@@ -13,6 +13,7 @@ so the live marketing-plan flow is untouched while the new experience is built.
 """
 import json
 import logging
+from typing import Awaitable, Callable
 
 from ..core.llm_client import call_text_ai
 from .marketing_plan_generator import (
@@ -33,6 +34,9 @@ APPLY_ASSET_TYPES = (
     "ugc", "talking_head", "image", "banner", "carousel", "ai_video",
     "landing_page", "webinar", "website", "app", "digital_asset_other",
 )
+# (stage_key, percent_complete) -> awaited by the caller's progress writer.
+ProgressHook = Callable[[str, int], Awaitable[None]]
+
 DEFAULT_TARGET = 12
 IDEAS_MAX_TOKENS = 12000  # 24 detailed ideas overrun a small budget and truncate the JSON
 IDEAS_TIMEOUT_SECONDS = 180
@@ -227,29 +231,60 @@ def build_ideas_prompt(context: dict, occasions: list[dict], market: dict, targe
     )
 
 
-async def generate_social_ideas(db, suite, *, period: str, target_count: int | None = None, requested_language: str | None = None) -> dict:
-    """Research + generate the idea candidates for one period. Never raises."""
+async def generate_social_ideas(
+    db,
+    suite,
+    *,
+    period: str,
+    target_count: int | None = None,
+    requested_language: str | None = None,
+    on_progress: ProgressHook | None = None,
+) -> dict:
+    """Research + generate the idea candidates for one period. Never raises.
+
+    ``on_progress`` reports which phase is running so the client can say what
+    is happening instead of spinning silently for the best part of a minute.
+    It reports machine-readable stage keys, not prose: the UI owns the wording
+    and the translations. A failing hook must never sink a generation, so each
+    call is swallowed.
+    """
     warnings: list[str] = []
     language = infer_plan_language(suite, requested_language)
     target = int(target_count or DEFAULT_TARGET)
+
+    async def progress(stage: str, percent: int) -> None:
+        if on_progress is None:
+            return
+        try:
+            await on_progress(stage, percent)
+        except Exception:
+            log.exception("progress hook failed at stage %s", stage)
+
     try:
         payload = suite_research_payload(suite)
         context = _social_content_plan_context(payload, language)
         brand = _dict(payload.get("brand"))
         country = context.get("target_audience", {}).get("location") or brand.get("location") or "global"
 
+        # Measured on production: occasions ~14s on a cache miss, the ideas call
+        # ~42s. Those two are the whole wait, so they get their own stages.
+        await progress("occasions", 10)
         occasions = await get_occasions(db, country=country, language=language, period=period)
         if not occasions:
             warnings.append("occasions_unavailable")
         relevant = relevant_occasions(occasions, brand)
+
+        await progress("market", 30)
         market = await get_market_research(db, country=country, language=language, brand=brand)
 
+        await progress("ideas", 45)
         raw = await call_text_ai(
             max_tokens=IDEAS_MAX_TOKENS,
             messages=[{"role": "user", "content": build_ideas_prompt(context, relevant, market, target, period, language)}],
             system="You are a senior social media strategist. Return valid JSON only.",
             timeout=IDEAS_TIMEOUT_SECONDS,
         )
+        await progress("shaping", 90)
         candidates = parse_ideas(raw)
         if len(candidates) < target:
             warnings.append("ideas_underfilled")
