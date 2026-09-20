@@ -231,6 +231,32 @@ def build_ideas_prompt(context: dict, occasions: list[dict], market: dict, targe
     )
 
 
+def default_selection(candidates: list[dict], target: int) -> list[str]:
+    """Pick `target` ideas spread evenly across the three objective types.
+
+    Taking the first N in order would skew the default to whatever the model
+    happened to emit first; cycling the objectives keeps attraction, trust and
+    sales all represented. Falls back to document order once a bucket empties.
+    """
+    if target <= 0:
+        return []
+    buckets: dict[str, list[str]] = {obj: [] for obj in OBJECTIVE_TYPES}
+    for idea in candidates:
+        if not isinstance(idea, dict) or not idea.get("id"):
+            continue
+        objective = idea.get("objective_type")
+        buckets.setdefault(objective if objective in OBJECTIVE_TYPES else OBJECTIVE_TYPES[0], []).append(str(idea["id"]))
+
+    picked: list[str] = []
+    while len(picked) < target and any(buckets.values()):
+        for objective in OBJECTIVE_TYPES:
+            if len(picked) >= target:
+                break
+            if buckets[objective]:
+                picked.append(buckets[objective].pop(0))
+    return picked
+
+
 async def generate_social_ideas(
     db,
     suite,
@@ -295,6 +321,16 @@ async def generate_social_ideas(
         relevant = []
         candidates = fallback_ideas(target * 2, [], language)
 
+    # The plan shipped with nothing selected, so the step could not be passed
+    # without picking by hand. Preselect a balanced default — round-robin across
+    # the three objectives rather than the first N in a row, which would hand
+    # the user twelve "attraction" ideas and no trust or sales. The user can
+    # still change any of it; this only means they are never blocked.
+    selected_ids = default_selection(candidates, target)
+    for idea in candidates:
+        if isinstance(idea, dict):
+            idea["selected"] = idea.get("id") in selected_ids
+
     return {
         "version": "social_ideas_v1",
         "language": language,
@@ -302,6 +338,6 @@ async def generate_social_ideas(
         "target_count": target,
         "occasions": relevant,
         "candidates": candidates,
-        "selected_ids": [],
+        "selected_ids": selected_ids,
         "warnings": warnings,
     }
