@@ -1,29 +1,43 @@
-"""Which browsers may talk to this API.
+"""Guards the CORS origin list.
 
-A wrong answer here does not look like a CORS error to anybody — it looks like
-"the app says I am not signed in", because every call dies at the preflight.
+FRONTEND_URL held only https://www.cosuite.app while Railway served the app on
+the apex as well, so every preflight from https://cosuite.app was answered
+"Disallowed CORS origin" with a 400.
 """
-import re
-
-from api.main import MANZUMA_ORIGIN_REGEX
-
-PATTERN = re.compile(MANZUMA_ORIGIN_REGEX)
+from api.main import _with_www_variants
 
 
-def allowed(origin: str) -> bool:
-    return bool(PATTERN.fullmatch(origin))
+def test_apex_origin_gets_a_www_twin():
+    out = _with_www_variants(["https://cosuite.app"])
+    assert "https://cosuite.app" in out
+    assert "https://www.cosuite.app" in out
 
 
-def test_our_own_apps_are_allowed():
-    assert allowed("https://cosuite.manzuma.app")
-    assert allowed("https://oneshare.manzuma.app")
-    assert allowed("https://accounts.manzuma.app")
-    assert allowed("https://manzuma.app")
-    assert allowed("https://co-suite-web-production.up.railway.app")
+def test_www_origin_gets_an_apex_twin():
+    """The real production case: only the www form was configured."""
+    out = _with_www_variants(["https://www.cosuite.app"])
+    assert "https://cosuite.app" in out
+    assert "https://www.cosuite.app" in out
 
 
-def test_lookalikes_are_not():
-    assert not allowed("https://manzuma.app.evil.com")
-    assert not allowed("https://evil-manzuma.app")
-    assert not allowed("http://cosuite.manzuma.app")   # plain http
-    assert not allowed("https://cosuite.manzuma.app.evil.io")
+def test_configured_origin_stays_first():
+    """billing and funnel build links from frontend_url.split(",")[0], so the
+    configured value must not be reordered underneath them."""
+    out = _with_www_variants(["https://www.cosuite.app", "https://oneshare.app"])
+    assert out[0] == "https://www.cosuite.app"
+
+
+def test_no_duplicates_when_both_forms_are_configured():
+    out = _with_www_variants(["https://cosuite.app", "https://www.cosuite.app"])
+    assert len(out) == len(set(out)) == 2
+
+
+def test_scheme_and_port_are_preserved():
+    out = _with_www_variants(["http://localhost:3000"])
+    assert out == ["http://localhost:3000", "http://www.localhost:3000"]
+
+
+def test_garbage_entries_do_not_explode():
+    out = _with_www_variants(["", "not-a-url", "https://cosuite.app"])
+    assert "https://cosuite.app" in out
+    assert "https://www.cosuite.app" in out

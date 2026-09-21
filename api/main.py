@@ -1,6 +1,7 @@
 import asyncio
 import os
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -30,7 +31,35 @@ app = FastAPI(title=settings.app_name, docs_url="/docs" if settings.debug else N
 configure_logging()
 _embedded_generation_worker_task: asyncio.Task | None = None
 
-_origins = [o.strip() for o in settings.frontend_url.split(",") if o.strip()]
+def _with_www_variants(origins: list[str]) -> list[str]:
+    """Allow both the apex and the www form of every configured origin.
+
+    FRONTEND_URL held only https://www.cosuite.app while Railway serves the app
+    on the apex too, so every preflight from https://cosuite.app came back
+    "Disallowed CORS origin" (Starlette answers 400). Plain GETs survived
+    because they are not preflighted; anything carrying Authorization or a JSON
+    content-type did not. Deriving the pair here means a new domain cannot
+    reintroduce the bug by being added in only one form.
+
+    Only the host is touched — scheme and port are preserved, and the list keeps
+    its order so callers that read frontend_url.split(",")[0] for building links
+    still get the configured value.
+    """
+    seen: dict[str, None] = {}
+    for origin in origins:
+        seen.setdefault(origin, None)
+        parsed = urlsplit(origin)
+        if not parsed.scheme or not parsed.hostname:
+            continue
+        host = parsed.netloc
+        twin = host[4:] if parsed.hostname.startswith("www.") else f"www.{host}"
+        seen.setdefault(urlunsplit((parsed.scheme, twin, "", "", "")), None)
+    return list(seen)
+
+
+_origins = _with_www_variants(
+    [o.strip().rstrip("/") for o in settings.frontend_url.split(",") if o.strip()]
+)
 _origins += ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"]
 
 # Our own apps, wherever they are served from: any manzuma.app subdomain (the
