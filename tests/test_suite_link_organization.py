@@ -185,3 +185,39 @@ async def test_without_a_manzuma_session_nothing_is_linked(monkeypatch):
     assert res.status_code == 403
     assert mine.organization_id is None
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_an_owner_with_several_suites_picks_one(monkeypatch):
+    mine, other = _suite("s1"), _suite("s2")
+    db = FakeDB(owned=[mine, other])
+
+    async with _client(db, monkeypatch, _session(_owner_of("o1"))) as client:
+        res = await client.post(
+            "/api/v1/suites/link-organization",
+            json={"organization_id": "o1", "suite_id": "s2"},
+        )
+
+    assert res.status_code == 200
+    assert res.json()["suite_id"] == "s2"
+    assert other.organization_id == "o1"
+    assert mine.organization_id is None
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_suite_that_is_not_yours_cannot_be_linked(monkeypatch):
+    mine = _suite("s1")
+    db = FakeDB(owned=[mine])
+
+    async with _client(db, monkeypatch, _session(_owner_of("o1"))) as client:
+        res = await client.post(
+            "/api/v1/suites/link-organization",
+            json={"organization_id": "o1", "suite_id": "somebody-elses"},
+        )
+
+    assert res.status_code == 404
+    assert res.json()["detail"] == "suite_not_available"
+    assert mine.organization_id is None
+    assert db.commits == 0
+    app.dependency_overrides.clear()

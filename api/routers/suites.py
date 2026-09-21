@@ -40,6 +40,9 @@ class SuiteResponse(BaseModel):
     name: str
     slug: str
     status: str
+    # The Manzuma business this suite is, when it has one. The apps need it to
+    # tell a linked suite from one still waiting for a business.
+    organization_id: Optional[str] = None
     brand: Optional[dict] = None
     strategy: Optional[dict] = None
     suite_memory: Optional[dict] = None
@@ -70,6 +73,7 @@ def serialize_suite(suite: Suite) -> dict:
         "name": suite.name,
         "slug": suite.slug,
         "status": suite.status.value if suite.status else None,
+        "organization_id": suite.organization_id,
         "brand": suite.brand,
         "strategy": suite.strategy,
         "suite_memory": build_suite_memory_v0(suite.brand, suite.strategy, suite.connections),
@@ -118,6 +122,9 @@ async def create_suite(
 
 class LinkOrganizationRequest(BaseModel):
     organization_id: str = Field(..., min_length=1)
+    # Which suite. An owner with several suites is answering a question only
+    # they can answer, so the app asks instead of the server guessing.
+    suite_id: Optional[str] = None
 
 
 LINKING_ROLES = ("owner", "admin")
@@ -164,13 +171,24 @@ async def link_organization(
             select(Suite).where(Suite.owner_id == current_user.id, Suite.organization_id.is_(None))
         )
     ).scalars().all()
-    if len(owned) != 1:
+
+    if payload.suite_id:
+        chosen = next((s for s in owned if s.id == payload.suite_id), None)
+        if not chosen:
+            # Either not theirs, or already linked. Both are refusals, and
+            # neither tells a stranger which.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="suite_not_available")
+    elif len(owned) == 1:
+        chosen = owned[0]
+    else:
+        # An agency owner has a suite per client; picking one for them would
+        # put somebody else's client under this business.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ambiguous_suite")
 
-    owned[0].organization_id = organization_id
+    chosen.organization_id = organization_id
     await db.commit()
-    print(f"[link] suite {owned[0].id} -> org {organization_id} by user {current_user.id}")
-    return {"ok": True, "suite_id": owned[0].id}
+    print(f"[link] suite {chosen.id} -> org {organization_id} by user {current_user.id}")
+    return {"ok": True, "suite_id": chosen.id}
 
 
 @router.get("/{suite_id}/memory")
