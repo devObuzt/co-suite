@@ -33,10 +33,16 @@ _embedded_generation_worker_task: asyncio.Task | None = None
 _origins = [o.strip() for o in settings.frontend_url.split(",") if o.strip()]
 _origins += ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"]
 
+# Our own apps, wherever they are served from: any manzuma.app subdomain (the
+# products live there now) and any Railway preview host. A browser on
+# cosuite.manzuma.app could not even preflight before this — every call died at
+# OPTIONS, which reads in the app as "not signed in".
+MANZUMA_ORIGIN_REGEX = r"https://([a-z0-9-]+\.)*(manzuma\.app|up\.railway\.app)"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
-    allow_origin_regex=r"https://.*\.up\.railway\.app",
+    allow_origin_regex=MANZUMA_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
