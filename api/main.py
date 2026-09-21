@@ -31,13 +31,19 @@ configure_logging()
 _embedded_generation_worker_task: asyncio.Task | None = None
 
 _origins = [o.strip() for o in settings.frontend_url.split(",") if o.strip()]
+_origins += ["https://cosuite.app", "https://www.cosuite.app"]
 _origins += ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"]
 
-# Our own apps, wherever they are served from: any manzuma.app subdomain (the
-# products live there now) and any Railway preview host. A browser on
-# cosuite.manzuma.app could not even preflight before this — every call died at
-# OPTIONS, which reads in the app as "not signed in".
-MANZUMA_ORIGIN_REGEX = r"https://([a-z0-9-]+\.)*(manzuma\.app|up\.railway\.app)"
+# Our own apps: the manzuma.app domain and its subdomains, which we control.
+# A browser on cosuite.manzuma.app could not even preflight before this — every
+# call died at OPTIONS, which reads in the app as "not signed in".
+#
+# `up.railway.app` is deliberately NOT here. It is shared by every app on the
+# platform and its names are not ours to reserve, so matching it by pattern
+# would let a stranger's app call this API with our customers' cookies
+# attached. A specific Railway host that genuinely needs access belongs in
+# FRONTEND_URL, spelled out.
+MANZUMA_ORIGIN_REGEX = r"https://([a-z0-9-]+\.)*manzuma\.app"
 
 app.add_middleware(
     CORSMiddleware,
