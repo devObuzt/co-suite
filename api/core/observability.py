@@ -41,6 +41,13 @@ class JsonLogFormatter(logging.Formatter):
 
 
 def configure_logging() -> None:
+    # httpx logs the full request URL at INFO, so any secret carried in the path
+    # lands in the deploy logs — the Telegram bot token was printed in full on
+    # every capacity alert. api/main.py silenced it for the API process only,
+    # and the worker does not import api.main, so the worker kept leaking. Do it
+    # here, where every entrypoint passes.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     if settings.log_format.lower() != "json":
         logging.basicConfig(level=logging.INFO)
         return
