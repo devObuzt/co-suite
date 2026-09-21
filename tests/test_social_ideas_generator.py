@@ -158,3 +158,32 @@ async def test_generate_social_ideas_survives_a_failing_progress_hook():
 
     assert plan["version"] == "social_ideas_v1"
     assert plan["candidates"], "a dead hook must not empty the result"
+
+
+def test_default_selection_spreads_across_objectives():
+    """Taking the first N in a row would hand the user twelve attraction ideas
+    and nothing for trust or sales. The default has to be balanced."""
+    from api.services.social_ideas_generator import default_selection
+
+    candidates = (
+        [{"id": f"a{i}", "objective_type": "attraction"} for i in range(6)]
+        + [{"id": f"t{i}", "objective_type": "trust"} for i in range(6)]
+        + [{"id": f"s{i}", "objective_type": "sales"} for i in range(6)]
+    )
+    picked = default_selection(candidates, 6)
+
+    assert len(picked) == 6
+    by_obj = {c["id"]: c["objective_type"] for c in candidates}
+    kinds = {by_obj[i] for i in picked}
+    assert kinds == {"attraction", "trust", "sales"}, "all three objectives must appear"
+    assert len(set(picked)) == 6, "no duplicates"
+
+
+def test_default_selection_handles_short_and_empty_input():
+    from api.services.social_ideas_generator import default_selection
+
+    assert default_selection([], 5) == []
+    assert default_selection([{"id": "x", "objective_type": "trust"}], 5) == ["x"]
+    assert default_selection([{"id": "x", "objective_type": "trust"}], 0) == []
+    # Ideas with an unknown objective must still be selectable, not dropped.
+    assert default_selection([{"id": "y", "objective_type": "weird"}], 1) == ["y"]
