@@ -18,6 +18,7 @@ from ..services.content_rules import (
     suggest_rules_from_feedback,
 )
 from ..services.suite_access import require_suite_access
+from ..services.suite_erase import erase_suite
 from ..services.suite_memory import build_suite_memory_v0, merge_suite_brand
 
 router = APIRouter(prefix="/suites", tags=["suites"])
@@ -298,40 +299,12 @@ async def delete_suite(
 ):
     """Permanently delete a suite and everything that belongs to it.
 
-    Linked users are never deleted — only their membership links. Audit and
-    provider-usage history is kept for admins with the suite reference nulled.
+    Linked users are never deleted — only their membership links.
     """
-    from sqlalchemy import delete as sa_delete, update as sa_update
-
-    from ..models.admin import AuditLog, ProviderUsageEvent
-    from ..models.billing import Subscription, UsageEvent
-    from ..models.content import ContentPost
-    from ..models.generation_job import GenerationJob
-    from ..models.media_asset import MediaAsset
-    from ..models.product_bulk import (
-        ProductBulkAsset,
-        ProductBulkBatch,
-        ProductBulkItem,
-        ProductTemplateDirection,
-    )
-
     suite = await _get_owned_suite(db, suite_id, current_user)
-
-    batch_ids = select(ProductBulkBatch.id).where(ProductBulkBatch.suite_id == suite_id)
-    await db.execute(sa_delete(ProductBulkAsset).where(ProductBulkAsset.batch_id.in_(batch_ids)))
-    await db.execute(sa_delete(ProductBulkItem).where(ProductBulkItem.batch_id.in_(batch_ids)))
-    await db.execute(sa_delete(ProductTemplateDirection).where(ProductTemplateDirection.batch_id.in_(batch_ids)))
-    await db.execute(sa_delete(ProductBulkBatch).where(ProductBulkBatch.suite_id == suite_id))
-    await db.execute(sa_delete(ContentPost).where(ContentPost.suite_id == suite_id))
-    await db.execute(sa_delete(GenerationJob).where(GenerationJob.suite_id == suite_id))
-    await db.execute(sa_delete(MediaAsset).where(MediaAsset.suite_id == suite_id))
-    await db.execute(sa_delete(UsageEvent).where(UsageEvent.suite_id == suite_id))
-    await db.execute(sa_delete(Subscription).where(Subscription.suite_id == suite_id))
-    await db.execute(sa_delete(SuiteMember).where(SuiteMember.suite_id == suite_id))
-    await db.execute(sa_update(AuditLog).where(AuditLog.suite_id == suite_id).values(suite_id=None))
-    await db.execute(sa_update(ProviderUsageEvent).where(ProviderUsageEvent.suite_id == suite_id).values(suite_id=None))
-    await db.delete(suite)
+    await erase_suite(db, suite)
     await db.commit()
+    print(f"[erase] suite {suite_id} by user {current_user.id}")
     return {"ok": True, "deleted_suite_id": suite_id}
 
 
