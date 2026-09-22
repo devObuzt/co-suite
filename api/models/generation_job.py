@@ -32,6 +32,7 @@ class GenerationJobType(str, enum.Enum):
     video_montage = "video_montage"
     social_ideas = "social_ideas"
     paid_content_plan = "paid_content_plan"
+    social_content_plan = "social_content_plan"
 
 
 class GenerationJob(Base):

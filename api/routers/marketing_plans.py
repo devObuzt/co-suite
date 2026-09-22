@@ -2922,34 +2922,29 @@ async def generate_marketing_social_content_plan(
     )
     request_data = payload or GenerateSocialContentPlanRequest()
     output_language = infer_plan_language(suite, request_data.language)
-    plan = await generate_social_content_work_plan(
-        suite,
-        output_language,
-        monthly_posts=request_data.monthly_posts,
-        plan_type=request_data.plan_type,
-    )
-    _save_social_content_plan(suite, plan)
-    candidate_count = sum(
-        len(group)
-        for group in (plan.get("candidates") or {}).values()
-        if isinstance(group, list)
-    )
-    warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
-    await record_provider_usage(
+
+    # Six parallel provider calls with a 240s ceiling ran inside the request,
+    # and the only write landed at the end — a user who closed the tab during a
+    # four-minute wait lost the lot. Durable job, same as the other plans.
+    active = await get_active_job(db, suite_id, job_types={GenerationJobType.social_content_plan})
+    if active:
+        return _marketing_plan_response(suite, suite_id, active, "generating")
+
+    _save_social_content_plan(suite, {
+        "status": "generating",
+        "language": output_language,
+        "monthly_posts": request_data.monthly_posts,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    })
+    job = await create_job(
         db,
-        provider="anthropic+openai",
-        operation="marketing_social_content_plan.generate",
-        model=f"{settings.anthropic_text_model}+{settings.openai_text_model}",
-        status="partial" if warnings else "success",
-        suite_id=suite.id,
+        suite_id=suite_id,
+        job_type=GenerationJobType.social_content_plan,
         user_id=current_user.id,
-        metadata={
-            "monthly_posts": plan.get("monthly_posts"),
-            "candidate_count": candidate_count,
-            "selected_count": len(plan.get("selected_ids") or []),
+        input_data={
             "language": output_language,
-            "warnings": warnings,
-            "cost_basis": "provider_usage_logged_without_actual_token_meter",
+            "monthly_posts": request_data.monthly_posts,
+            "plan_type": request_data.plan_type,
         },
     )
     await record_audit_log(
@@ -2959,14 +2954,10 @@ async def generate_marketing_social_content_plan(
         resource_id=suite.id,
         suite_id=suite.id,
         actor=current_user,
-        metadata={
-            "monthly_posts": plan.get("monthly_posts"),
-            "candidate_count": candidate_count,
-            "selected_count": len(plan.get("selected_ids") or []),
-        },
+        metadata={"job_id": job.id, "monthly_posts": request_data.monthly_posts},
     )
     await db.commit()
-    return _marketing_plan_response(suite, suite_id, None, "action_plan_ready")
+    return _marketing_plan_response(suite, suite_id, job, "generating")
 
 
 @router.post("/suites/{suite_id}/marketing-plan/social-content-plan/selection")

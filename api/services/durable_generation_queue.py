@@ -30,6 +30,7 @@ from .marketing_plan_generator import (
     generate_marketing_plan_execution_section,
     generate_marketing_plan_deck,
     generate_paid_content_work_plan,
+    generate_social_content_work_plan,
     marketing_plan_stage_snapshot,
     normalize_marketing_action_plan,
 )
@@ -198,6 +199,20 @@ def _save_suite_marketing_plan_execution_section(suite: Suite, section: str, val
     )
     suite.strategy = strategy
     return deck
+
+
+def _save_suite_social_content_plan(suite: Suite, plan: dict) -> None:
+    """Persist the social-content plan blob under strategy.marketing_action_plan.
+
+    Mirrors the router's _save_social_content_plan so the worker owns the
+    terminal write without importing the router (circular dependency).
+    """
+    strategy = dict(_suite_strategy(suite))
+    action = strategy.get("marketing_action_plan")
+    action_plan = dict(action) if isinstance(action, dict) else {}
+    action_plan["social_content_plan"] = plan
+    strategy["marketing_action_plan"] = action_plan
+    suite.strategy = strategy
 
 
 def _save_suite_paid_content_plan(suite: Suite, plan: dict) -> None:
@@ -579,6 +594,66 @@ async def execute_claimed_job(
                         log.exception("Could not file montage output for job %s into the media library", job.id)
                         await db.rollback()
                     return await mark_completed(db, job.id, montage_result)
+
+            if job.type == GenerationJobType.social_content_plan:
+                result = await db.execute(select(Suite).where(Suite.id == job.suite_id))
+                suite = result.scalar_one_or_none()
+                if not suite:
+                    return await mark_failed(db, job.id, "Suite not found")
+                language = str(input_data.get("language") or "")
+                monthly_posts = input_data.get("monthly_posts")
+                await mark_progress(
+                    db,
+                    job.id,
+                    {"stage": "social_content_plan:providers", "message": "providers", "progress": 20},
+                )
+                _save_suite_social_content_plan(
+                    suite,
+                    {
+                        "status": "generating",
+                        "language": language,
+                        "monthly_posts": monthly_posts,
+                        "stage": "providers",
+                        "progress": 20,
+                    },
+                )
+                await db.commit()
+                plan = await generate_social_content_work_plan(
+                    suite,
+                    language,
+                    monthly_posts=monthly_posts,
+                    plan_type=input_data.get("plan_type"),
+                )
+                plan["status"] = "ready"
+                _save_suite_social_content_plan(suite, plan)
+                await db.commit()
+                warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
+                candidate_count = sum(
+                    len(group)
+                    for group in (plan.get("candidates") or {}).values()
+                    if isinstance(group, list)
+                )
+                try:
+                    await record_provider_usage(
+                        db,
+                        provider="anthropic+openai",
+                        operation="marketing_social_content_plan.generate",
+                        model=f"{settings.anthropic_text_model}+{settings.openai_text_model}",
+                        status="partial" if warnings else "success",
+                        suite_id=suite.id,
+                        user_id=job.user_id,
+                        metadata={
+                            "monthly_posts": plan.get("monthly_posts"),
+                            "candidate_count": candidate_count,
+                            "selected_count": len(plan.get("selected_ids") or []),
+                            "language": language,
+                            "warnings": warnings,
+                            "cost_basis": "provider_usage_logged_without_actual_token_meter",
+                        },
+                    )
+                except Exception:
+                    log.exception("Could not record provider usage for social content plan job %s", job.id)
+                return await mark_completed(db, job.id, {"candidate_count": candidate_count})
 
             if job.type == GenerationJobType.paid_content_plan:
                 result = await db.execute(select(Suite).where(Suite.id == job.suite_id))
