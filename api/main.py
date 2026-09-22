@@ -185,6 +185,7 @@ async def startup():
                 "video_montage",
                 "social_ideas",
                 "paid_content_plan",
+                "social_content_plan",
             ):
                 await conn.execute(text(
                     f"ALTER TYPE generationjobtype ADD VALUE IF NOT EXISTS '{value}'"
