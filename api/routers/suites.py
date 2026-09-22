@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from ..core.database import get_db
 from ..core.security import get_current_user, manzuma_session_or_none
+from ..services.manzuma_accounts import create_organization
 from ..models.user import User
 from ..models.suite import Suite, SuiteMember, SuiteStatus, MemberRole
 from ..services.media_storage import storage_status, test_public_storage
@@ -189,6 +190,53 @@ async def link_organization(
     await db.commit()
     print(f"[link] suite {chosen.id} -> org {organization_id} by user {current_user.id}")
     return {"ok": True, "suite_id": chosen.id}
+
+
+class CreateBusinessRequest(BaseModel):
+    # The business takes the suite's name unless the owner renames it here.
+    name: Optional[str] = None
+
+
+@router.post("/{suite_id}/create-business")
+async def create_business_for_suite(
+    suite_id: str,
+    payload: CreateBusinessRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create the Manzuma business this suite belongs to, and link it.
+
+    The two halves of the same act: an agency owner with ten suites would
+    otherwise create ten businesses by hand in another product and come back to
+    match them up one by one.
+
+    Accounts is asked with the user id from the caller's own session, so the
+    business lands under the person who is signed in and nobody else.
+    """
+    suite = await _get_owned_suite(db, suite_id, current_user)
+    if suite.organization_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="suite_already_linked")
+
+    session = await manzuma_session_or_none(request)
+    if not session or not session.user_id:
+        # Legacy password sessions have no Manzuma identity to own a business.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="no_manzuma_session")
+
+    name = (payload.name or suite.name or "").strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid_name")
+
+    org = await create_organization(session.user_id, name)
+    if not org:
+        # Nothing was linked, so the owner can try again or create the business
+        # in accounts by hand — neither leaves a half-made state behind.
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="accounts_unavailable")
+
+    suite.organization_id = org["id"]
+    await db.commit()
+    print(f"[link] suite {suite.id} -> new org {org['id']} by user {current_user.id}")
+    return {"ok": True, "suite_id": suite.id, "organization": org}
 
 
 @router.get("/{suite_id}/memory")

@@ -74,3 +74,36 @@ def test_cache_key_never_contains_the_credential():
     key = ma._cache_key("manzuma.session=supersecret", None)
     assert "supersecret" not in key
     assert len(key) == 64  # sha256 hex
+
+
+@pytest.mark.asyncio
+async def test_create_organization_asks_accounts_with_the_service_key(monkeypatch):
+    monkeypatch.setattr(ma.settings, "manzuma_service_key", "k", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/internal/organizations"
+        assert request.headers["authorization"] == "Bearer k"
+        return httpx.Response(201, json={"organization": {"id": "org1", "name": "Kinder"}})
+
+    org = await ma.create_organization("mu1", "Kinder", transport=_transport(handler))
+    assert org == {"id": "org1", "name": "Kinder"}
+
+
+@pytest.mark.asyncio
+async def test_create_organization_returns_none_when_accounts_refuses(monkeypatch):
+    monkeypatch.setattr(ma.settings, "manzuma_service_key", "k", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"error": "unauthorized"})
+
+    assert await ma.create_organization("mu1", "Kinder", transport=_transport(handler)) is None
+
+
+@pytest.mark.asyncio
+async def test_create_organization_without_a_service_key_does_nothing(monkeypatch):
+    monkeypatch.setattr(ma.settings, "manzuma_service_key", "", raising=False)
+
+    def handler(_request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("accounts must not be called without a key")
+
+    assert await ma.create_organization("mu1", "Kinder", transport=_transport(handler)) is None
