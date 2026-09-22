@@ -159,3 +159,34 @@ async def vault_token(
         return res.json().get("accessToken")
     except (httpx.HTTPError, ValueError):
         return None
+
+
+async def create_organization(
+    manzuma_user_id: str,
+    name: str,
+    transport: Optional[httpx.BaseTransport] = None,
+) -> Optional[dict[str, Any]]:
+    """Create a business at accounts, owned by this person.
+
+    An agency owner has a suite per client and no business for most of them.
+    Sending them to another product to type the same name again is friction
+    with nothing on the other side of it, so co-Suite asks on their behalf —
+    server to server, with the user id accounts itself gave us, never one the
+    browser supplied.
+    """
+    if not settings.manzuma_service_key:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, transport=transport) as client:
+            res = await client.post(
+                f"{settings.manzuma_accounts_url}/api/internal/organizations",
+                headers={"authorization": f"Bearer {settings.manzuma_service_key}"},
+                json={"manzumaUserId": manzuma_user_id, "name": name},
+            )
+        if res.status_code != 201:
+            return None
+        org = res.json().get("organization")
+        return org if isinstance(org, dict) and org.get("id") else None
+    except (httpx.HTTPError, ValueError):
+        return None
