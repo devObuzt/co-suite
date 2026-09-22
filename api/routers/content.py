@@ -16,6 +16,7 @@ from ..models.suite import Suite, SuiteMember, SuiteStatus, MemberRole
 from ..models.content import ContentPost, PostStatus
 from ..models.generation_job import GenerationJobType
 from ..services.billing import enforce_generation_gate, estimate_content_generation_tokens
+from ..services.meta_tokens import connections_with_vault_tokens
 from ..services.content_generator import generate_content_for_suite
 from ..services.generation_jobs import (
     classify_provider_limit,
@@ -868,7 +869,8 @@ async def publish_post(
 
     result = await db.execute(select(Suite).where(Suite.id == suite_id))
     suite = result.scalar_one_or_none()
-    connections = suite.connections or {}
+    # Tokens come from the vault for a suite that belongs to a business.
+    connections = await connections_with_vault_tokens(suite) if suite else {}
 
     if not connections.get("facebook") and not connections.get("instagram"):
         raise HTTPException(status_code=400, detail="No platforms connected. Connect Facebook or Instagram first.")

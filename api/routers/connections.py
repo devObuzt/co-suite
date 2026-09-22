@@ -15,6 +15,7 @@ from ..services.meta_oauth import (
     get_oauth_url, exchange_code, get_long_lived_token, get_user_pages, get_ad_accounts,
     fetch_page_token, verify_token
 )
+from ..services.meta_tokens import connections_with_vault_tokens
 from ..services.meta_ads_manager import fetch_campaigns
 from ..services.youtube_oauth import (
     get_youtube_oauth_url,
@@ -328,7 +329,7 @@ async def meta_campaigns(
     db: AsyncSession = Depends(get_db),
 ):
     suite = await _get_suite(suite_id, current_user, db)
-    connections = dict(suite.connections or {})
+    connections = await connections_with_vault_tokens(suite)
     meta_ads = connections.get("meta_ads") or {}
     await db.close()
 
@@ -366,9 +367,16 @@ async def _get_suite(suite_id: str, user: User, db: AsyncSession) -> Suite:
 
 
 def _safe_connections(connections: dict) -> dict:
-    """Strip access tokens before sending to frontend."""
+    """Strip access tokens before sending to frontend.
+
+    Top level included: the Meta callback parks `meta_user_token` there between
+    connecting and picking a Page, and the nested-only version handed it
+    straight back to the browser.
+    """
     safe = {}
     for platform, data in connections.items():
+        if "token" in platform.lower():
+            continue
         if isinstance(data, dict):
             safe[platform] = {k: v for k, v in data.items() if "token" not in k.lower()}
         else:

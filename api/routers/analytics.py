@@ -7,6 +7,7 @@ from ..core.security import get_current_user
 from ..models.user import User
 from ..models.suite import Suite
 from ..services.analytics import fetch_suite_analytics
+from ..services.meta_tokens import connections_with_vault_tokens
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -23,11 +24,9 @@ async def get_analytics(
     if not suite or suite.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Suite not found")
 
-    connections = suite.connections or {}
+    connections = await connections_with_vault_tokens(suite)
     if not connections.get("facebook") and not connections.get("instagram"):
         return {"error": "no_connections", "facebook": {}, "instagram": {}, "days": days}
-
-    connections = dict(connections)
     await db.close()
 
     return await fetch_suite_analytics(connections, days=days)
