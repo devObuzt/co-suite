@@ -137,3 +137,9 @@ def test_the_lock_helper_actually_locks_the_row():
 
     source = inspect.getsource(q.lock_suite_for_write)
     assert "with_for_update()" in source, "a plain re-read still loses the other job's write"
+    # The session runs with expire_on_commit=False, so a re-SELECT returns the
+    # SAME stale object from the identity map. Locking the row without this
+    # flag locks correctly and still writes stale data — measured 2026-09-24.
+    assert "populate_existing=True" in source, (
+        "the lock is useless without populate_existing: the in-memory strategy stays stale"
+    )

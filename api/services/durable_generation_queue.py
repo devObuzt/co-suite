@@ -228,7 +228,17 @@ async def lock_suite_for_write(db: AsyncSession, suite_id: str) -> Optional[Suit
     Taking the lock here and not earlier keeps the two generations parallel:
     they only queue up for the moment of the write.
     """
-    result = await db.execute(select(Suite).where(Suite.id == suite_id).with_for_update())
+    # `populate_existing` is the whole point. The session already holds this
+    # suite from the start of the job, and with `expire_on_commit=False` it
+    # keeps the copy of `strategy` it read minutes ago. A plain re-SELECT hands
+    # back that same stale object from the identity map — the row gets locked
+    # and the write still clobbers. This forces the fresh row over it.
+    result = await db.execute(
+        select(Suite)
+        .where(Suite.id == suite_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     return result.scalar_one_or_none()
 
 
