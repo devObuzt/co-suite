@@ -301,7 +301,9 @@ async def test_delete_suite_removes_suite_and_children():
 
     response = await suites_router.delete_suite("suite-1", user, db)
 
-    assert response == {"ok": True, "deleted_suite_id": "suite-1"}
+    # `funnel_reset` says whether the visitor's lead was also put back to the
+    # start — false here because this owner is not a funnel visitor.
+    assert response == {"ok": True, "deleted_suite_id": "suite-1", "funnel_reset": False}
     assert db.deleted == [suite]
     assert db.committed is True
     # owned-suite select + child deletes/updates across all suite tables
