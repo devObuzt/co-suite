@@ -171,6 +171,52 @@ def test_funnel_allowlist_opens_marketing_plan_sections():
         assert frozen_path_allowed("funnel", "POST", f"/api/v1/suites/abc/marketing-plan/{section}/generate-more")
 
 
+# Routes a funnel lead is deliberately NOT allowed to POST. Anything under
+# /marketing-plan that is neither here nor allowed by the gate fails the test
+# below — adding an endpoint has to be a decision, not an oversight.
+FUNNEL_BLOCKED_MARKETING_POSTS = {
+    # Sharing the plan publicly (token + password) is an owner action.
+    "/api/v1/suites/abc/marketing-plan/share",
+    # Deck execution sections the funnel journey never reaches.
+    "/api/v1/suites/abc/marketing-plan/paid-funnel/generate",
+}
+
+
+def test_every_marketing_plan_post_is_a_decided_funnel_case():
+    """A new plan endpoint that nobody added to the allowlist reads to the
+    visitor as 'account_frozen' — which is exactly how the full-plan job
+    shipped broken on 2026-09-23. Force the choice instead of discovering it
+    on a phone."""
+    from api.routers import marketing_plans
+
+    undecided = []
+    for route in marketing_plans.router.routes:
+        if "POST" not in getattr(route, "methods", set()):
+            continue
+        path = route.path.replace("{suite_id}", "abc").replace("{item_id}", "xyz")
+        if "{" in path:  # public share routes, not suite-scoped
+            continue
+        full = f"/api/v1{path}"
+        if not path.startswith("/suites/"):
+            continue
+        allowed = frozen_path_allowed("funnel", "POST", full)
+        if not allowed and full not in FUNNEL_BLOCKED_MARKETING_POSTS:
+            undecided.append(full)
+
+    assert not undecided, (
+        "these marketing-plan POST routes are blocked for funnel leads and not "
+        "listed as intentionally blocked — open them in _FUNNEL_POST_PATTERNS "
+        f"or add them to FUNNEL_BLOCKED_MARKETING_POSTS: {undecided}"
+    )
+
+
+def test_funnel_allowlist_opens_the_full_plan_job():
+    """The plan page posts this on arrival; blocked, the funnel visitor sees
+    'account_frozen' on a page that is part of their own journey."""
+    assert frozen_path_allowed("funnel", "POST", "/api/v1/suites/abc/marketing-plan/full/generate")
+    assert frozen_path_allowed("funnel", "GET", "/api/v1/suites/abc/marketing-plan")
+
+
 def test_funnel_allowlist_opens_work_plan_endpoints():
     # خطة العمل is part of the funnel journey: social ideas, the social
     # content plan, item generation, and the paid plan.

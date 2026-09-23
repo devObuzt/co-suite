@@ -70,6 +70,10 @@ _FUNNEL_POST_PATTERNS = [
     re.compile(p)
     for p in (
         r"^/api/v1/suites/[^/]+/marketing-plan/generate$",
+        # The whole plan chain as one durable job — this is what the plan page
+        # actually calls on arrival. Left off this list it reads to the visitor
+        # as "account_frozen", which is what a funnel lead saw on 2026-09-23.
+        r"^/api/v1/suites/[^/]+/marketing-plan/full/generate$",
         r"^/api/v1/suites/[^/]+/marketing-plan/visuals/generate$",
         # Marketing-plan page generates section by section; each endpoint is
         # additionally cost-capped for funnel leads via enforce_funnel_call_limit.
