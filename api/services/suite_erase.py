@@ -26,6 +26,7 @@ from ..models.product_bulk import (
     ProductBulkItem,
     ProductTemplateDirection,
 )
+from ..models.services_catalog import Lead
 from ..models.suite import Suite, SuiteMember
 from ..models.user import User
 
@@ -82,3 +83,23 @@ async def erase_manzuma_user(db: AsyncSession, manzuma_user_id: str) -> dict[str
 
     log.info("[erase] manzuma user %s — %s suites", manzuma_user_id, len(suites))
     return {"erased": True, "suites": len(suites)}
+
+async def reset_funnel_lead(db: AsyncSession, user: User) -> bool:
+    """Put a funnel visitor back at the start after their suite is erased.
+
+    Erasing the suite is not enough on its own. The funnel keeps two things on
+    the LEAD, not the suite: `suite_id`, which sends the visitor back to a
+    suite that no longer exists, and `progress.calls`, the per-stage cost caps
+    that would otherwise still be spent. Clearing both is what makes "delete"
+    actually mean "start over".
+    """
+    lead = (await db.execute(select(Lead).where(Lead.user_id == user.id))).scalar_one_or_none()
+    if not lead:
+        return False
+    progress = dict(lead.progress or {})
+    progress.pop("calls", None)
+    progress["step"] = "name"
+    progress["suite_created"] = False
+    lead.progress = progress
+    lead.suite_id = None
+    return True

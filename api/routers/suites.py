@@ -1,3 +1,4 @@
+import logging
 import re
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,8 +19,10 @@ from ..services.content_rules import (
     suggest_rules_from_feedback,
 )
 from ..services.suite_access import require_suite_access
-from ..services.suite_erase import erase_suite
+from ..services.suite_erase import erase_suite, reset_funnel_lead
 from ..services.suite_memory import build_suite_memory_v0, merge_suite_brand
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suites", tags=["suites"])
 
@@ -300,12 +303,20 @@ async def delete_suite(
     """Permanently delete a suite and everything that belongs to it.
 
     Linked users are never deleted — only their membership links.
+
+    For a funnel visitor this is "start over": the lead is put back to the
+    beginning too, because the funnel reads the suite link and the spent cost
+    caps off the LEAD. Erasing only the suite would leave them pointed at a
+    suite that no longer exists, with their stage budgets already spent.
     """
     suite = await _get_owned_suite(db, suite_id, current_user)
     await erase_suite(db, suite)
+    funnel_reset = False
+    if (current_user.approval_status or "frozen") == "funnel":
+        funnel_reset = await reset_funnel_lead(db, current_user)
     await db.commit()
-    print(f"[erase] suite {suite_id} by user {current_user.id}")
-    return {"ok": True, "deleted_suite_id": suite_id}
+    log.info("Suite %s erased by user %s (funnel_reset=%s)", suite_id, current_user.id, funnel_reset)
+    return {"ok": True, "deleted_suite_id": suite_id, "funnel_reset": funnel_reset}
 
 
 @router.patch("/{suite_id}/brand")

@@ -301,3 +301,12 @@ async def test_funnel_call_limit_noop_for_approved_users():
     db = CallLimitDb(lead=None)
     await enforce_funnel_call_limit(db, _user(status="approved"), "extract_brand", 5)
     assert not db.committed
+
+
+def test_funnel_may_delete_only_its_own_suite():
+    """«Delete and start over» in the funnel footer. Scoped tight: one suite id,
+    nothing else — the route still checks ownership on top."""
+    assert frozen_path_allowed("funnel", "DELETE", "/api/v1/suites/abc")
+    assert not frozen_path_allowed("funnel", "DELETE", "/api/v1/suites/abc/marketing-plan")
+    assert not frozen_path_allowed("funnel", "DELETE", "/api/v1/suites")
+    assert not frozen_path_allowed("funnel", "DELETE", "/api/v1/content/abc")

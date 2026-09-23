@@ -110,6 +110,12 @@ _FUNNEL_PATCH_PATTERNS = [
 ]
 
 
+# Deleting your own suite is the funnel's "start over": the visitor erases what
+# they built and walks the journey again. Scoped to a single suite id — the
+# route itself still checks ownership.
+_FUNNEL_DELETE_PATTERNS = [re.compile(r"^/api/v1/suites/[^/]+$")]
+
+
 def _funnel_path_allowed(method: str, path: str) -> bool:
     path = path.rstrip("/") or "/"
     method = method.upper()
@@ -129,6 +135,9 @@ def _funnel_path_allowed(method: str, path: str) -> bool:
 
     if method == "PATCH":
         return any(pattern.match(path) for pattern in _FUNNEL_PATCH_PATTERNS)
+
+    if method == "DELETE":
+        return any(pattern.match(path) for pattern in _FUNNEL_DELETE_PATTERNS)
 
     return False
 

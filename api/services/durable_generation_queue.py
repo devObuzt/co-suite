@@ -215,6 +215,23 @@ def _save_suite_social_content_plan(suite: Suite, plan: dict) -> None:
     suite.strategy = strategy
 
 
+async def lock_suite_for_write(db: AsyncSession, suite_id: str) -> Optional[Suite]:
+    """Re-read the suite under a row lock, right before a terminal write.
+
+    Every plan blob lives in ONE json column, `suites.strategy`, and each job
+    saves with a read-modify-write. The work-plans page starts the social-ideas
+    job and the paid-plan job together, so two workers hold two sessions with
+    two copies of that column and the last commit silently erases the other's
+    plan. Measured 2026-09-24: both jobs reported "completed" at the same
+    second and only the social ideas survived — the paid plan was simply gone.
+
+    Taking the lock here and not earlier keeps the two generations parallel:
+    they only queue up for the moment of the write.
+    """
+    result = await db.execute(select(Suite).where(Suite.id == suite_id).with_for_update())
+    return result.scalar_one_or_none()
+
+
 def _save_suite_paid_content_plan(suite: Suite, plan: dict) -> None:
     """Persist the paid-content plan blob under strategy.marketing_action_plan.
 
@@ -633,6 +650,7 @@ async def execute_claimed_job(
                     plan_type=input_data.get("plan_type"),
                 )
                 plan["status"] = "ready"
+                suite = await lock_suite_for_write(db, job.suite_id) or suite
                 _save_suite_social_content_plan(suite, plan)
                 await db.commit()
                 warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
@@ -685,6 +703,7 @@ async def execute_claimed_job(
                 await db.commit()
                 plan = await generate_paid_content_work_plan(suite, language)
                 plan["status"] = "ready"
+                suite = await lock_suite_for_write(db, job.suite_id) or suite
                 _save_suite_paid_content_plan(suite, plan)
                 await db.commit()
                 warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
@@ -757,6 +776,7 @@ async def execute_claimed_job(
                     on_progress=report,
                 )
                 plan["status"] = "ready"
+                suite = await lock_suite_for_write(db, job.suite_id) or suite
                 _save_suite_social_ideas_plan(suite, plan)
                 await db.commit()
                 warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []

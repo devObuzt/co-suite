@@ -75,3 +75,65 @@ async def test_market_research_rolls_back_when_its_cache_write_fails(monkeypatch
     result = await market_research.get_market_research(db, country="Israel", language="he", brand={})
     assert result["competitors_summary"] == ""
     assert db.rolled_back is True
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_suite_also_puts_the_funnel_lead_back_to_the_start():
+    """Erasing the suite alone is not «start over»: the funnel reads the suite
+    link and the spent stage budgets off the LEAD, so the visitor would return
+    to a suite that no longer exists with their caps already used."""
+    from types import SimpleNamespace
+
+    from api.services.suite_erase import reset_funnel_lead
+
+    lead = SimpleNamespace(
+        user_id="u1",
+        suite_id="suite-1",
+        progress={"step": "plans", "suite_created": True, "calls": {"marketing_personas": 5}},
+    )
+
+    class Db:
+        async def execute(self, *_a, **_k):
+            class R:
+                @staticmethod
+                def scalar_one_or_none():
+                    return lead
+            return R()
+
+    assert await reset_funnel_lead(Db(), SimpleNamespace(id="u1")) is True
+    assert lead.suite_id is None
+    assert "calls" not in lead.progress
+    assert lead.progress["step"] == "name"
+    assert lead.progress["suite_created"] is False
+
+
+def test_the_three_plan_jobs_lock_the_suite_before_their_terminal_write():
+    """Two jobs for one suite write the same `strategy` json column from two
+    sessions. Without a row lock the second commit erases the first — measured
+    2026-09-24: social ideas and the paid plan both reported "completed" at the
+    same second and only the social ideas survived."""
+    import inspect
+
+    from api.services import durable_generation_queue as q
+
+    source = inspect.getsource(q.execute_claimed_job)
+    for saver in (
+        "_save_suite_paid_content_plan(suite, plan)",
+        "_save_suite_social_ideas_plan(suite, plan)",
+        "_save_suite_social_content_plan(suite, plan)",
+    ):
+        assert saver in source, saver
+        before = source.split(saver)[0]
+        tail = before.rsplit("\n", 3)[-3:]
+        assert any("lock_suite_for_write" in line for line in tail), (
+            f"{saver} writes the shared strategy column without re-reading it under a lock"
+        )
+
+
+def test_the_lock_helper_actually_locks_the_row():
+    import inspect
+
+    from api.services import durable_generation_queue as q
+
+    source = inspect.getsource(q.lock_suite_for_write)
+    assert "with_for_update()" in source, "a plain re-read still loses the other job's write"
