@@ -207,7 +207,7 @@ async def run_full_marketing_plan(
                 "stage": stage,
                 "message": _STAGE_MESSAGE[stage],
                 "progress": start,
-                "result": {"stages": {**done, stage: False}, "running_stage": stage},
+                "result": {"plan_stages": {**done, stage: False}, "running_stage": stage},
             },
         )
         try:
@@ -227,7 +227,7 @@ async def run_full_marketing_plan(
                     "stage": stage,
                     "message": f"{_STAGE_MESSAGE[stage]} failed: {str(exc)[:160]}",
                     "progress": end,
-                    "result": {"stages": done, "failed": failed},
+                    "result": {"plan_stages": done, "failed": failed},
                 },
             )
             continue
@@ -238,11 +238,11 @@ async def run_full_marketing_plan(
                 "stage": stage,
                 "message": _STAGE_MESSAGE[stage],
                 "progress": end,
-                "result": {"stages": done, "failed": failed},
+                "result": {"plan_stages": done, "failed": failed},
             },
         )
 
-    result = {"stages": done, "failed": failed, "generated": ran}
+    result = {"plan_stages": done, "failed": failed, "generated": ran}
     # Everything we attempted blew up — that is a failed job, not a quiet
     # "completed" with an empty plan behind it.
     if failed and not ran:

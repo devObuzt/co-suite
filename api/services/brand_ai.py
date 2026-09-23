@@ -323,6 +323,8 @@ Extract and return ONLY a valid JSON object with this exact structure:
   "description": "2-4 sentence description of what they do, who they serve, and what makes them different",
   "industry": "specific industry (e.g. 'Digital Marketing Agency', 'Restaurant', 'Fashion Retail')",
   "location": "city, country if found",
+  "location_city": "the town/city ONLY, no country (e.g. 'Yarka', 'Nazareth'), else null",
+  "location_country": "the COUNTRY only, spelled out (e.g. 'Israel'). Work it out from the town when the sources never name the country — a town alone is never a country. null only if you truly cannot tell",
   "founded": "year if found, else null",
   "services": ["list of actual services/offerings found"],
   "products": ["list of products if it's a product business"],

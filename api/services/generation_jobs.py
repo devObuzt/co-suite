@@ -120,6 +120,9 @@ def serialize_job(job: Optional[GenerationJob], suite_id: Optional[str] = None, 
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         "result": job.result,
         "stages": (job.result or {}).get("stages") if isinstance(job.result, dict) else None,
+        # Full-plan runs report a per-stage done map. Kept off "stages",
+        # which the deck job already uses for an ordered array.
+        "plan_stages": (job.result or {}).get("plan_stages") if isinstance(job.result, dict) else None,
         "partial": (job.result or {}).get("partial") if isinstance(job.result, dict) else None,
         "execution": {
             "mode": "durable_worker",

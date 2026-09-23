@@ -113,6 +113,18 @@ async def test_full_run_skips_finished_stages_and_builds_the_rest(monkeypatch):
     assert completed["failed"] == []
     # The page reads the live stage off these events.
     assert [event["stage"] for event in progress][0] == "competitors"
+    # The reveal contract: the page shows a section only once this map says the
+    # stage is DONE, so a stage must read False while it is still running.
+    starting = progress[0]["result"]["plan_stages"]
+    assert starting["competitors"] is False
+    assert starting["keywords"] is True
+    assert completed["plan_stages"] == {
+        "keywords": True,
+        "competitors": True,
+        "demand_supply": True,
+        "personas": True,
+        "message": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -247,3 +259,46 @@ async def _fill(suite, key, value, ran):
 async def _set_message(suite, message, ran):
     ran.append("message")
     suite.strategy = {**(suite.strategy or {}), "marketing_message": message}
+
+
+def test_extraction_asks_for_city_and_country_separately():
+    """The old prompt returned one free string and the page split it on a
+    comma — so a town named alone ("Yarka") landed in the COUNTRY field and
+    became the ad-targeting country."""
+    from api.services.brand_ai import EXTRACTION_PROMPT
+
+    assert '"location_city"' in EXTRACTION_PROMPT
+    assert '"location_country"' in EXTRACTION_PROMPT
+    assert "a town alone is never a country" in EXTRACTION_PROMPT
+
+
+def test_serialize_job_exposes_the_plan_stage_map():
+    from types import SimpleNamespace
+
+    from api.models.generation_job import GenerationJobStatus, GenerationJobType
+    from api.services.generation_jobs import serialize_job
+
+    job = SimpleNamespace(
+        id="job-x",
+        suite_id="suite-x",
+        type=GenerationJobType.marketing_plan,
+        status=GenerationJobStatus.running,
+        stage="competitors",
+        message="",
+        progress=25,
+        error=None,
+        provider=None,
+        model=None,
+        retry_count=0,
+        max_retries=3,
+        next_retry_at=None,
+        rate_limit_reset_at=None,
+        estimated_wait_seconds=None,
+        created_at=None,
+        updated_at=None,
+        started_at=None,
+        finished_at=None,
+        result={"plan_stages": {"keywords": True, "competitors": False}},
+    )
+    payload = serialize_job(job)
+    assert payload["plan_stages"] == {"keywords": True, "competitors": False}
