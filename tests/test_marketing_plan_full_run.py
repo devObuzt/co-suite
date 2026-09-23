@@ -302,3 +302,56 @@ def test_serialize_job_exposes_the_plan_stage_map():
     )
     payload = serialize_job(job)
     assert payload["plan_stages"] == {"keywords": True, "competitors": False}
+
+
+@pytest.mark.asyncio
+async def test_no_whatsapp_message_when_the_visitor_did_not_ask(monkeypatch):
+    from api.services import plan_notify
+
+    suite = _suite()
+    sent = []
+    monkeypatch.setattr(plan_notify, "whatsapp_notify_available", lambda: True)
+    monkeypatch.setattr(full_run, "send_plan_ready", lambda *a, **k: sent.append(a) or _async_value(True))
+    await full_run._notify_if_asked(FakeDb(), suite)
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_the_message_goes_out_once_and_is_not_repeated_on_retry(monkeypatch):
+    """The job can be retried; the visitor must not be messaged twice."""
+    from api.services import plan_notify
+
+    suite = _suite()
+    plan_notify.save_preference(suite, whatsapp=True, language="he", phone="+972500000000")
+    calls = []
+
+    async def fake_send(phone, language, name):
+        calls.append((phone, language, name))
+        return True
+
+    monkeypatch.setattr(full_run, "send_plan_ready", fake_send)
+    db = FakeDb()
+    await full_run._notify_if_asked(db, suite)
+    await full_run._notify_if_asked(db, suite)
+    assert len(calls) == 1, "a retried job must not message the visitor again"
+    assert calls[0][1] == "he"
+
+
+def test_arabic_and_hebrew_have_their_own_template_english_covers_the_rest():
+    from api.services import plan_notify
+
+    assert plan_notify.template_language_code("ar") == "ar"
+    assert plan_notify.template_language_code("he") == "he"
+    for other in ("en", "fr", "es", "tr", "ru", "zh", ""):
+        assert plan_notify.template_language_code(other) == "en", other
+    assert plan_notify.template_for_language("ar") != plan_notify.template_for_language("he")
+    assert plan_notify.template_for_language("zh") == plan_notify.template_for_language("en")
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_sent_while_whatsapp_is_not_configured():
+    """The page hides the button off the same check, so this is belt and braces."""
+    from api.services import plan_notify
+
+    assert plan_notify.whatsapp_notify_available() is False
+    assert await plan_notify.send_plan_ready("+972500000000", "ar", "Connec") is False

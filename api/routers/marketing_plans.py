@@ -47,6 +47,7 @@ from ..services.marketing_plan_visuals import deck_visuals, ensure_marketing_pla
 from ..services.meta_interests import match_meta_interests
 from ..services.funnel_guard import block_funnel_regeneration, enforce_funnel_call_limit
 from ..services.marketing_plan_full_run import pending_plan_stages, plan_stage_status
+from ..services.plan_notify import read_preference, save_preference, whatsapp_notify_available
 from ..services.multi_scraper import search_web
 from ..services.suite_access import require_suite_access
 
@@ -2207,6 +2208,12 @@ def _marketing_plan_response(
         # Which stages already hold data — the page resumes from this instead
         # of re-deriving readiness from the payload.
         "plan_stages": plan_stage_status(suite),
+        # The waiting dialog only offers the WhatsApp button when a message can
+        # actually be sent — an offer the system cannot keep is worse than none.
+        "notify": {
+            "whatsapp_available": whatsapp_notify_available(),
+            "whatsapp": bool(read_preference(suite).get("whatsapp")),
+        },
         "generation_status": serialize_job(job, suite_id=suite_id),
     }
 
@@ -2285,6 +2292,30 @@ async def download_marketing_plan_pdf(
             "Access-Control-Expose-Headers": "Content-Disposition",
         },
     )
+
+
+class PlanNotifyRequest(BaseModel):
+    whatsapp: bool = False
+    language: str = ""
+
+
+@router.post("/suites/{suite_id}/marketing-plan/notify")
+async def set_plan_notify(
+    suite_id: str,
+    payload: PlanNotifyRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Record what the visitor chose in the "this takes a few minutes" dialog."""
+    suite = await get_owned_suite(db, suite_id, current_user)
+    save_preference(
+        suite,
+        whatsapp=payload.whatsapp,
+        language=payload.language or infer_plan_language(suite),
+        phone=current_user.phone,
+    )
+    await db.commit()
+    return _marketing_plan_response(suite, suite_id, await _latest_marketing_plan_job(db, suite_id))
 
 
 @router.post("/suites/{suite_id}/marketing-plan/full/generate")

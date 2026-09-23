@@ -139,6 +139,15 @@ class Settings(BaseSettings):
     whatsapp_api_version: str = "v19.0"
     whatsapp_otp_template_name: str = "logincode"
     whatsapp_otp_template_language: str = "en_US"
+    # "Your plan is ready" notification. Off until the templates are approved
+    # AND the worker — not just the API — carries the Cloud API credentials:
+    # the worker is what finishes the job, so it is what sends. The page only
+    # offers the WhatsApp button when this reports available, so a visitor is
+    # never promised a message the system cannot send.
+    whatsapp_notify_enabled: bool = False
+    whatsapp_plan_ready_template_ar: str = "plan_ready_ar"
+    whatsapp_plan_ready_template_he: str = "plan_ready_he"
+    whatsapp_plan_ready_template_en: str = "plan_ready_en"
 
     class Config:
         env_file = str(_here / ".env")
