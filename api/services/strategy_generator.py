@@ -254,6 +254,38 @@ Important rules:
 - IMPORTANT: Write ALL text content (marketing_message, audience descriptions, persona names, content themes, keywords, competitor USP/ESP) in {LANG_NAMES.get(output_language, 'English')}. Only facebook_interests must remain in English (Meta Ads requirement)."""
 
 
+# ── Brand defaults ────────────────────────────────────────────────────────────
+
+def derive_brand_defaults(brand: dict) -> dict:
+    """Fill the strategy prompt's required brand fields from what the suite has.
+
+    Shared by the onboarding endpoint and the marketing-plan worker so the
+    message reads the same whoever asked for it.
+    """
+    brand = dict(brand)
+
+    if not brand.get("target_audience"):
+        loc = brand.get("audience_location") or {}
+        countries = loc.get("countries") or []
+        cities = loc.get("cities") or []
+        interests = brand.get("audience_interests") or []
+        parts = [", ".join(countries + cities)] if (countries or cities) else []
+        if interests:
+            parts.append("interested in: " + ", ".join(interests))
+        brand["target_audience"] = ". ".join(parts) or "General audience"
+
+    if not brand.get("how_they_help") and brand.get("usp_points"):
+        brand["how_they_help"] = brand["usp_points"][0]
+
+    if not brand.get("unique_value") and brand.get("usp_points"):
+        brand["unique_value"] = ". ".join(brand["usp_points"])
+
+    if not brand.get("esp") and brand.get("esp_points"):
+        brand["esp"] = ". ".join(brand["esp_points"])
+
+    return brand
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 async def generate_strategy(brand: dict, user_language: str = "en") -> dict:

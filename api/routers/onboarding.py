@@ -12,6 +12,7 @@ from ..models.user import User
 from ..models.suite import Suite, SuiteStatus
 from ..services.brand_ai import extract_brand_from_sources, suggest_brand_identity, suggest_brand_assets
 from ..services.media_storage import r2_configured, store_brand_asset
+from ..services.strategy_generator import derive_brand_defaults
 from ..services.strategy_generator import generate_strategy as _generate_strategy
 from ..services.funnel_guard import block_funnel_regeneration, enforce_funnel_call_limit
 from ..services.suite_access import require_suite_access
@@ -186,30 +187,9 @@ async def generate_strategy_endpoint(
         already_generated=bool((suite.strategy or {}).get("marketing_message")),
     )
 
-    brand = dict(suite.brand or {})
-
-    # Auto-derive target_audience from structured audience_location if missing
-    if not brand.get("target_audience"):
-        loc = brand.get("audience_location") or {}
-        countries = loc.get("countries") or []
-        cities = loc.get("cities") or []
-        interests = brand.get("audience_interests") or []
-        parts = [", ".join(countries + cities)] if (countries or cities) else []
-        if interests:
-            parts.append("interested in: " + ", ".join(interests))
-        brand["target_audience"] = ". ".join(parts) or "General audience"
-
-    # Auto-derive how_they_help from usp_points if missing
-    if not brand.get("how_they_help") and brand.get("usp_points"):
-        brand["how_they_help"] = brand["usp_points"][0]
-
-    # Auto-derive unique_value from usp_points if missing
-    if not brand.get("unique_value") and brand.get("usp_points"):
-        brand["unique_value"] = ". ".join(brand["usp_points"])
-
-    # Auto-derive esp from esp_points if missing
-    if not brand.get("esp") and brand.get("esp_points"):
-        brand["esp"] = ". ".join(brand["esp_points"])
+    # Same derivation the marketing-plan worker uses, so the message reads the
+    # same whether the user pressed the button or the plan job wrote it.
+    brand = derive_brand_defaults(dict(suite.brand or {}))
 
     try:
         strategy = await _generate_strategy(brand, user_language=data.user_language)

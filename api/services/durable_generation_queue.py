@@ -388,6 +388,14 @@ async def execute_claimed_job(
                     "upcoming_campaigns": input_data.get("upcoming_campaigns") or [],
                     "planning_notes": input_data.get("planning_notes"),
                 }
+                if section == "full":
+                    # The whole stage chain in one durable run: the browser
+                    # only polls it, so a refresh or a closed tab cannot
+                    # abandon a half-built plan any more.
+                    from .marketing_plan_full_run import run_full_marketing_plan
+
+                    return await run_full_marketing_plan(db, job, suite, input_data.get("language"))
+
                 if section in {"competitors", "demand_supply"}:
                     stage = "competitor_research" if section == "competitors" else "demand_supply"
                     message = (

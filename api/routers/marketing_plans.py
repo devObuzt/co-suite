@@ -46,6 +46,7 @@ from ..services.marketing_plan_pdf import build_marketing_plan_pdf
 from ..services.marketing_plan_visuals import deck_visuals, ensure_marketing_plan_visuals
 from ..services.meta_interests import match_meta_interests
 from ..services.funnel_guard import block_funnel_regeneration, enforce_funnel_call_limit
+from ..services.marketing_plan_full_run import pending_plan_stages, plan_stage_status
 from ..services.multi_scraper import search_web
 from ..services.suite_access import require_suite_access
 
@@ -2203,6 +2204,9 @@ def _marketing_plan_response(
         "intelligence": _intelligence(suite),
         "action_plan": _action_plan(suite),
         "visuals": deck_visuals(suite),
+        # Which stages already hold data — the page resumes from this instead
+        # of re-deriving readiness from the payload.
+        "plan_stages": plan_stage_status(suite),
         "generation_status": serialize_job(job, suite_id=suite_id),
     }
 
@@ -2281,6 +2285,47 @@ async def download_marketing_plan_pdf(
             "Access-Control-Expose-Headers": "Content-Disposition",
         },
     )
+
+
+@router.post("/suites/{suite_id}/marketing-plan/full/generate")
+async def generate_full_marketing_plan(
+    suite_id: str,
+    payload: MarketingStageRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Queue the whole plan chain as one durable job and return its status.
+
+    Idempotent on purpose: a refresh re-posts this, and an already-running job
+    is handed straight back instead of starting a second run.
+    """
+    suite = await get_owned_suite(db, suite_id, current_user)
+    active = await _active_marketing_plan_job(db, suite_id)
+    if active:
+        return _marketing_plan_response(suite, suite_id, active, active.status.value)
+
+    pending = pending_plan_stages(suite)
+    if not pending:
+        latest = await _latest_marketing_plan_job(db, suite_id)
+        return _marketing_plan_response(suite, suite_id, latest, "ready")
+
+    # Two automatic runs per funnel lead: one to build the plan, one spare so a
+    # run that lost a stage to a dead provider can finish itself on the next
+    # visit. The per-stage buttons keep their own caps.
+    await enforce_funnel_call_limit(db, current_user, "marketing_full_plan", 2)
+    request_data = payload or MarketingStageRequest()
+    job = await create_job(
+        db,
+        suite_id=suite_id,
+        job_type=GenerationJobType.marketing_plan,
+        user_id=current_user.id,
+        input_data={
+            "section": "full",
+            "language": request_data.language,
+            "stages": pending,
+        },
+    )
+    return _marketing_plan_response(suite, suite_id, job, job.status.value)
 
 
 @router.post("/suites/{suite_id}/marketing-plan/generate")
