@@ -91,4 +91,11 @@ async def get_occasions(db, *, country: str, language: str, period: str) -> list
         return occasions
     except Exception:
         log.exception("occasions fetch failed for %s/%s/%s", country, language, period)
+        # Swallowing the error is right — this is best-effort research.
+        # Leaving a broken transaction behind is not: the caller keeps
+        # using this session for progress writes and the final result.
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         return []

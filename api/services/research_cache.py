@@ -6,10 +6,14 @@ country/language; normalization keeps the cache key stable across casing/spacing
 """
 from datetime import datetime, timedelta, timezone
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.research_cache import ResearchCache
+
+log = logging.getLogger(__name__)
 
 
 def normalize_country(value) -> str:
@@ -55,4 +59,15 @@ async def upsert_cached(db: AsyncSession, *, kind, country, language, period, da
             kind=kind, country=country, language=language, period=period,
             data=data, source=source, expires_at=expires_at,
         ))
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        # This is a CACHE. A failed write here (a racing worker inserting the
+        # same key, a bad value) must never take the caller down with it — and
+        # a failed commit leaves the session unusable until it is rolled back.
+        # Skipping that rollback is what turned one cache miss into a worker
+        # crash loop: every later query on the poisoned session raised, the job
+        # never reached a terminal state, and the stale-job sweeper retried it
+        # every 30 minutes forever.
+        await db.rollback()
+        log.warning("Research cache write failed for %s/%s/%s; continuing uncached.", kind, country, period, exc_info=True)

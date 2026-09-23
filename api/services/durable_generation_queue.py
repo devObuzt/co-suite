@@ -793,7 +793,26 @@ async def execute_claimed_job(
             return await mark_failed(db, job.id, f"Unsupported generation job type: {job.type}")
         except Exception as exc:
             log.exception("Generation worker failed job %s", job.id)
-            await _mark_retry_or_failed(db, job, exc)
+            # A failed DB write earlier in the job leaves this session unusable,
+            # so the bookkeeping below would raise too and the exception would
+            # escape to the worker loop — leaving the job stuck on "running"
+            # until the 30-minute stale sweeper retried it into the same crash.
+            # Roll back first, and if this session is beyond saving, finalise
+            # the job on a fresh one. A job must always reach a terminal state.
+            try:
+                await db.rollback()
+                await _mark_retry_or_failed(db, job, exc)
+            except Exception:
+                log.exception("Could not finalise job %s on its own session; retrying on a fresh one", job.id)
+                try:
+                    async with session_factory() as rescue:
+                        fresh = (
+                            await rescue.execute(select(GenerationJob).where(GenerationJob.id == job_id))
+                        ).scalar_one_or_none()
+                        if fresh:
+                            await _mark_retry_or_failed(rescue, fresh, exc)
+                except Exception:
+                    log.exception("Job %s could not be marked failed at all", job_id)
             return None
 
 

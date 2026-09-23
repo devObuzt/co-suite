@@ -37,4 +37,11 @@ async def get_market_research(db, *, country: str, language: str, brand: dict) -
         return data
     except Exception:
         log.exception("market research failed for %s/%s", country, language)
+        # Swallowing the error is right — this is best-effort research.
+        # Leaving a broken transaction behind is not: the caller keeps
+        # using this session for progress writes and the final result.
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         return dict(_EMPTY)
