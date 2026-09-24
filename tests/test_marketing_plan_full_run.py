@@ -305,35 +305,66 @@ def test_serialize_job_exposes_the_plan_stage_map():
 
 
 @pytest.mark.asyncio
-async def test_no_whatsapp_message_when_the_visitor_did_not_ask(monkeypatch):
+async def test_no_message_when_the_visitor_did_not_ask(monkeypatch):
     from api.services import plan_notify
 
-    suite = _suite()
     sent = []
-    monkeypatch.setattr(plan_notify, "whatsapp_notify_available", lambda: True)
-    monkeypatch.setattr(full_run, "send_plan_ready", lambda *a, **k: sent.append(a) or _async_value(True))
-    await full_run._notify_if_asked(FakeDb(), suite)
+    monkeypatch.setattr(plan_notify, "send_plan_ready", lambda *a, **k: sent.append(a))
+
+    class Db:
+        async def execute(self, *_a, **_k):
+            class R:
+                @staticmethod
+                def mappings():
+                    return SimpleNamespace(
+                        first=lambda: {"name": "X", "brand": {}, "strategy": {}}
+                    )
+            return R()
+
+    assert await plan_notify.maybe_notify_plan_ready(Db(), "s1") is False
     assert sent == []
 
 
 @pytest.mark.asyncio
-async def test_the_message_goes_out_once_and_is_not_repeated_on_retry(monkeypatch):
-    """The job can be retried; the visitor must not be messaged twice."""
+async def test_the_message_goes_out_once_and_is_not_repeated(monkeypatch):
+    """Several jobs call this now — the marketing plan and both work-plan jobs.
+    `sent` is the only thing stopping the visitor being messaged three times."""
     from api.services import plan_notify
 
-    suite = _suite()
-    plan_notify.save_preference(suite, whatsapp=True, language="he", phone="+972500000000")
     calls = []
+    strategy = {
+        "plan_ready_notify": {
+            "whatsapp": True,
+            "phone": "+972500000000",
+            "language": "he",
+            "sent": False,
+        }
+    }
 
     async def fake_send(phone, language, name):
         calls.append((phone, language, name))
         return True
 
-    monkeypatch.setattr(full_run, "send_plan_ready", fake_send)
-    db = FakeDb()
-    await full_run._notify_if_asked(db, suite)
-    await full_run._notify_if_asked(db, suite)
-    assert len(calls) == 1, "a retried job must not message the visitor again"
+    async def fake_mark_sent(_db, _suite_id):
+        strategy["plan_ready_notify"]["sent"] = True
+
+    monkeypatch.setattr(plan_notify, "send_plan_ready", fake_send)
+    monkeypatch.setattr(plan_notify, "mark_sent", fake_mark_sent)
+
+    class Db:
+        async def execute(self, *_a, **_k):
+            class R:
+                @staticmethod
+                def mappings():
+                    return SimpleNamespace(
+                        first=lambda: {"name": "My Baby", "brand": {}, "strategy": strategy}
+                    )
+            return R()
+
+    db = Db()
+    assert await plan_notify.maybe_notify_plan_ready(db, "s1") is True
+    assert await plan_notify.maybe_notify_plan_ready(db, "s1") is False
+    assert len(calls) == 1
     assert calls[0][1] == "he"
 
 

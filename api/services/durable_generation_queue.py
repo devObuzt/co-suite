@@ -24,6 +24,7 @@ from .generation_jobs import (
     update_job,
     utcnow,
 )
+from .plan_notify import maybe_notify_plan_ready
 from .marketing_plan_generator import (
     build_marketing_plan_partial_result,
     generate_marketing_competitor_research,
@@ -774,6 +775,14 @@ async def execute_claimed_job(
                 plan = await generate_paid_content_work_plan(suite, language)
                 plan["status"] = "ready"
                 await write_action_plan_section(db, suite, "paid_content_plan", plan)
+                # The waiting dialog lives on the work-plans page, so this is
+                # the finish the visitor actually asked to be told about.
+                # Best-effort: the plan is saved, a failed message must not
+                # turn a finished job into a failed one.
+                try:
+                    await maybe_notify_plan_ready(db, job.suite_id)
+                except Exception:
+                    log.exception("Plan-ready notification failed for suite %s", job.suite_id)
                 warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
                 candidate_count = sum(
                     len(group)
@@ -845,6 +854,14 @@ async def execute_claimed_job(
                 )
                 plan["status"] = "ready"
                 await write_action_plan_section(db, suite, "social_ideas_plan", plan)
+                # The waiting dialog lives on the work-plans page, so this is
+                # the finish the visitor actually asked to be told about.
+                # Best-effort: the plan is saved, a failed message must not
+                # turn a finished job into a failed one.
+                try:
+                    await maybe_notify_plan_ready(db, job.suite_id)
+                except Exception:
+                    log.exception("Plan-ready notification failed for suite %s", job.suite_id)
                 warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
                 # Usage accounting must never re-run a completed generation.
                 try:

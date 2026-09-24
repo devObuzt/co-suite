@@ -12,10 +12,12 @@ module:
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import httpx
+from sqlalchemy import text
 
 from ..core.config import settings
 from ..core.external_calls import external_call, redact_secrets
@@ -81,13 +83,68 @@ def save_preference(suite: Suite, *, whatsapp: bool, language: str, phone: str |
     return preference
 
 
-def mark_sent(suite: Suite) -> None:
-    """One message per plan: a retrying job must not message twice."""
-    strategy = _strategy(suite)
-    preference = dict(strategy.get(NOTIFY_KEY) or {})
-    preference["sent"] = True
-    strategy[NOTIFY_KEY] = preference
-    suite.strategy = strategy
+async def mark_sent(db, suite_id: str) -> None:
+    """One message per plan: a retrying job must not message twice.
+
+    Written with `jsonb_set` for the same reason every other plan write is —
+    rewriting the whole `strategy` column from a Python copy is what kept
+    erasing sibling jobs' work.
+    """
+    await db.execute(
+        text(
+            """
+            UPDATE suites
+               SET strategy = jsonb_set(
+                     COALESCE(strategy::jsonb, '{}'::jsonb),
+                     ARRAY[:key, 'sent'], 'true'::jsonb, true
+                   )::json
+             WHERE id = :suite_id
+            """
+        ),
+        {"key": NOTIFY_KEY, "suite_id": suite_id},
+    )
+    await db.commit()
+
+
+async def maybe_notify_plan_ready(db, suite_id: str) -> bool:
+    """Send the "it's ready" message if the visitor asked and it is now true.
+
+    Called at the end of every job that finishes something the visitor might be
+    waiting on. The first version only fired at the end of the marketing-plan
+    run — but the dialog lives on the WORK-PLANS page, whose jobs run minutes
+    later, so the message was attached to a run that had already finished and
+    nothing was ever sent (measured 2026-09-24: plan done 17:12:42, work plan
+    17:24:04, opt-in in between, no message).
+
+    Safe to call from several places: `sent` is the guard.
+    """
+    row = (
+        await db.execute(
+            text("SELECT name, brand, strategy FROM suites WHERE id = :id"), {"id": suite_id}
+        )
+    ).mappings().first()
+    if not row:
+        return False
+
+    strategy = row["strategy"] or {}
+    if isinstance(strategy, str):
+        strategy = json.loads(strategy)
+    preference = strategy.get(NOTIFY_KEY) or {}
+    if not preference.get("whatsapp") or preference.get("sent"):
+        return False
+
+    brand = row["brand"] or {}
+    if isinstance(brand, str):
+        brand = json.loads(brand)
+
+    delivered = await send_plan_ready(
+        str(preference.get("phone") or ""),
+        str(preference.get("language") or ""),
+        str(brand.get("name") or row["name"] or ""),
+    )
+    if delivered:
+        await mark_sent(db, suite_id)
+    return delivered
 
 
 async def send_plan_ready(phone: str, language: str, business_name: str) -> bool:

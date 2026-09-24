@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.generation_job import GenerationJob
 from ..models.suite import Suite
 from .generation_jobs import mark_completed, mark_failed, mark_progress
-from .plan_notify import mark_sent, read_preference, send_plan_ready
+from .plan_notify import maybe_notify_plan_ready
 
 log = logging.getLogger(__name__)
 
@@ -243,7 +243,13 @@ async def run_full_marketing_plan(
             },
         )
 
-    await _notify_if_asked(db, suite)
+    # Best-effort, always: the plan is already saved and a notification that
+    # blows up must never turn a finished run into a failed one.
+    # Same guard everywhere: `sent` makes several trigger points safe.
+    try:
+        await maybe_notify_plan_ready(db, suite.id)
+    except Exception:
+        log.exception("Plan-ready notification failed for suite %s", suite.id)
 
     result = {"plan_stages": done, "failed": failed, "generated": ran}
     # Everything we attempted blew up — that is a failed job, not a quiet
@@ -251,31 +257,3 @@ async def run_full_marketing_plan(
     if failed and not ran:
         return await mark_failed(db, job.id, f"Marketing plan stages failed: {', '.join(failed)}", result=result)
     return await mark_completed(db, job.id, result)
-
-
-async def _notify_if_asked(db: AsyncSession, suite: Suite) -> None:
-    """Message the visitor if they asked to be told instead of waiting.
-
-    Best-effort by design: the plan is already saved, and a notification that
-    fails must never turn a finished run into a failed one.
-    """
-    preference = read_preference(suite)
-    if not preference.get("whatsapp") or preference.get("sent"):
-        return
-    try:
-        brand = suite.brand if isinstance(suite.brand, dict) else {}
-        delivered = await send_plan_ready(
-            str(preference.get("phone") or ""),
-            str(preference.get("language") or ""),
-            str(brand.get("name") or suite.name or ""),
-        )
-        if delivered:
-            # One message per plan, even if the job is retried.
-            mark_sent(suite)
-            await db.commit()
-    except Exception:
-        log.exception("Plan-ready notification failed for suite %s", suite.id)
-        try:
-            await db.rollback()
-        except Exception:
-            pass
