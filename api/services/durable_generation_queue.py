@@ -271,6 +271,38 @@ def _save_suite_social_ideas_plan(suite: Suite, plan: dict) -> None:
     suite.strategy = strategy
 
 
+# Every one of these writes the suite's single `strategy` json column with a
+# read-modify-write. Two of them on one suite at the same time means the later
+# commit erases the earlier one's plan — and the erased job still reports
+# "completed", so nothing anywhere says the work was thrown away.
+#
+# Row locks were tried twice and were not enough. Serialising the claim is:
+# the second job simply waits for the next poll and then reads a suite that
+# already has the first one's result in it. The cost is that the work-plans
+# page's two runs go one after the other instead of side by side — which the
+# waiting dialog already covers.
+CLAIM_SCAN_LIMIT = 20
+
+STRATEGY_WRITING_JOB_TYPES = {
+    GenerationJobType.marketing_plan,
+    GenerationJobType.social_ideas,
+    GenerationJobType.paid_content_plan,
+    GenerationJobType.social_content_plan,
+}
+
+
+async def suite_has_strategy_job_running(db: AsyncSession, suite_id: str, exclude_job_id: str) -> bool:
+    result = await db.execute(
+        select(GenerationJob.id)
+        .where(GenerationJob.suite_id == suite_id)
+        .where(GenerationJob.id != exclude_job_id)
+        .where(GenerationJob.type.in_(STRATEGY_WRITING_JOB_TYPES))
+        .where(GenerationJob.status == GenerationJobStatus.running)
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def claim_next_job(db: AsyncSession) -> Optional[GenerationJob]:
     now = utcnow()
     runnable_status = or_(
@@ -286,19 +318,35 @@ async def claim_next_job(db: AsyncSession) -> Optional[GenerationJob]:
             & ((GenerationJob.next_retry_at.is_(None)) | (GenerationJob.next_retry_at <= now))
         ),
     )
+    # A batch, not one row: a job held back for its suite must not stall every
+    # other suite's work behind it. We walk the queue in order and take the
+    # first one that is actually claimable.
     result = await db.execute(
         select(GenerationJob)
         .where(runnable_status)
         .order_by(GenerationJob.priority.desc(), GenerationJob.created_at.asc())
         .with_for_update(skip_locked=True)
-        .limit(1)
+        .limit(CLAIM_SCAN_LIMIT)
     )
-    job = result.scalar_one_or_none()
-    if not job:
+    candidates = list(result.scalars().all())
+    if not candidates:
         return None
 
-    await mark_running(db, job.id, "Worker claimed generation job.")
-    return job
+    for job in candidates:
+        if job.type in STRATEGY_WRITING_JOB_TYPES and await suite_has_strategy_job_running(
+            db, job.suite_id, job.id
+        ):
+            # Left queued on purpose: a later poll runs it against a suite that
+            # already holds the sibling's result.
+            log.info(
+                "Holding %s job %s: suite %s already has a strategy job running.",
+                job.type.value, job.id, job.suite_id,
+            )
+            continue
+        await mark_running(db, job.id, "Worker claimed generation job.")
+        return job
+
+    return None
 
 
 async def _mark_retry_or_failed(db: AsyncSession, job: GenerationJob, error: Exception) -> None:

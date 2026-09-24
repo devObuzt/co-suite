@@ -143,3 +143,42 @@ def test_the_lock_helper_actually_locks_the_row():
     assert "populate_existing=True" in source, (
         "the lock is useless without populate_existing: the in-memory strategy stays stale"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_second_strategy_job_for_the_same_suite_is_held_back(monkeypatch):
+    """Two jobs writing one `strategy` column is the whole bug. Row locks were
+    tried twice and the paid plan still vanished while its job said
+    "completed" — so the claim itself refuses the overlap."""
+    from types import SimpleNamespace
+
+    from api.models.generation_job import GenerationJobType
+    from api.services import durable_generation_queue as q
+
+    social = SimpleNamespace(id="j-social", suite_id="s1", type=GenerationJobType.social_ideas)
+    paid = SimpleNamespace(id="j-paid", suite_id="s1", type=GenerationJobType.paid_content_plan)
+    other = SimpleNamespace(id="j-other", suite_id="s2", type=GenerationJobType.social_ideas)
+    running = {"s1"}
+    claimed = []
+
+    class Db:
+        async def execute(self, *_a, **_k):
+            class R:
+                @staticmethod
+                def scalars():
+                    return SimpleNamespace(all=lambda: [paid, other])
+            return R()
+
+    async def fake_running(_db, suite_id, _exclude):
+        return suite_id in running
+
+    async def fake_mark_running(_db, job_id, *_a, **_k):
+        claimed.append(job_id)
+
+    monkeypatch.setattr(q, "suite_has_strategy_job_running", fake_running)
+    monkeypatch.setattr(q, "mark_running", fake_mark_running)
+
+    job = await q.claim_next_job(Db())
+    assert job is other, "the held suite must not block a different suite's job"
+    assert claimed == ["j-other"]
+    assert social.id not in claimed and paid.id not in claimed
