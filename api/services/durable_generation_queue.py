@@ -1,9 +1,10 @@
 import asyncio
+import json
 import logging
 from datetime import timedelta
 from typing import Awaitable, Callable, Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..core.observability import log_event, notify_generation_job_alert
@@ -215,31 +216,44 @@ def _save_suite_social_content_plan(suite: Suite, plan: dict) -> None:
     suite.strategy = strategy
 
 
-async def lock_suite_for_write(db: AsyncSession, suite_id: str) -> Optional[Suite]:
-    """Re-read the suite under a row lock, right before a terminal write.
+async def write_action_plan_section(db: AsyncSession, suite: Suite, section: str, plan: dict) -> None:
+    """Write ONE key under strategy.marketing_action_plan, in the database.
 
-    Every plan blob lives in ONE json column, `suites.strategy`, and each job
-    saves with a read-modify-write. The work-plans page starts the social-ideas
-    job and the paid-plan job together, so two workers hold two sessions with
-    two copies of that column and the last commit silently erases the other's
-    plan. Measured 2026-09-24: both jobs reported "completed" at the same
-    second and only the social ideas survived — the paid plan was simply gone.
+    Read-modify-write in Python is what kept losing plans: two jobs each hold a
+    copy of the whole `strategy` json, and the later commit writes its copy over
+    the other's work — the erased job still reports "completed". Row locks did
+    not fix it (tried twice) because the ORM session kept handing back the copy
+    it already had.
 
-    Taking the lock here and not earlier keeps the two generations parallel:
-    they only queue up for the moment of the write.
+    So the merge happens server-side instead. `jsonb_set` touches only this
+    section, so a sibling job writing a different section cannot be clobbered —
+    there is no read to go stale. Measured before the change: paid wrote 10
+    ideas at 11:55:14 and social erased them at 11:55:51.
     """
-    # `populate_existing` is the whole point. The session already holds this
-    # suite from the start of the job, and with `expire_on_commit=False` it
-    # keeps the copy of `strategy` it read minutes ago. A plain re-SELECT hands
-    # back that same stale object from the identity map — the row gets locked
-    # and the write still clobbers. This forces the fresh row over it.
-    result = await db.execute(
-        select(Suite)
-        .where(Suite.id == suite_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
+    await db.execute(
+        text(
+            """
+            UPDATE suites
+               SET strategy = jsonb_set(
+                     jsonb_set(
+                       COALESCE(strategy::jsonb, '{}'::jsonb),
+                       '{marketing_action_plan}',
+                       COALESCE(strategy::jsonb -> 'marketing_action_plan', '{}'::jsonb),
+                       true
+                     ),
+                     ARRAY['marketing_action_plan', :section],
+                     CAST(:plan AS jsonb),
+                     true
+                   )::json
+             WHERE id = :suite_id
+            """
+        ),
+        {"section": section, "plan": json.dumps(plan), "suite_id": suite.id},
     )
-    return result.scalar_one_or_none()
+    await db.commit()
+    # The in-memory copy is now behind the row; drop it so any later read in
+    # this job reloads rather than resurrecting the pre-update strategy.
+    db.expire(suite, ["strategy"])
 
 
 def _save_suite_paid_content_plan(suite: Suite, plan: dict) -> None:
@@ -708,9 +722,7 @@ async def execute_claimed_job(
                     plan_type=input_data.get("plan_type"),
                 )
                 plan["status"] = "ready"
-                suite = await lock_suite_for_write(db, job.suite_id) or suite
-                _save_suite_social_content_plan(suite, plan)
-                await db.commit()
+                await write_action_plan_section(db, suite, "social_content_plan", plan)
                 warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
                 candidate_count = sum(
                     len(group)
@@ -761,9 +773,7 @@ async def execute_claimed_job(
                 await db.commit()
                 plan = await generate_paid_content_work_plan(suite, language)
                 plan["status"] = "ready"
-                suite = await lock_suite_for_write(db, job.suite_id) or suite
-                _save_suite_paid_content_plan(suite, plan)
-                await db.commit()
+                await write_action_plan_section(db, suite, "paid_content_plan", plan)
                 warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
                 candidate_count = sum(
                     len(group)
@@ -834,9 +844,7 @@ async def execute_claimed_job(
                     on_progress=report,
                 )
                 plan["status"] = "ready"
-                suite = await lock_suite_for_write(db, job.suite_id) or suite
-                _save_suite_social_ideas_plan(suite, plan)
-                await db.commit()
+                await write_action_plan_section(db, suite, "social_ideas_plan", plan)
                 warnings = plan.get("warnings") if isinstance(plan.get("warnings"), list) else []
                 # Usage accounting must never re-run a completed generation.
                 try:

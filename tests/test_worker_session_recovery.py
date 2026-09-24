@@ -107,44 +107,6 @@ async def test_deleting_the_suite_also_puts_the_funnel_lead_back_to_the_start():
     assert lead.progress["suite_created"] is False
 
 
-def test_the_three_plan_jobs_lock_the_suite_before_their_terminal_write():
-    """Two jobs for one suite write the same `strategy` json column from two
-    sessions. Without a row lock the second commit erases the first — measured
-    2026-09-24: social ideas and the paid plan both reported "completed" at the
-    same second and only the social ideas survived."""
-    import inspect
-
-    from api.services import durable_generation_queue as q
-
-    source = inspect.getsource(q.execute_claimed_job)
-    for saver in (
-        "_save_suite_paid_content_plan(suite, plan)",
-        "_save_suite_social_ideas_plan(suite, plan)",
-        "_save_suite_social_content_plan(suite, plan)",
-    ):
-        assert saver in source, saver
-        before = source.split(saver)[0]
-        tail = before.rsplit("\n", 3)[-3:]
-        assert any("lock_suite_for_write" in line for line in tail), (
-            f"{saver} writes the shared strategy column without re-reading it under a lock"
-        )
-
-
-def test_the_lock_helper_actually_locks_the_row():
-    import inspect
-
-    from api.services import durable_generation_queue as q
-
-    source = inspect.getsource(q.lock_suite_for_write)
-    assert "with_for_update()" in source, "a plain re-read still loses the other job's write"
-    # The session runs with expire_on_commit=False, so a re-SELECT returns the
-    # SAME stale object from the identity map. Locking the row without this
-    # flag locks correctly and still writes stale data — measured 2026-09-24.
-    assert "populate_existing=True" in source, (
-        "the lock is useless without populate_existing: the in-memory strategy stays stale"
-    )
-
-
 @pytest.mark.asyncio
 async def test_a_second_strategy_job_for_the_same_suite_is_held_back(monkeypatch):
     """Two jobs writing one `strategy` column is the whole bug. Row locks were
@@ -182,3 +144,28 @@ async def test_a_second_strategy_job_for_the_same_suite_is_held_back(monkeypatch
     assert job is other, "the held suite must not block a different suite's job"
     assert claimed == ["j-other"]
     assert social.id not in claimed and paid.id not in claimed
+
+
+def test_plan_sections_are_merged_by_postgres_not_by_python():
+    """Read-modify-write on the whole `strategy` json is what kept losing
+    plans: paid wrote 10 ideas at 11:55:14 and social erased them at 11:55:51,
+    with both jobs reporting "completed". Row locks were tried twice and did
+    not hold. The merge belongs in the database, touching one key only."""
+    import inspect
+
+    from api.services import durable_generation_queue as q
+
+    writer = inspect.getsource(q.write_action_plan_section)
+    assert "jsonb_set" in writer, "the whole column is still being rewritten"
+    assert "marketing_action_plan" in writer
+
+    branch = inspect.getsource(q.execute_claimed_job)
+    for section in ("paid_content_plan", "social_ideas_plan", "social_content_plan"):
+        assert f'write_action_plan_section(db, suite, "{section}"' in branch, section
+    # No terminal write may go back to rewriting the whole blob.
+    for old in (
+        "_save_suite_paid_content_plan(suite, plan)",
+        "_save_suite_social_ideas_plan(suite, plan)",
+        "_save_suite_social_content_plan(suite, plan)",
+    ):
+        assert old not in branch, f"{old} rewrites the entire strategy column"
