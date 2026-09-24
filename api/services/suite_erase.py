@@ -97,9 +97,13 @@ async def reset_funnel_lead(db: AsyncSession, user: User) -> bool:
     if not lead:
         return False
     progress = dict(lead.progress or {})
-    progress.pop("calls", None)
-    progress["step"] = "name"
-    progress["suite_created"] = False
+    # All of these pin the visitor in place, not just the cost caps:
+    # `request_submitted` sends them straight to /done forever and `step`
+    # holds them at the last screen they reached. Clearing only `calls` reset
+    # the budgets and left the person exactly where they were — which is what
+    # "delete and start over" looked like doing nothing on 2026-09-24.
+    for key in ("calls", "step", "suite_created", "request_submitted"):
+        progress.pop(key, None)
     lead.progress = progress
     lead.suite_id = None
     return True

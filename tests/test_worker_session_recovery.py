@@ -89,7 +89,13 @@ async def test_deleting_the_suite_also_puts_the_funnel_lead_back_to_the_start():
     lead = SimpleNamespace(
         user_id="u1",
         suite_id="suite-1",
-        progress={"step": "plans", "suite_created": True, "calls": {"marketing_personas": 5}},
+        progress={
+            "registered": True,
+            "step": "done",
+            "suite_created": True,
+            "request_submitted": True,
+            "calls": {"marketing_personas": 5},
+        },
     )
 
     class Db:
@@ -102,9 +108,12 @@ async def test_deleting_the_suite_also_puts_the_funnel_lead_back_to_the_start():
 
     assert await reset_funnel_lead(Db(), SimpleNamespace(id="u1")) is True
     assert lead.suite_id is None
-    assert "calls" not in lead.progress
-    assert lead.progress["step"] == "name"
-    assert lead.progress["suite_created"] is False
+    # Every marker that pins the visitor must go. `request_submitted` is the
+    # cruel one: leave it and signing back in lands on /done forever, so the
+    # reset looks like it did nothing at all.
+    for pinned in ("calls", "step", "suite_created", "request_submitted"):
+        assert pinned not in lead.progress, pinned
+    assert lead.progress == {"registered": True}
 
 
 @pytest.mark.asyncio

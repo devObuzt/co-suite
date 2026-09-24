@@ -27,6 +27,8 @@ from ..models.services_catalog import (
     serialize_service_request,
 )
 from ..models.suite import MemberRole, Suite, SuiteMember, SuiteStatus
+from ..models.suite import Suite
+from ..services.suite_erase import erase_suite, reset_funnel_lead
 from ..models.user import User
 from ..services.admin_audit import record_audit_log, serialize_user_public
 from ..services.otp_sender import OtpSendError, generate_code, send_otp
@@ -452,6 +454,32 @@ async def enroll(
     await db.commit()
     await db.refresh(lead)
     return {"user": serialize_user_public(current_user), "lead_id": lead.id}
+
+
+@router.post("/restart")
+async def restart(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Erase whatever this visitor built and put them back at the start.
+
+    One call, because the two halves have to happen together. Deleting only the
+    suite left the lead still marked `request_submitted`, so signing back in
+    landed on /done again — and with no suite linked, the old delete button did
+    nothing at all. This works either way: suite or no suite.
+    """
+    lead = await _lead_for(db, current_user)
+    erased = 0
+    if lead and lead.suite_id:
+        suite = (
+            await db.execute(select(Suite).where(Suite.id == lead.suite_id))
+        ).scalar_one_or_none()
+        if suite and suite.owner_id == current_user.id:
+            await erase_suite(db, suite)
+            erased = 1
+    reset = await reset_funnel_lead(db, current_user)
+    await db.commit()
+    return {"ok": True, "suites_erased": erased, "lead_reset": reset}
 
 
 @router.get("/state")
