@@ -60,6 +60,24 @@ def template_language_code(language: str) -> str:
     return "en"
 
 
+def _everything_finished(strategy: dict[str, Any]) -> bool:
+    """The whole journey the visitor was told to wait for.
+
+    The marketing plan AND both halves of the work plan — those are the three
+    runs the page kicks off. Anything missing means "not ready yet".
+    """
+    action_plan = strategy.get("marketing_action_plan") or {}
+    intelligence = strategy.get("marketing_intelligence") or {}
+    paid = action_plan.get("paid_content_plan") or {}
+    ideas = action_plan.get("social_ideas_plan") or {}
+    return bool(
+        intelligence.get("personas")
+        and strategy.get("marketing_message")
+        and paid.get("status") == "ready"
+        and ideas.get("status") == "ready"
+    )
+
+
 def _strategy(suite: Suite) -> dict[str, Any]:
     return dict(suite.strategy or {})
 
@@ -131,6 +149,29 @@ async def maybe_notify_plan_ready(db, suite_id: str) -> bool:
         strategy = json.loads(strategy)
     preference = strategy.get(NOTIFY_KEY) or {}
     if not preference.get("whatsapp") or preference.get("sent"):
+        return False
+
+    # "Ready" has to mean ready. Firing at the end of every job meant the first
+    # one to finish sent the message while the rest were still running — Wisam
+    # got "your plan is done" with the page still spinning (2026-09-28). The
+    # message goes out only when nothing is left to wait for.
+    if not _everything_finished(strategy):
+        return False
+
+    pending = (
+        await db.execute(
+            text(
+                """
+                SELECT 1 FROM generation_jobs
+                 WHERE suite_id = :id
+                   AND status IN ('queued','running','retrying','waiting_capacity','waiting_provider_limit')
+                 LIMIT 1
+                """
+            ),
+            {"id": suite_id},
+        )
+    ).first()
+    if pending:
         return False
 
     brand = row["brand"] or {}

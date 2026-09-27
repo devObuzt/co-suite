@@ -332,13 +332,20 @@ async def test_the_message_goes_out_once_and_is_not_repeated(monkeypatch):
     from api.services import plan_notify
 
     calls = []
+    # A finished journey — otherwise the completeness gate holds the message.
     strategy = {
         "plan_ready_notify": {
             "whatsapp": True,
             "phone": "+972500000000",
             "language": "he",
             "sent": False,
-        }
+        },
+        "marketing_intelligence": {"personas": [{"name": "p"}]},
+        "marketing_message": "hello",
+        "marketing_action_plan": {
+            "paid_content_plan": {"status": "ready"},
+            "social_ideas_plan": {"status": "ready"},
+        },
     }
 
     async def fake_send(phone, language, name):
@@ -359,6 +366,10 @@ async def test_the_message_goes_out_once_and_is_not_repeated(monkeypatch):
                     return SimpleNamespace(
                         first=lambda: {"name": "My Baby", "brand": {}, "strategy": strategy}
                     )
+
+                @staticmethod
+                def first():
+                    return None  # no job still pending
             return R()
 
     db = Db()
@@ -386,3 +397,36 @@ async def test_nothing_is_sent_while_whatsapp_is_not_configured():
 
     assert plan_notify.whatsapp_notify_available() is False
     assert await plan_notify.send_plan_ready("+972500000000", "ar", "Connec") is False
+
+
+def test_ready_means_every_run_is_done():
+    """Wisam got "your plan is ready" while the page was still spinning: the
+    message fired at the end of the FIRST job to finish. All three runs the
+    page starts have to be in before anything is sent."""
+    from api.services.plan_notify import _everything_finished
+
+    full = {
+        "marketing_intelligence": {"personas": [{"name": "p"}]},
+        "marketing_message": "hello",
+        "marketing_action_plan": {
+            "paid_content_plan": {"status": "ready"},
+            "social_ideas_plan": {"status": "ready"},
+        },
+    }
+    assert _everything_finished(full) is True
+
+    import copy
+
+    half = copy.deepcopy(full)
+    half["marketing_action_plan"]["paid_content_plan"]["status"] = "generating"
+    assert _everything_finished(half) is False, "paid plan still running"
+
+    half = copy.deepcopy(full)
+    del half["marketing_action_plan"]["social_ideas_plan"]
+    assert _everything_finished(half) is False, "social ideas missing"
+
+    half = copy.deepcopy(full)
+    del half["marketing_message"]
+    assert _everything_finished(half) is False, "marketing message missing"
+
+    assert _everything_finished({}) is False
