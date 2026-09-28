@@ -178,3 +178,16 @@ def test_plan_sections_are_merged_by_postgres_not_by_python():
         "_save_suite_social_content_plan(suite, plan)",
     ):
         assert old not in branch, f"{old} rewrites the entire strategy column"
+
+
+def test_anthropic_errors_carry_the_api_message():
+    """`raise_for_status()` threw the body away, so "your credit balance is too
+    low" reached the user's screen as a bare "400 Bad Request" — unreadable,
+    and indistinguishable from a broken request (2026-09-28)."""
+    import inspect
+
+    from api.core import ai_client
+
+    source = inspect.getsource(ai_client._call_sync)
+    assert "raise_for_status" not in source, "the response body is being discarded again"
+    assert "Anthropic {resp.status_code}" in source or "Anthropic " in source

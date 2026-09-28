@@ -41,7 +41,18 @@ def _call_sync(
     with external_call("anthropic", "messages", model=model) as call:
         resp = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=timeout)
         call.note(status_code=resp.status_code)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # raise_for_status() throws the body away, so an actionable message
+            # from the API arrived as a bare "400 Bad Request" — and showed up
+            # that way in the user's face. The account being out of credit read
+            # exactly like a broken request for as long as nobody asked the API
+            # directly (2026-09-28).
+            detail = ""
+            try:
+                detail = str((resp.json().get("error") or {}).get("message") or "")
+            except Exception:
+                detail = (resp.text or "")[:200]
+            raise RuntimeError(f"Anthropic {resp.status_code}: {detail or 'no detail returned'}")
         return resp.json()
 
 
