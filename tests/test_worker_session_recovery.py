@@ -189,5 +189,6 @@ def test_anthropic_errors_carry_the_api_message():
     from api.core import ai_client
 
     source = inspect.getsource(ai_client._call_sync)
-    assert "raise_for_status" not in source, "the response body is being discarded again"
-    assert "Anthropic {resp.status_code}" in source or "Anthropic " in source
+    # The literal call, not the word — it is named in the comment above the fix.
+    assert "resp.raise_for_status()" not in source, "the response body is being discarded again"
+    assert "Anthropic {resp.status_code}" in source, "the status and the API's own message must both reach the caller"
