@@ -18,7 +18,7 @@ from ..services.content_rules import (
     normalize_content_rules,
     suggest_rules_from_feedback,
 )
-from ..services.suite_access import require_suite_access
+from ..services.suite_access import require_suite_access, require_suite_read_access
 from ..services.suite_erase import erase_suite, reset_funnel_lead
 from ..services.suite_memory import build_suite_memory_v0, merge_suite_brand
 
@@ -264,7 +264,7 @@ async def get_suite(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    suite = await require_suite_access(db, suite_id, current_user)
+    suite = await require_suite_read_access(db, suite_id, current_user)
     return serialize_suite(suite)
 
 
@@ -371,7 +371,7 @@ async def list_content_rules(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    suite = await _get_owned_suite(db, suite_id, current_user)
+    suite = await require_suite_read_access(db, suite_id, current_user)
     return {"rules": normalize_content_rules((suite.brand or {}).get("content_rules"))}
 
 

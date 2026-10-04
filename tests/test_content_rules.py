@@ -223,6 +223,8 @@ async def test_content_rules_endpoints_add_list_delete(monkeypatch):
         return suite
 
     monkeypatch.setattr(suites_router, "_get_owned_suite", fake_get_owned_suite)
+    # Listing is a read, so it goes through the admin-readable check instead.
+    monkeypatch.setattr(suites_router, "require_suite_read_access", fake_get_owned_suite)
 
     added = await suites_router.add_content_rules(
         "suite-1",
@@ -255,6 +257,8 @@ async def test_add_content_rules_rejects_empty_payload(monkeypatch):
         return suite
 
     monkeypatch.setattr(suites_router, "_get_owned_suite", fake_get_owned_suite)
+    # Listing is a read, so it goes through the admin-readable check instead.
+    monkeypatch.setattr(suites_router, "require_suite_read_access", fake_get_owned_suite)
 
     with pytest.raises(Exception) as exc:
         await suites_router.add_content_rules(

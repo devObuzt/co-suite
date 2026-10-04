@@ -49,7 +49,7 @@ from ..services.funnel_guard import block_funnel_regeneration, enforce_funnel_ca
 from ..services.marketing_plan_full_run import pending_plan_stages, plan_stage_status
 from ..services.plan_notify import read_preference, save_preference, whatsapp_notify_available
 from ..services.multi_scraper import search_web
-from ..services.suite_access import require_suite_access
+from ..services.suite_access import require_suite_access, require_suite_read_access
 
 router = APIRouter(tags=["marketing-plans"])
 
@@ -170,6 +170,15 @@ class MarketingPlanUnlockRequest(BaseModel):
 
 async def get_owned_suite(db: AsyncSession, suite_id: str, user: User) -> Suite:
     return await require_suite_access(db, suite_id, user)
+
+
+async def get_viewable_suite(db: AsyncSession, suite_id: str, user: User) -> Suite:
+    """Reading the plan: the owner, or an admin answering "what did they see?".
+
+    Only the three GETs below may use this. Everything that generates, edits or
+    deletes stays on `get_owned_suite`.
+    """
+    return await require_suite_read_access(db, suite_id, user)
 
 
 def _strategy(suite: Suite) -> dict[str, Any]:
@@ -2236,7 +2245,7 @@ async def get_marketing_plan(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    suite = await get_owned_suite(db, suite_id, current_user)
+    suite = await get_viewable_suite(db, suite_id, current_user)
     await _sync_social_plan_generation(db, suite)
     deck = _deck(suite)
     job = await _latest_marketing_plan_job(db, suite_id)
@@ -2266,7 +2275,7 @@ async def download_marketing_plan_pdf(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    suite = await get_owned_suite(db, suite_id, current_user)
+    suite = await get_viewable_suite(db, suite_id, current_user)
     try:
         visuals = await ensure_marketing_plan_visuals(suite)
         if visuals:
@@ -3409,7 +3418,7 @@ async def marketing_plan_generation_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_owned_suite(db, suite_id, current_user)
+    await get_viewable_suite(db, suite_id, current_user)
     job = await _latest_marketing_plan_job(db, suite_id)
     return serialize_job(job, suite_id=suite_id)
 

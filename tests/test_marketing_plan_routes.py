@@ -198,7 +198,9 @@ async def test_download_marketing_plan_pdf_returns_attachment(monkeypatch):
     async def fake_record_audit_log(_db, **kwargs):
         audit_calls.append(kwargs)
 
-    monkeypatch.setattr(marketing_plans, "get_owned_suite", fake_get_owned_suite)
+    # Reading the plan goes through the viewer check (an admin may read a suite
+    # they do not own); only writes still go through get_owned_suite.
+    monkeypatch.setattr(marketing_plans, "get_viewable_suite", fake_get_owned_suite)
     monkeypatch.setattr(marketing_plans, "record_audit_log", fake_record_audit_log)
 
     response = await marketing_plans.download_marketing_plan_pdf("suite-1", user, db)
