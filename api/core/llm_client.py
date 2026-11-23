@@ -6,6 +6,7 @@ from typing import Any
 import requests
 
 from .ai_client import call_claude
+from .ai_errors import AiProviderError
 from .config import settings
 from .external_calls import external_call
 
@@ -58,7 +59,18 @@ def _call_openai_sync(
     with external_call("openai", "responses", model=model) as call:
         resp = requests.post(OPENAI_RESPONSES_URL, headers=headers, json=body, timeout=timeout)
         call.note(status_code=resp.status_code)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # `raise_for_status()` yields "401 Client Error: Unauthorized for
+            # url: ..." and discards the body, so the actual reason —
+            # "Incorrect API key provided" — never reached a log or a human.
+            # The Anthropic path was fixed for this on 2026-09-28; this one was
+            # still throwing it away on 2026-11-23.
+            detail = ""
+            try:
+                detail = str((resp.json().get("error") or {}).get("message") or "")
+            except Exception:
+                detail = (resp.text or "")[:200]
+            raise AiProviderError("OpenAI", resp.status_code, detail)
         text = _openai_extract_text(resp.json())
         if not text:
             raise RuntimeError("OpenAI returned no text output")

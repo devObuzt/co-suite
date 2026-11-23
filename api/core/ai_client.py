@@ -7,6 +7,7 @@ from typing import Any
 
 import requests
 
+from .ai_errors import AiProviderError
 from .config import settings
 from .external_calls import external_call
 
@@ -52,7 +53,7 @@ def _call_sync(
                 detail = str((resp.json().get("error") or {}).get("message") or "")
             except Exception:
                 detail = (resp.text or "")[:200]
-            raise RuntimeError(f"Anthropic {resp.status_code}: {detail or 'no detail returned'}")
+            raise AiProviderError("Anthropic", resp.status_code, detail)
         return resp.json()
 
 

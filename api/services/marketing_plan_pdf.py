@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from glob import glob
 from html import escape
 import logging
 import os
@@ -27,9 +28,66 @@ from api.services.marketing_plan_generator import infer_plan_language
 
 log = logging.getLogger(__name__)
 
-# Apt library dirs for the WeasyPrint subprocess fallback (nix python cannot
-# dlopen apt-installed pango/gobject without an explicit LD_LIBRARY_PATH).
-_SYSTEM_LIB_DIRS = ("/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu")
+# Library dirs for the WeasyPrint subprocess fallback (the nix python cannot
+# dlopen pango/gobject without an explicit LD_LIBRARY_PATH).
+#
+# These two used to be the whole list, with a comment calling them "apt library
+# dirs". Then nixpacks.toml dropped aptPkgs — correctly, the app's own libraries
+# come from nixPkgs — and these directories stayed on disk while losing every
+# library WeasyPrint needs. Measured inside the container on 2026-11-23: 193
+# files present, zero libgobject. So the fallback dutifully symlinked 193
+# irrelevant libraries and then failed with the very error it exists to rescue.
+#
+# Hard-coding where libraries live is what broke. A directory now earns its
+# place by containing one, wherever it came from.
+_APT_LIB_DIRS = ("/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu")
+
+_NIX_STORE = "/nix/store"
+
+# What WeasyPrint dlopens. gobject is the one that surfaces in the error
+# message, but it is the first name tried, not the only one needed.
+_WEASYPRINT_SONAMES = (
+    "libgobject-2.0.so.0",
+    "libglib-2.0.so.0",
+    "libgio-2.0.so.0",
+    "libpango-1.0.so.0",
+    "libpangoft2-1.0.so.0",
+    "libharfbuzz.so.0",
+    "libfontconfig.so.1",
+    "libfreetype.so.6",
+    "libcairo.so.2",
+    "libgdk_pixbuf-2.0.so.0",
+)
+
+
+def weasyprint_lib_dirs(
+    *,
+    apt_dirs: tuple[str, ...] = _APT_LIB_DIRS,
+    nix_store: str = _NIX_STORE,
+) -> list[str]:
+    """Directories that actually hold a library WeasyPrint asks for.
+
+    Checked in order: the Debian multiarch dirs (still correct on an
+    apt-based image), then the nix store, matched by soname rather than by
+    package path so a nixpkgs version bump cannot silently empty the list.
+    """
+    dirs: list[str] = []
+
+    def remember(path: Path) -> None:
+        value = str(path)
+        if value not in dirs:
+            dirs.append(value)
+
+    for candidate in apt_dirs:
+        base = Path(candidate)
+        if base.is_dir() and any((base / soname).exists() for soname in _WEASYPRINT_SONAMES):
+            remember(base)
+
+    for soname in _WEASYPRINT_SONAMES:
+        for match in sorted(glob(str(Path(nix_store) / "*" / "lib" / soname))):
+            remember(Path(match).parent)
+
+    return dirs
 
 # Never expose the core toolchain libs to the subprocess — shadowing the nix
 # python's own libc/ssl family crashes the interpreter at startup.
@@ -43,8 +101,8 @@ _LIB_EXCLUDE_PREFIXES = (
 def _prepare_weasyprint_lib_dir(tmp: Path) -> str:
     """Symlink only the pango/gobject dependency closure into a private dir."""
     libdir = tmp / "libs"
-    libdir.mkdir(exist_ok=True)
-    for src_dir in _SYSTEM_LIB_DIRS:
+    libdir.mkdir(parents=True, exist_ok=True)
+    for src_dir in weasyprint_lib_dirs():
         source = Path(src_dir)
         if not source.is_dir():
             continue

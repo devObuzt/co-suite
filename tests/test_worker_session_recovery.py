@@ -191,4 +191,29 @@ def test_anthropic_errors_carry_the_api_message():
     source = inspect.getsource(ai_client._call_sync)
     # The literal call, not the word — it is named in the comment above the fix.
     assert "resp.raise_for_status()" not in source, "the response body is being discarded again"
-    assert "Anthropic {resp.status_code}" in source, "the status and the API's own message must both reach the caller"
+
+    # The rest is asserted on behaviour, not on source text. This file already
+    # learned once that matching source matches comments too (2026-09-28), and
+    # the previous `"Anthropic {resp.status_code}"` check broke the moment the
+    # f-string became a typed AiProviderError carrying the same two values.
+    class _Response:
+        status_code = 400
+        text = "unused"
+
+        def json(self):
+            return {"error": {"message": "Your credit balance is too low"}}
+
+    import api.core.ai_client as ai
+
+    original_post, original_key = ai.requests.post, ai.settings.anthropic_api_key
+    ai.requests.post = lambda *a, **k: _Response()
+    ai.settings.anthropic_api_key = "sk-ant-test"
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            ai._call_sync("claude-sonnet-4-6", 16, [{"role": "user", "content": "hi"}])
+    finally:
+        ai.requests.post, ai.settings.anthropic_api_key = original_post, original_key
+
+    message = str(caught.value)
+    assert "400" in message, "the status must reach the caller"
+    assert "credit balance is too low" in message, "the API's own message must reach the caller"

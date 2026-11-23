@@ -43,6 +43,21 @@ class Settings(BaseSettings):
     # library/locked media instead of minting more images.
     montage_max_generated_images_per_render: int = 6
 
+    @field_validator("*", mode="before")
+    @classmethod
+    def strip_pasted_whitespace(cls, v):
+        """An environment variable has no meaningful surrounding whitespace.
+
+        ANTHROPIC_API_KEY on production ended with a literal newline — 109
+        characters stored for a 108-character key (found 2026-11-23). The
+        Anthropic path survived it only because ai_client.py scrubs the key on
+        every call; the OpenAI path puts the value straight into an
+        `Authorization` header, where a newline is not a valid header value.
+        Scrubbing per call-site means the next call-site is unprotected again,
+        so it is done here instead, once, for every string setting.
+        """
+        return v.strip() if isinstance(v, str) else v
+
     @field_validator("database_url", mode="before")
     @classmethod
     def fix_db_url(cls, v: str) -> str:
