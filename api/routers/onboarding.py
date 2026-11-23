@@ -6,6 +6,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
 import uuid as _uuid
+from ..core.ai_errors import AiProviderError
 from ..core.database import get_db
 from ..core.security import get_current_user
 from ..models.user import User
@@ -73,6 +74,36 @@ class TranslateBrandFieldsRequest(BaseModel):
     target_language: str = "en"
 
 
+
+def http_error_for_ai_failure(error: Exception) -> HTTPException:
+    """Turn a provider failure into an honest HTTP error.
+
+    Both onboarding routes used to sniff the exception text for "529" and tell
+    the visitor to try again for everything else. A rejected API key landed in
+    "everything else", so the one failure that retrying can never fix was the
+    one that asked to be retried — and it was (2026-11-23).
+    """
+    if isinstance(error, AiProviderError):
+        if error.is_auth_failure:
+            return HTTPException(
+                status_code=502,
+                detail="The AI provider rejected our API key. We have to fix this on our side.",
+            )
+        if error.status_code == 529:
+            return HTTPException(
+                status_code=503,
+                detail="The AI service is temporarily busy. Please try again in a few seconds.",
+            )
+
+    # Older call paths still raise plain RuntimeErrors carrying this wording.
+    text = str(error).lower()
+    if "529" in text or "overloaded" in text:
+        return HTTPException(
+            status_code=503,
+            detail="The AI service is temporarily busy. Please try again in a few seconds.",
+        )
+    return HTTPException(status_code=500, detail="Generation failed. Please try again.")
+
 @router.post("/extract-brand")
 async def extract_brand(
     data: ExtractBrandRequest,
@@ -110,10 +141,7 @@ async def extract_brand(
         raise
     except Exception as e:
         log.exception("Brand extraction failed")
-        err_str = str(e).lower()
-        if "529" in str(e) or "overloaded" in err_str:
-            raise HTTPException(status_code=503, detail="The AI service is temporarily busy. Please try again in a few seconds.")
-        raise HTTPException(status_code=500, detail="Brand research failed. Please try again.")
+        raise http_error_for_ai_failure(e)
 
     brand = _merge_submitted_links(dict(brand or {}), urls)
     return {"brand": brand, "research_debug": (brand or {}).get("research_debug")}
@@ -197,10 +225,7 @@ async def generate_strategy_endpoint(
         raise
     except Exception as e:
         log.exception("Strategy generation failed for suite %s", data.suite_id)
-        err_str = str(e).lower()
-        if "529" in str(e) or "overloaded" in err_str:
-            raise HTTPException(status_code=503, detail="The AI service is temporarily busy. Please try again in a few seconds.")
-        raise HTTPException(status_code=500, detail="Strategy generation failed. Please try again.")
+        raise http_error_for_ai_failure(e)
 
     # MERGE — never replace: the strategy column also holds the generated
     # marketing plan sections; overwriting it would wipe the whole plan.

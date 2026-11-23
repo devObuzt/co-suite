@@ -8,6 +8,7 @@ from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..core.observability import log_event, notify_generation_job_alert
+from ..core.ai_errors import AiProviderError
 from ..core.config import settings
 from ..core.database import AsyncSessionLocal
 from ..models.generation_job import GenerationJob, GenerationJobStatus, GenerationJobType
@@ -99,6 +100,20 @@ def retry_delay_seconds(job: GenerationJob) -> int:
 
 
 def retry_fields_for_error(job: GenerationJob, error: Exception) -> dict:
+    # A rejected credential is permanent. Retrying it cost the 2026-11-12
+    # marketing plan three attempts and ninety minutes, and the visitor was
+    # told "retrying" the whole way — then got "the worker stopped updating
+    # this job". Fail on the first attempt and say why instead.
+    if isinstance(error, AiProviderError) and error.is_auth_failure:
+        return {
+            "status": GenerationJobStatus.failed,
+            "stage": "failed",
+            "message": safe_generation_error(str(error)) or "The AI provider rejected our key.",
+            "progress": 100,
+            "error": str(error),
+            "finished_at": utcnow(),
+        }
+
     next_retry_count = int(job.retry_count or 0) + 1
     if next_retry_count > int(job.max_retries or 0):
         safe_error = safe_generation_error(str(error)) or "unknown error"

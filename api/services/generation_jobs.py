@@ -52,6 +52,12 @@ def safe_generation_error(error: Optional[str]) -> Optional[str]:
     text = str(error).lower()
     if "rate limit" in text or "429" in text or "quota" in text or "resource exhausted" in text:
         return "The AI provider is currently rate limited. Please wait and retry."
+    # A rejected credential, said plainly. This branch used to rewrite every
+    # key/token error as "Please retry." — masking the key, which is right, but
+    # also telling the visitor to retry a failure no retry can fix. He did,
+    # repeatedly (2026-11-23). The key still never appears: only the fact.
+    if "401" in text or "403" in text or "invalid x-api-key" in text or "incorrect api key" in text:
+        return "The AI provider rejected our API key. We have to fix this on our side."
     if "api key" in text or "token" in text or "secret" in text or "credential" in text:
         return "The AI provider could not complete this request. Please retry."
     if "timeout" in text or "timed out" in text:
